@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSNR Trading Terminal — Malaysian SnR Multi-Storyline Engine</title>
+  
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- TradingView Lightweight Charts v4.1 -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <link rel="stylesheet" href="/static/style.css?v=10" />
+</head>
+<body class="dark-theme">
+  
+  <!-- Top Navigation Bar -->
+  <header class="top-nav">
+    <div class="brand-section" id="brandSection" title="Open Bot Settings" style="cursor:pointer;">
+      <div class="logo-badge">
+        <i data-lucide="activity"></i>
+      </div>
+      <div class="brand-text">
+        <span class="brand-title">MSNR TERMINAL</span>
+        <span class="brand-subtitle">Top-Down Multi-Storyline Engine</span>
+      </div>
+    </div>
+
+    <!-- Symbol & Market Status -->
+    <div class="symbol-control-group">
+      <div class="symbol-picker-wrapper">
+        <i data-lucide="search" class="search-icon"></i>
+        <select id="symbolSelect" class="styled-select">
+          <option value="XAUUSDm" selected>XAUUSDm (Gold)</option>
+        </select>
+      </div>
+      <div class="price-pill" id="livePricePill">
+        <span class="price-label">LAST:</span>
+        <span class="price-val" id="livePriceDisplay">--.--</span>
+      </div>
+    </div>
+
+    <!-- Timeframe Switcher (MN1 = Monthly; M1 = 1-minute, never Monthly) -->
+    <div class="timeframe-bar">
+      <button class="tf-btn" data-tf="MN1" title="Monthly">MN</button>
+      <button class="tf-btn" data-tf="W1" title="Weekly">W1</button>
+      <button class="tf-btn active" data-tf="D1" title="Daily">D1</button>
+      <button class="tf-btn" data-tf="H4" title="4 Hours">4H</button>
+      <button class="tf-btn" data-tf="H1" title="1 Hour">1H</button>
+      <div class="tf-dropdown">
+        <button class="tf-more-btn" id="tfMoreBtn" title="More timeframes">More ▾</button>
+        <div class="tf-dropdown-menu" id="tfDropdownMenu">
+          <button class="tf-btn" data-tf="H2" title="2 Hours">2H</button>
+          <button class="tf-btn" data-tf="M15" title="15 Minutes">15m</button>
+          <button class="tf-btn" data-tf="M5" title="5 Minutes">5m</button>
+          <button class="tf-btn" data-tf="M3" title="3 Minutes">3m</button>
+          <button class="tf-btn" data-tf="M1" title="1 Minute">1m</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart Style Toggle -->
+    <div class="chart-type-group">
+      <button class="type-btn active" id="btnCandles" title="Candlestick View">
+        <i data-lucide="candlestick-chart"></i> Candles
+      </button>
+      <button class="type-btn" id="btnLine" title="Line Chart (for Apex / IAB swing inspection)">
+        <i data-lucide="line-chart"></i> Line
+      </button>
+    </div>
+
+    <!-- Account Metrics & Status -->
+    <div class="account-header-metrics">
+      <div class="acc-pill">
+        <span class="acc-lbl">EQUITY:</span>
+        <span class="acc-val" id="accEquity">$0.00</span>
+      </div>
+      <div class="acc-pill">
+        <span class="acc-lbl">LEVERAGE:</span>
+        <span class="acc-val" id="accLeverage">1:100</span>
+      </div>
+    </div>
+
+    <!-- Nav Actions -->
+    <div class="nav-actions">
+      <button class="action-btn" id="btnRefresh" title="Refresh Live MT5 Data">
+        <i data-lucide="refresh-cw"></i>
+      </button>
+      <button class="action-btn" id="btnResetZoom" title="Reset View Zoom">
+        <i data-lucide="maximize-2"></i>
+      </button>
+      <button class="action-btn" id="btnSettings" title="Bot Settings (entry modules)">
+        <i data-lucide="settings"></i>
+      </button>
+      <a class="action-btn" href="/backtest" title="Backtest review (journal replay)" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
+        <i data-lucide="flag"></i>
+      </a>
+      <div class="status-indicator live" id="connectionStatus" title="MT5 Terminal Connected">
+        <span class="pulse-dot"></span>
+        <span class="status-text">MT5 LIVE</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="main-layout">
+    
+    <!-- Left Sidebar: TS + S/R + QM live, OCL/Apex disabled -->
+    <aside class="sidebar" id="indicatorSidebar">
+      <div class="sidebar-header">
+        <h3><i data-lucide="compass"></i> Indicators</h3>
+        <span class="badge" id="storylineCountBadge">TS · S/R · QM · IDM · BOS · FVG · OB</span>
+      </div>
+
+      <!-- Active Storylines Live Card -->
+      <div class="storyline-card" id="storylineCard">
+        <div class="storyline-card-header">
+          <span><i data-lucide="layers"></i> MULTI-TF BIAS</span>
+          <span class="bias-badge bias-bearish" id="mainBiasBadge">BEARISH</span>
+        </div>
+        <div class="tf-bias-grid">
+          <div class="tf-bias-item">
+            <span class="tf-label">MN:</span>
+            <span class="tf-val bullish" id="biasMN">BULLISH</span>
+          </div>
+          <div class="tf-bias-item">
+            <span class="tf-label">W1:</span>
+            <span class="tf-val bullish" id="biasW1">BULLISH</span>
+          </div>
+          <div class="tf-bias-item">
+            <span class="tf-label">D1:</span>
+            <span class="tf-val bearish" id="biasD1">BEARISH</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Multi-Storyline Entry Zones List (Per Video 10 Top-Down Guide) -->
+      <div class="entry-zones-section">
+        <div class="section-header-bar">
+          <span class="section-label"><i data-lucide="target"></i> ALL STORYLINE ENTRY ZONES</span>
+          <span class="badge" id="entryCountBadge">0 Zones</span>
+        </div>
+        <p class="section-hint">Market triggers closest zone first. Click row to focus & execute.</p>
+        <div class="entry-zones-list" id="entryZonesList">
+          <div class="empty-state">Computing all storyline entries...</div>
+        </div>
+      </div>
+
+      <!-- Quick Mode Switcher -->
+      <div class="inspect-mode-section">
+        <label class="section-label">INSPECTION VIEW</label>
+        <div class="mode-pills">
+          <button class="mode-pill active" data-mode="strategy"><i data-lucide="target"></i> Active Storylines (off)</button>
+          <button class="mode-pill" data-mode="all">All Levels</button>
+          <button class="mode-pill" data-mode="ts">Only TS</button>
+          <button class="mode-pill" data-mode="idm">Only IDM</button>
+          <button class="mode-pill" data-mode="bos">Only BOS</button>
+          <button class="mode-pill" data-mode="fvg">Only FVG</button>
+          <button class="mode-pill" data-mode="ifvg">Only IFVG</button>
+          <button class="mode-pill" data-mode="ob">Only OB</button>
+          <button class="mode-pill" data-mode="sr">Only S/R</button>
+          <button class="mode-pill" data-mode="ocl">Only OCL</button>
+          <button class="mode-pill" data-mode="qm">Only QM</button>
+          <button class="mode-pill" data-mode="apex">Only Apex</button>
+        </div>
+        <label class="zone-toggle" title="Strategy view shows only the selected (primary) entry zone">
+          <input type="checkbox" id="toggleAllZones">
+          <span>Show all entry zones on chart (default: primary only)</span>
+        </label>
+        <div class="tag-legend" title="Shorthand tags used on chart lines">
+          S/R support/resistance · SBR/RBS role-flip · OCL sOCL/rOCL/1LAP/LS · QM · APX/IAB apex ·
+          MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
+        </div>
+      </div>
+
+      <!-- Freshness Filter -->
+      <div class="control-group">
+        <label class="section-label">LEVEL FRESHNESS</label>
+        <div class="segmented-control" id="freshnessSegment">
+          <button class="seg-btn active" data-freshness="all">All</button>
+          <button class="seg-btn" data-freshness="fresh_only">Fresh Only</button>
+          <button class="seg-btn" data-freshness="unfresh_only">Unfresh Only</button>
+        </div>
+      </div>
+
+      <!-- Indicator Toggle Cards (old MSNR stack disabled, TS live) -->
+      <div class="indicator-toggles-container">
+
+        <!-- 0. Turtle Soup (TS) Card — NEW -->
+        <div class="indicator-card active" id="cardTS">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleTS">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Turtle Soup (TS)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Two-candle sweep: candle 2 wick takes candle 1 wick, body closes back inside. TS-H (red, bearish) / TS-L (green, bullish).</p>
+        </div>
+
+        <!-- 0b. Inducement (IDM) Card — NEW -->
+        <div class="indicator-card active" id="cardIDM">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleIDM">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Inducement (IDM / Liquidity)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">First valid pullback extreme per leg. Swept IDMs draw formation → sweep (full length); active ones are short rays.</p>
+        </div>
+
+        <!-- 0c. Break of Structure (BOS) Card — NEW -->
+        <div class="indicator-card active" id="cardBOS">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleBOS">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Break of Structure (BOS)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Close through the last major swing (Mxwll-style). With-trend break = BOS, against = CHoCH. Minor swings draw as I-BOS. Wicks don't count.</p>
+        </div>
+
+        <!-- 0d. Fair Value Gap (FVG) Card — NEW -->
+        <div class="indicator-card active" id="cardFVG">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleFVG">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Fair Value Gap (FVG)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">3-candle gap with displacement close (LuxAlgo port). Bullish teal / bearish red zones; mitigated zones draw to the fill.</p>
+        </div>
+
+        <!-- 0e. Inverse Fair Value Gap (IFVG) Card — NEW -->
+        <div class="indicator-card active" id="cardIFVG">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleIFVG">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Inverse Fair Value Gap (IFVG)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Two opposite FVGs overlapping: the newer one inverts the older. Drawn purple over the overlap region.</p>
+        </div>
+
+        <!-- 0f. Order Blocks + Breakers Card — NEW -->
+        <div class="indicator-card active" id="cardOB">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleOB">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Order Blocks + Breakers</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Origin candle of displacement after a swing break (LuxAlgo port). Body-through flips it to a breaker (BRKR).</p>
+        </div>
+        
+        <!-- 1. Support & Resistance Card -->
+        <div class="indicator-card active" id="cardSR">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleSR">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Support & Resistance / SBR / RBS</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Marked at candle body close. SBR/RBS role reversals tracked on body break.</p>
+        </div>
+
+        <!-- 2. Open Close Levels (OCL) Card -->
+        <div class="indicator-card" id="cardOCL">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleOCL">
+              <span class="checkmark ocl-check"></span>
+              <span class="card-title">Open Close Levels (OCL)</span>
+            </label>
+            <span class="color-indicator ocl-color"></span>
+          </div>
+          <p class="card-desc">sOCL, rOCL, 1-Lap OCL, and LS OCL on HTF (M, W, D). Engulfing disqualified.</p>
+        </div>
+
+        <!-- 3. Quasimodo (QM) Card -->
+        <div class="indicator-card active" id="cardQM">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleQM">
+              <span class="checkmark qm-check"></span>
+              <span class="card-title">Quasimodo (QM)</span>
+            </label>
+            <span class="color-indicator qm-color"></span>
+          </div>
+          <p class="card-desc">Failed SBR / Failed RBS shoulder lines (ABQM, FTQM, STQM).</p>
+        </div>
+
+        <!-- 4. Apex & IAB Card -->
+        <div class="indicator-card" id="cardApex">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleApex">
+              <span class="checkmark apex-check"></span>
+              <span class="card-title">Apex & IAB Swings</span>
+            </label>
+            <span class="color-indicator apex-color"></span>
+          </div>
+          <p class="card-desc">Line-chart external peaks/troughs verified by structural breakouts.</p>
+        </div>
+
+      </div>
+
+      <!-- Quick Legend -->
+      <div class="legend-box">
+        <div class="legend-title"><i data-lucide="info"></i> Color Legend</div>
+        <div class="legend-grid">
+          <div class="legend-item"><span class="dot color-sup"></span> Support (Cyan)</div>
+          <div class="legend-item"><span class="dot color-res"></span> Resistance (Orange)</div>
+          <div class="legend-item"><span class="dot color-ocl"></span> OCL (Gold Yellow)</div>
+          <div class="legend-item"><span class="dot color-qm"></span> Quasimodo (Purple)</div>
+          <div class="legend-item"><span class="dot color-apex-sup"></span> Apex Sup (Emerald)</div>
+          <div class="legend-item"><span class="dot color-apex-res"></span> Apex Res (Crimson)</div>
+          <div class="legend-item"><span class="dot color-idm"></span> IDM (Gold)</div>
+          <div class="legend-item"><span class="dot color-bos"></span> BOS (Blue)</div>
+          <div class="legend-item"><span class="dot color-fvg-bull"></span> FVG+ (Teal)</div>
+          <div class="legend-item"><span class="dot color-fvg-bear"></span> FVG- (Red)</div>
+          <div class="legend-item"><span class="dot color-ifvg"></span> IFVG (Purple)</div>
+          <div class="legend-item"><span class="dot color-ob-bull"></span> OB+ (Blue)</div>
+          <div class="legend-item"><span class="dot color-ob-bear"></span> OB- (Orange)</div>
+          <div class="legend-item"><span class="dot color-brkr"></span> BRKR (Red/Grn)</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center: Chart & Bottom Execution Panel -->
+    <section class="center-workspace">
+      
+      <!-- Interactive Chart Area -->
+      <div class="chart-section">
+        <div id="tvChartContainer" class="chart-container"><div class="chart-label-layer" id="chartLabelLayer"></div></div>
+        
+        <!-- Chart Floating Stats -->
+        <div class="chart-floating-overlay">
+          <div class="overlay-item">
+            <span class="label">SYMBOL:</span>
+            <span class="value" id="overlaySymbol">XAUUSDm</span>
+          </div>
+          <div class="overlay-item">
+            <span class="label">TF:</span>
+            <span class="value" id="overlayTF">D1</span>
+          </div>
+          <div class="overlay-item">
+            <span class="label">ACTIVE ENTRY ZONES:</span>
+            <span class="value highlight" id="overlayActiveCount">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Phase 5 Execution Deck -->
+      <div class="execution-deck">
+        <div class="deck-header">
+          <div class="deck-title">
+            <i data-lucide="zap"></i>
+            <span>LIVE EXECUTION DECK (PHASE 5)</span>
+          </div>
+          <div class="deck-controls">
+            <div class="auto-trade-toggle">
+              <span class="toggle-label">AUTO-TRADE:</span>
+              <label class="switch">
+                <input type="checkbox" id="autoTradeToggle">
+                <span class="slider round"></span>
+              </label>
+            </div>
+            <button class="order-btn" id="btnPlaceOrder">
+              <i data-lucide="send"></i> Place Limit Order (1% Risk)
+            </button>
+          </div>
+        </div>
+
+        <div class="positions-container">
+          <table class="positions-table">
+            <thead>
+              <tr>
+                <th>TICKET</th>
+                <th>SYMBOL</th>
+                <th>TYPE</th>
+                <th>LOTS</th>
+                <th>ENTRY</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>PNL ($)</th>
+                <th>ACTION</th>
+              </tr>
+            </thead>
+            <tbody id="positionsTableBody">
+              <tr>
+                <td colspan="9" class="empty-state">No open positions or pending orders in MT5.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Right Drawer: Live Levels / Strategy Target Table -->
+    <aside class="inspector-drawer" id="levelDrawer">
+      <div class="drawer-header">
+        <h3><i data-lucide="list-tree"></i> Strategy Targets & Obstacles</h3>
+        <span class="drawer-hint">Click row to focus</span>
+      </div>
+      
+      <div class="table-scroll-container">
+        <table class="levels-table">
+          <thead>
+            <tr>
+              <th>TYPE</th>
+              <th>PRICE</th>
+              <th>STATUS</th>
+              <th>DIST (PTS)</th>
+            </tr>
+          </thead>
+          <tbody id="levelsTableBody">
+            <tr>
+              <td colspan="4" class="empty-state">Loading levels from MT5...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- Bot Settings drawer: entry modules (indicator layers stay on the sidebar) -->
+  <div class="settings-backdrop" id="settingsBackdrop"></div>
+  <aside class="settings-drawer" id="settingsDrawer">
+    <div class="drawer-header">
+      <h3><i data-lucide="settings"></i> Bot Settings</h3>
+      <button class="action-btn" id="btnCloseSettings" title="Close settings">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <p class="section-hint">Entry modules feed the execution deck. Indicator layers stay on the dashboard sidebar.</p>
+    <div class="section-header-bar">
+      <span class="section-label"><i data-lucide="puzzle"></i> ENTRY MODULES</span>
+      <span class="badge" id="modulesCountBadge">0 on</span>
+    </div>
+    <div class="settings-actions">
+      <button class="mode-pill" id="btnModulesAll">Enable all</button>
+      <button class="mode-pill" id="btnModulesNone">Disable all</button>
+    </div>
+    <div class="modules-list" id="modulesList">
+      <div class="empty-state">Loading modules...</div>
+    </div>
+  </aside>
+
+  <script src="/static/app.js?v=15"></script>
+</body>
+</html>

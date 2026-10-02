@@ -1,0 +1,355 @@
+{
+  "bias": "BEARISH",
+  "setup": "D1_STORY_H4_ENTRY via D1_H4",
+  "entry": 4125.03,
+  "sl": 4128.03,
+  "tp": 3969.87,
+  "invalidation": "Opposite BEARISH close beyond SL",
+  "confidence": 60.0,
+  "reason_human": "Hey \u2014 I like this BEARISH spot (D1_STORY_H4_ENTRY). MSNR has 4125.03 with SL 4128.03 and TP 3969.87. FTFL(H4): Continuation FTQM QM (PC break) @ 4133.27 -> STFL(H1): STFL Resistance @ 4127.48 -> TTFL(M15): TTFL RESISTANCE @ 4125.13 [bars_delayed=101]",
+  "indicator_toggles": [],
+  "news_risk": "high",
+  "msnr_agreement": true,
+  "verdict": "ACCEPT",
+  "verdict_reason": "MSNR-agreed BEARISH @ 4125.03, RR 51.72.",
+  "symbol": "XAUUSDm",
+  "current_price": 4123.475,
+  "indicators": {
+    "total": 37,
+    "enabled": 37,
+    "disabled": 0,
+    "enabled_list": [
+      "MSNR_ABX_AMDX",
+      "MSNR_ABX_CECluster",
+      "MSNR_ABX_Classic",
+      "MSNR_ABX_CloseTL",
+      "MSNR_ABX_DayProfile",
+      "MSNR_ABX_Fibo",
+      "MSNR_ABX_FreshZone",
+      "MSNR_ABX_HiddenBase",
+      "MSNR_ABX_OCLZone",
+      "MSNR_ABX_QMX",
+      "MSNR_ABX_SMT",
+      "MSNR_APA_AOL",
+      "MSNR_APA_EngulfTypes",
+      "MSNR_APA_FTA",
+      "MSNR_APA_Shift",
+      "MSNR_Apex",
+      "MSNR_EMS_BBMA",
+      "MSNR_EMS_BOS_Sweep",
+      "MSNR_EMS_CRT",
+      "MSNR_EMS_Engulfing",
+      "MSNR_EMS_FVG",
+      "MSNR_EMS_Liquidity",
+      "MSNR_EMS_PremiumDiscount",
+      "MSNR_EMS_Range",
+      "MSNR_Freshness",
+      "MSNR_Levels_SR",
+      "MSNR_OCL",
+      "MSNR_RoleFlip",
+      "MSNR_PHX_DojiTrigger",
+      "MSNR_PHX_Liquidity",
+      "MSNR_PHX_MSS",
+      "MSNR_PHX_OrderBlock",
+      "MSNR_PHX_Trendline",
+      "MSNR_PHX_Wick50",
+      "MSNR_QM_Taxonomy",
+      "MSNR_Storyline",
+      "MSNR_TFL_Zones"
+    ],
+    "disabled_list": []
+  },
+  "mt5_live": {
+    "source": "live_mt5",
+    "age_sec": 1071.8,
+    "stale": true,
+    "file": "C:\\Users\\Hp\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075\\MQL5\\Files\\MSNR_AI\\indicator_state.json",
+    "hint": "",
+    "states": [
+      {
+        "name": "MSNR_ABX_AMDX",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_CECluster",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_Classic",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_CloseTL",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_DayProfile",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_Fibo",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_FreshZone",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_HiddenBase",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_OCLZone",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_QMX",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_ABX_SMT",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_APA_AOL",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_APA_EngulfTypes",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_APA_FTA",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_APA_Shift",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_Apex",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_EMS_BBMA",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_EMS_BOS_Sweep",
+        "enabled": true,
+        "objects": 0,
+        "level": 0.0
+      },
+      {
+        "name": "MSNR_EMS_CRT",
+        "enabled": true,
+        "objects": 32,
+        "level": 4277.033
+      },
+      {
+        "name": "MSNR_EMS_Engulfing",
+        "enabled": true,
+        "objects": 300,
+        "level": 4280.707
+      },
+      {
+        "name": "MSNR_EMS_FVG",
+        "enabled": true,
+        "objects": 150,
+        "level": 4264.109
+      },
+      {
+        "name": "MSNR_EMS_Liquidity",
+        "enabled": true,
+        "objects": 100,
+        "level": 4305.561
+      },
+      {
+        "name": "MSNR_EMS_PremiumDiscount",
+        "enabled": true,
+        "objects": 8,
+        "level": 4120.4955
+      },
+      {
+        "name": "MSNR_EMS_Range",
+        "enabled": true,
+        "objects": 4,
+        "level": 4126.716
+      },
+      {
+        "name": "MSNR_Freshness",
+        "enabled": true,
+        "objects": 180,
+        "level": 4112.649
+      },
+      {
+        "name": "MSNR_Levels_SR",
+        "enabled": true,
+        "objects": 120,
+        "level": 4157.105
+      },
+      {
+        "name": "MSNR_OCL",
+        "enabled": true,
+        "objects": 207,
+        "level": 4271.596
+      },
+      {
+        "name": "MSNR_PHX_DojiTrigger",
+        "enabled": true,
+        "objects": 6,
+        "level": 4290.522
+      },
+      {
+        "name": "MSNR_PHX_Liquidity",
+        "enabled": true,
+        "objects": 76,
+        "level": 4171.346
+      },
+      {
+        "name": "MSNR_PHX_MSS",
+        "enabled": true,
+        "objects": 21,
+        "level": 4147.897
+      },
+      {
+        "name": "MSNR_PHX_OrderBlock",
+        "enabled": true,
+        "objects": 3,
+        "level": 4283.41
+      },
+      {
+        "name": "MSNR_PHX_Trendline",
+        "enabled": true,
+        "objects": 16,
+        "level": 4126.614
+      },
+      {
+        "name": "MSNR_PHX_Wick50",
+        "enabled": true,
+        "objects": 62,
+        "level": 4261.404
+      },
+      {
+        "name": "MSNR_QM_Taxonomy",
+        "enabled": true,
+        "objects": 42,
+        "level": 4308.148
+      },
+      {
+        "name": "MSNR_RoleFlip",
+        "enabled": true,
+        "objects": 144,
+        "level": 4112.649
+      },
+      {
+        "name": "MSNR_Storyline",
+        "enabled": true,
+        "objects": 60,
+        "level": 4126.218
+      },
+      {
+        "name": "MSNR_TFL_Zones",
+        "enabled": true,
+        "objects": 76,
+        "level": 4121.203
+      }
+    ]
+  },
+  "data_truth": "python_fallback_only: collector EA not connected \u2014 indicator objects NOT live",
+  "news_headlines": [
+    "XAU/USD | Gold Spot US Dollar Price - Investing.com",
+    "XAU USD Historical Data - Investing.com India"
+  ],
+  "lifecycle": {
+    "id": "P-bbfd8511af",
+    "status": "EXECUTED",
+    "duplicate": true,
+    "created_at": "2026-09-29T01:26:44.389001+00:00",
+    "expires_at": "2026-09-29T09:26:44.389001+00:00",
+    "refresh_count": 2,
+    "execution": {
+      "ticket": 3295393092,
+      "type": "SELL",
+      "open_price": 4124.778,
+      "lots": 0.01,
+      "profit": -4.66
+    },
+    "watchlist": [
+      {
+        "id": "P-086abefac8",
+        "model": "W1_STORY_D1_ENTRY",
+        "direction": "BEARISH",
+        "entry": 4127.38,
+        "sl": 4130.38,
+        "tp": 3285.3,
+        "confidence": "B-",
+        "distance": 3.9
+      },
+      {
+        "id": "P-a329cf9267",
+        "model": "MODEL_B_14B",
+        "direction": "BEARISH",
+        "entry": 4133.87,
+        "sl": 4136.87,
+        "tp": 4118.16,
+        "confidence": "B",
+        "distance": 10.4
+      },
+      {
+        "id": "P-6cfb82b5db",
+        "model": "MODEL_B_14B",
+        "direction": "BEARISH",
+        "entry": 4281.69,
+        "sl": 4284.69,
+        "tp": 4280.36,
+        "confidence": "B",
+        "distance": 158.22
+      }
+    ],
+    "active": [
+      {
+        "id": "P-bbfd8511af",
+        "symbol": "XAUUSDm",
+        "bias": "BEARISH",
+        "entry": 4125.03,
+        "status": "EXECUTED",
+        "expires_at": "2026-09-29T09:26:44.389001+00:00"
+      }
+    ]
+  }
+}

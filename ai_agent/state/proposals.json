@@ -1,0 +1,22 @@
+{
+  "P-bbfd8511af": {
+    "id": "P-bbfd8511af",
+    "symbol": "XAUUSDm",
+    "bias": "BEARISH",
+    "entry": 4125.03,
+    "sl": 4128.03,
+    "tp": 3969.87,
+    "status": "EXECUTED",
+    "created_at": "2026-09-29T01:26:44.389001+00:00",
+    "last_seen_at": "2026-09-29T01:27:11.969786+00:00",
+    "expires_at": "2026-09-29T09:26:44.389001+00:00",
+    "refresh_count": 2,
+    "execution": {
+      "ticket": 3295393092,
+      "type": "SELL",
+      "open_price": 4124.778,
+      "lots": 0.01,
+      "profit": -4.66
+    }
+  }
+}

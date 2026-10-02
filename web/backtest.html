@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Backtest Review — Sep 28 / Oct 02 Journal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <style>
+    .bt-layout { display: flex; gap: 10px; padding: 10px; height: calc(100vh - 52px); box-sizing: border-box; }
+    .bt-chart-wrap { flex: 1; position: relative; min-width: 0; }
+    #btChart { position: absolute; inset: 0; }
+    .bt-side { width: 380px; max-width: 38vw; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+    .bt-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .bt-detail { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+    .bt-detail .row { display: flex; justify-content: space-between; padding: 1px 0; }
+    .bt-detail .k { color: var(--text-secondary); }
+    .bt-detail .chain { font-size: 11px; color: #9aa5b5; margin-top: 4px; word-break: break-word; }
+    .bt-table-wrap { flex: 1; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; }
+    table.bt-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    table.bt-table th { position: sticky; top: 0; background: var(--bg-card); text-align: left; padding: 5px 6px; color: var(--text-secondary); font-weight: 600; }
+    table.bt-table td { padding: 4px 6px; border-top: 1px solid var(--border-color); cursor: pointer; }
+    table.bt-table tr.selected td { background: rgba(0, 229, 255, 0.12); }
+    .out-TP { color: #00e676; font-weight: 700; }
+    .out-SL { color: #ff5c6c; font-weight: 700; }
+    .out-expired, .out-open { color: #9aa5b5; }
+  </style>
+</head>
+<body class="dark-theme">
+  <header class="top-nav">
+    <div class="brand-section">
+      <div class="logo-badge"><i data-lucide="flag"></i></div>
+      <div class="brand-text">
+        <span class="brand-title">BACKTEST REVIEW</span>
+        <span class="brand-subtitle">Journal Sep 28 — Oct 02 · 49 setups</span>
+      </div>
+    </div>
+    <div class="account-header-metrics">
+      <div class="acc-pill"><span class="acc-lbl">TP:</span><span class="acc-val" id="statTP" style="color:#00e676;">–</span></div>
+      <div class="acc-pill"><span class="acc-lbl">SL:</span><span class="acc-val" id="statSL" style="color:#ff5c6c;">–</span></div>
+      <div class="acc-pill"><span class="acc-lbl">EXP:</span><span class="acc-val" id="statExp">–</span></div>
+      <div class="acc-pill"><span class="acc-lbl">TOTAL R:</span><span class="acc-val" id="statR">–</span></div>
+    </div>
+    <div class="nav-actions">
+      <a class="action-btn" href="/" title="Back to live terminal" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;"><i data-lucide="home"></i></a>
+    </div>
+  </header>
+
+  <main class="bt-layout">
+    <div class="bt-chart-wrap"><div id="btChart"></div></div>
+    <aside class="bt-side">
+      <div class="bt-toolbar">
+        <button class="mode-pill active" data-f="all">All</button>
+        <button class="mode-pill" data-f="TP">TP</button>
+        <button class="mode-pill" data-f="SL">SL</button>
+        <button class="mode-pill" data-f="expired">Expired</button>
+        <button class="action-btn" id="btnPrev" title="Previous trade">‹</button>
+        <span class="badge" id="tradeCounter">0 / 0</span>
+        <button class="action-btn" id="btnNext" title="Next trade">›</button>
+      </div>
+      <div class="bt-detail" id="tradeDetail"><div class="empty-state">Select a trade.</div></div>
+      <div class="bt-table-wrap">
+        <table class="bt-table">
+          <thead><tr><th>#</th><th>Date</th><th>Dir</th><th>Entry</th><th>Out</th><th>R</th><th>QM</th></tr></thead>
+          <tbody id="tradesBody"></tbody>
+        </table>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/backtest.js?v=1"></script>
+</body>
+</html>
