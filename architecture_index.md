@@ -14,7 +14,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 |------|------|
 | `start_live.py` (L1-91) | Main launcher. Self-heals interpreter (`_ensure_interpreter`, L27), `check_deps` (L54), runs `uvicorn server:app` (L87). |
 | `start_live.bat` | Windows double-click wrapper. |
-| `server.py` (L1-928) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
+| `server.py` (L1-982) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
 | `main.py` (L1-97) | Standalone CLI: `--test-indicators` renders an annotated chart (legacy demo, L32-87). |
 | `ai_agent/agent_loop.py` (L35 `run_once`) | CLI entry for one AI scan. |
 | `ai_agent/pilot/run_pilot.py` (L278 `main`) | Offline AI strategy pilot (build/analyze/score/revise phases). |
@@ -24,7 +24,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 ### 3.1 Config & Data
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `config/settings.py` | 245 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/LIQ/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
+| `config/settings.py` | 272 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/LIQ/BOS/FVG/IFVG/OB/TL/TS/CRT). `INDICATORS_ENABLED=False` master switch L109. |
 | `data/mt5_loader.py` | 154 | `MT5DataLoader` (L29). Symbol resolution (`_resolve_symbol` L64), `fetch_timeframe` (L108, unix `time` column for charts), `_resample` (L142, M45 = 3×M15), `fetch_all_timeframes` (L166). Thread-locked MT5 calls. |
 
 ### 3.2 Indicator Detectors (`indicators/`)
@@ -38,6 +38,7 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `qm_detector.py` | 277 | `QMDetector` (L90) | Quasimodo (QMR/QMM/QMC) reversal patterns. |
 | `apex_detector.py` | 191 | `ApexDetector` (L72) | Apex & IAB swings (HTF line-chart analysis). |
 | `ts_detector.py` | 166 | `TSDetector` (L58) | Turtle Soup liquidity sweeps (wick-gated, L28 enums). |
+| `crt_detector.py` | 435 | `CRTDetector` (L144), `CRTLevel` (L88), enums `CRTDirection`/`CRTVariant`/`CRTState` | **Candle Range Theory**. An anchor candle defines the range (`crh`/`crl`); a later candle **sweeps** one boundary and **closes back inside** (mandatory); the projection targets the **opposite** boundary. `CLASSIC` = strict 3-candle A-M-D; `INSIDE_BAR` = the accumulation nests inside bars inside the anchor (higher-probability read). One setup per manipulation candle — the **widest** range wins, so nested competitions collapse to the real container; a bar that sweeps both sides picks the deeper raid. Life cycle `MANIPULATED` -> `DISTRIBUTED` (target reached) / `INVALIDATED` (body close beyond the swept boundary; beats distribution on the same bar). Footer `end_kind`: `active`/`distributed`/`invalidated`. Gates: `min_range_atr`, `min_sweep_atr`, `min_close_back_atr`, `max_inside_bars`, `sweep_min`, opt-in `require_directional_anchor`. Drawn ray = the **swept** boundary; the far boundary ships as `target`. |
 | `idm_detector.py` | 675 | `IDMDetector` (L105), `LuapIDMDetector` (L357), `RefCandleIDMDetector` (L529) | **Inducement, three families merged** (tagged on `IDMLevel.rule`). *BOS-anchored* (`rule="bos"`): after a structural break, the most recent minor fractal swing inside the impulse leg beyond the leg origin (a higher low / lower high). One IDM per BOS, deduped and capped per side. *Two-candle* (`rule="two_candle"`): Luap "True SMC" valid pullback (Part 1 + Part 3) — a candle takes the wick/body liquidity of the candle that ended the impulse (the previous HH/LL candle); new-extreme-without-taking **shifts** the IDM; inside bars ignored. *Reference-candle* (`rule="ref_candle"`): **every** candle is "candle 1" — upside leg -> the range LOW is the IDM, downside -> the range HIGH; a later candle must take candle 1's low then its high (mirror down) and the pullback series' extreme is the IDM. The leg is read at the **continuation** bar (the break the IDM precipitates, via `_structure_direction`), *not* at candle 1: candle 1 lies before its break, so gating there would miss every pullback that precedes a break (every CHoCH/reversal, and the first break in view). `_structure_direction` reads pivot breaks only (skips `BOSLevel.from_range` range-boundary takes, which repeat a break on the same leg). `IDMDetector(two_candle_rule=, ref_candle_rule=)` merges all three, dropping levels that repeat an earlier family's pullback (same type + bar). Resolves each IDM to `swept` (wick through, body back inside) / `broken` (body close-through) / active. |
 | `liquidity_detector.py` | 211 | `LiquidityDetector` (L67) | **Liquidity pools**: equal highs (buy-side) / equal lows (sell-side) stop clusters, from fractal pivots clustered within `eq_tol_atr` x ATR and `eq_max_bars`. Needs `>= min_touches`; single swings excluded. Marks each pool `taken` on the first wick through. Capped per side. |
 | `swings.py` | 73 | `find_pivots` (L41), `atr_series`, `Pivot` | Shared symmetric fractal-pivot finder + Wilder ATR for the IDM/liquidity detectors. |
@@ -86,13 +87,13 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 ### 3.7 Frontend (`web/`)
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `index.html` | 439 | TradingView terminal shell. |
-| `app.js` | 1362 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-20). One IDM colour per family: gold = BOS-anchored `IDM`, amber = `IDM·2C`, lime = `IDM·RC` (badges `badge-idm`/`badge-idm-2c`/`badge-idm-rc`). Ray budget is **per category** (`MAX_RAYS_PER_CATEGORY=80`), not one global recency cap, so a busy layer (SR/TS/QM) cannot starve a small one. |
-| `style.css` | 1256 | Styling. |
+| `index.html` | 471 | TradingView terminal shell. |
+| `app.js` | 1408 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-21, incl. `CRT_ENABLED`). One IDM colour per family: gold = BOS-anchored `IDM`, amber = `IDM·2C`, lime = `IDM·RC` (badges `badge-idm`/`badge-idm-2c`/`badge-idm-rc`). CRT: green = bullish (sell-side raid), red = bearish (tags `crt-bull`/`crt-bear`), dashed = the inside-bar variant, distributed setups fade, invalidated ones go gray dotted. Ray budget is **per category** (`MAX_RAYS_PER_CATEGORY=80`), not one global recency cap, so a busy layer (SR/TS/QM) cannot starve a small one. The indicators request drops `undefined` params: mode pills assign a *partial* indicator set, and the literal `"undefined"` made FastAPI reject the whole request (422) so the chart silently showed nothing. |
+| `style.css` | 1261 | Styling. |
 | `backtest.html` / `backtest.js` | 99 / 820 | Backtest journal viewer (reads `/api/backtest/*`). |
 
 ### 3.8 Tests (`tests/`)
-`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py` (BOS family, pinned via `two_candle_rule=False` + `ref_candle_rule=False`), `test_luap_idm.py` (two-candle family + merge/dedupe), `test_ref_candle_idm.py` (reference-candle family + structure gate), `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
+`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_crt.py` (CRT: classic/inside-bar, dedupe, both-side bars, life cycle, gates, caps), `test_idm.py` (BOS family, pinned via `two_candle_rule=False` + `ref_candle_rule=False`), `test_luap_idm.py` (two-candle family + merge/dedupe), `test_ref_candle_idm.py` (reference-candle family + structure gate), `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
 
 ### 3.9 Docs & Reference (non-code)
 - `strategy_notes/` — strategy playbooks (phoenix_mnsr, ems mnsr, apa, abax mnsr, advance mnsr1) as markdown + subtitle transcripts.
@@ -133,8 +134,9 @@ AI layer (propose-only):
 ## 6. Conventions & Notes
 - Enable/disable every indicator via `config/settings.py` flags; `INDICATORS_ENABLED=False` disables the legacy unified stack, but per-indicator flags (SR/QM/BOS/…) run independently.
 - Detectors are stateless and take a DataFrame in the constructor; `detect_all()` is the uniform entry.
-- `web/app.js` duplicates the switches at top (L10-22) — keep in sync with `settings.py`.
+- `web/app.js` duplicates the switches at top (L8-21) — keep in sync with `settings.py`.
 - `backtest/` journals (CSV) feed `/api/backtest/*`; label map in `server.py` `_journal_label` (L828).
 - Inducement ships **three families at once**: BOS-anchored, the Luap "True SMC" two-candle valid-pullback IDMs (`IDM_TWO_CANDLE_RULE=True`), and the Luap reference-candle ("candle 1") IDMs (`IDM_REF_CANDLE_RULE=True`, bounded by `IDM_REF_MAX_BARS`). All are the `idm` category and told apart by `IDMLevel.rule` / the gold-amber-lime tags (`IDM` / `IDM·2C` / `IDM·RC`). Each family caps **only its swept/broken history** to `IDM_MAX_PER_SIDE` per side — live IDMs are always kept (bounded by `MAX_LIVE_PER_SIDE=30`), because an untaken inducement is the only one still a target.
 - Interpreter quirk on Windows: `start_live.py` re-execs into Python311.
+- CRT (`CRT_*` in `config/settings.py`) keeps **one setup per manipulation candle**, resolved to the **widest** range (the outermost accumulation container). The ATR gates (`min_range_atr`/`min_sweep_atr`) are off by default — every candle is a candidate anchor and a sweep counts on price alone — and the per-side caps (`CRT_MAX_PER_SIDE` history / `CRT_MAX_LIVE_PER_SIDE` live) bound chart volume instead. Re-enable by setting the ATR floors >0 if micro-ranges ever need gating. `CRT_REQUIRE_DIRECTIONAL_ANCHOR` is off because sources disagree on the anchor's required colour — the sweep plus close-back-inside is the definition.
 - Trendlines are built as lines **through close-price apexes** using **multi-scale apex windows** (`TL_PIVOT_WINDOWS`, default `(5, 14)`, merged — small windows catch local channel swings, the large one the major swings) plus `TL_TOL_ATR`, `TL_CHANNEL_PARALLEL_ATR`, `TL_SWEEP_ATR` in `config/settings.py`, passed to `TLDetector`. `TLLine.slope` is signed and `value_at()` projects it; `role` = support/resistance by anchor set; lines carry `channel_id`, `flipped`/`retest_role` and `swept`. The old mid-line channel (`TLChannel`) is removed. `slope_mult`/`body_pivots` are deprecated no-ops.

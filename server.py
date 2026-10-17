@@ -37,9 +37,13 @@ from config.settings import (
     IDM_REF_CANDLE_RULE, IDM_REF_MAX_BARS,
     LIQ_ENABLED, LIQ_SWING_LENGTH, LIQ_EQ_TOL_ATR, LIQ_EQ_MAX_BARS,
     LIQ_MIN_TOUCHES, LIQ_MAX_PER_SIDE,
+    CRT_ENABLED, CRT_MIN_RANGE_ATR, CRT_MIN_SWEEP_ATR, CRT_MIN_CLOSE_BACK_ATR,
+    CRT_MAX_INSIDE_BARS, CRT_REQUIRE_DIRECTIONAL_ANCHOR,
+    CRT_MAX_PER_SIDE, CRT_MAX_LIVE_PER_SIDE, CRT_ATR_PERIOD,
 )
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
+from indicators.crt_detector import CRTDetector
 from indicators.idm_detector import IDMDetector
 from indicators.liquidity_detector import LiquidityDetector
 from indicators.bos_detector import BOSDetector
@@ -156,6 +160,7 @@ def get_indicators(
     show_ob: bool = Query(True),
     show_tl: bool = Query(True),
     show_liq: bool = Query(True),
+    show_crt: bool = Query(True),
 ):
     """
     Compute MSNR indicators on live MT5 data and return structured levels.
@@ -173,7 +178,10 @@ def get_indicators(
     ob_on = OB_ENABLED and show_ob
     tl_on = TL_ENABLED and show_tl
     liq_on = LIQ_ENABLED and show_liq
-    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on and not liq_on:
+    crt_on = CRT_ENABLED and show_crt
+    if (not (TS_ENABLED and show_ts) and not crt_on and not sr_on
+            and not qm_on and not legacy_on and not idm_on and not bos_on
+            and not fvg_on and not ifvg_on and not ob_on and not tl_on and not liq_on):
         try:
             loader = get_loader(symbol)
             sym = loader.resolved_symbol
@@ -323,6 +331,52 @@ def get_indicators(
                     "end_kind": "active",
                     "sweep_amount": round(ts.sweep_amount, 3),
                     "desc": f"TS: {ts.ts_type.value.upper()} {ts.direction.value.upper()}"
+                })
+
+        # 5b. CRT (Candle Range Theory): an anchor candle defines the range
+        # (CRH/CRL), a later candle sweeps one boundary and closes back inside,
+        # and the projection targets the OPPOSITE boundary. CLASSIC = the strict
+        # 3-candle A-M-D sequence; INSIDE_BAR = the accumulation nests inside
+        # bars inside the anchor. The drawn ray is the swept boundary (the level
+        # price); the far boundary rides along as `target`.
+        if crt_on:
+            crt_det = CRTDetector(
+                df,
+                min_range_atr=CRT_MIN_RANGE_ATR,
+                min_sweep_atr=CRT_MIN_SWEEP_ATR,
+                min_close_back_atr=CRT_MIN_CLOSE_BACK_ATR,
+                max_inside_bars=CRT_MAX_INSIDE_BARS,
+                require_directional_anchor=CRT_REQUIRE_DIRECTIONAL_ANCHOR,
+                max_per_side=CRT_MAX_PER_SIDE,
+                max_live_per_side=CRT_MAX_LIVE_PER_SIDE,
+                atr_period=CRT_ATR_PERIOD,
+            )
+            last_i = len(times_unix) - 1
+            for crt in crt_det.detect_all():
+                a_idx = min(crt.anchor_index, last_i)
+                m_idx = min(crt.manipulation_index, last_i)
+                inside_bar = crt.variant.value == "inside_bar"
+                label = "CRT·IB" if inside_bar else "CRT"
+                levels_data.append({
+                    "category": "crt",
+                    "type": f"{crt.direction.value.upper()} ({crt.variant.value.upper()})",
+                    "variant": crt.variant.value,
+                    "price": round(crt.swept_level, 3),
+                    "state": crt.state.value.upper(),
+                    "time": int(times_unix[a_idx]),
+                    "start_time": int(times_unix[m_idx]),
+                    "end_time": _end_time(crt.end_index),
+                    "end_kind": crt.end_kind,
+                    "range_high": round(crt.crh, 3),
+                    "range_low": round(crt.crl, 3),
+                    "target": round(crt.target_level, 3),
+                    "inside_bars": crt.inside_count,
+                    "sweep_amount": round(crt.sweep_amount, 3),
+                    "desc": (
+                        f"{label} {crt.direction.value.upper()}: swept "
+                        f"{crt.swept_level:.2f}, target {crt.target_level:.2f}"
+                        + (f" ({crt.inside_count} inside bars)" if crt.inside_count else "")
+                    )
                 })
 
         # 6. IDM (inducement): three families, tagged by `rule`. (a) BOS-anchored:

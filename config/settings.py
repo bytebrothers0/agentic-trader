@@ -238,6 +238,30 @@ TL_GAP_ATR_MULT = 0.1
 TS_MIN_WICK_BODY_FRAC = 0.10
 TS_MIN_WICK_RANGE_FRAC = 0.05
 
+# CRT (Candle Range Theory) — enabled. One candle defines the range (CRH/CRL);
+# a later candle sweeps one boundary and closes back inside; the projection is
+# toward the opposite boundary. Two variants: CLASSIC (strict 3-candle A-M-D)
+# and INSIDE_BAR (the accumulation nests inside bars inside the anchor, which
+# the community rates higher-probability — more liquidity banked at the level).
+# The ATR gates are intentionally off (0.0): every candle is a candidate anchor
+# and a sweep counts on price alone — the per-side caps below bound chart volume.
+# Re-enable min_range_atr/min_sweep_atr (>0) if micro-ranges ever need gating.
+CRT_ENABLED = True
+CRT_MIN_RANGE_ATR = 0.0
+CRT_MIN_SWEEP_ATR = 0.0
+CRT_MIN_CLOSE_BACK_ATR = 0.0
+# Longer runs than this are a range, not a compression: that anchor is skipped.
+CRT_MAX_INSIDE_BARS = 6
+# Opt-in: require a directional anchor (bullish CRT -> bearish range candle).
+# Off by default — sources disagree on the anchor's required colour, and the
+# sweep plus close-back-inside is the definition.
+CRT_REQUIRE_DIRECTIONAL_ANCHOR = False
+# Newest resolved (distributed/invalidated) setups kept per direction; live
+# ones are always kept, bounded by CRT_MAX_LIVE_PER_SIDE.
+CRT_MAX_PER_SIDE = 6
+CRT_MAX_LIVE_PER_SIDE = 20
+CRT_ATR_PERIOD = 14
+
 # =============================================================================
 # LOGGING
 # =============================================================================

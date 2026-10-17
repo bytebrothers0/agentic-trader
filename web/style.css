@@ -681,6 +681,8 @@ body {
 .color-ob-bull { background-color: #2962ff; }
 .color-ob-bear { background-color: #ff6d00; }
 .color-brkr { background-color: #ff5c6c; }
+.color-crt-bull { background-color: #00e676; }
+.color-crt-bear { background-color: #ff5c6c; }
 
 /* Manual drawing toolbar (human levels) */
 .chart-section {
@@ -999,6 +1001,8 @@ input:checked + .slider:before { transform: translateX(14px); }
 .chart-tag.tag-plain.idm-rc { color: #d4e157; }
 .chart-tag.tag-plain.liq-eqh { color: #ff5252; }
 .chart-tag.tag-plain.liq-eql { color: #4dd0e1; }
+.chart-tag.tag-plain.crt-bull { color: #00e676; }
+.chart-tag.tag-plain.crt-bear { color: #ff5c6c; }
 .chart-tag.tag-plain.bos { color: #7aa2ff; }
 .chart-tag.tag-plain.choch { color: #ff9100; }
 .chart-tag.tag-plain.fvg-bull { color: #089981; }
@@ -1149,6 +1153,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 .badge-qm { background-color: rgba(179, 136, 255, 0.15); color: var(--accent-purple); }
 .badge-apex { background-color: rgba(0, 230, 118, 0.15); color: var(--accent-emerald); }
 .badge-ts { background-color: rgba(255, 92, 108, 0.15); color: #ff5c6c; }
+.badge-crt { background-color: rgba(0, 230, 118, 0.15); color: #00e676; }
 .badge-idm { background-color: rgba(255, 214, 0, 0.15); color: var(--accent-gold); }
 .badge-idm-2c { background-color: rgba(255, 171, 64, 0.15); color: #ffab40; }
 .badge-idm-rc { background-color: rgba(212, 225, 87, 0.15); color: #d4e157; }

@@ -18,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const OB_ENABLED = true;
   const TL_ENABLED = true;
   const LIQ_ENABLED = true;
+  const CRT_ENABLED = true;
 
   if (window.lucide) {
     lucide.createIcons();
@@ -42,7 +43,8 @@ document.addEventListener("DOMContentLoaded", () => {
       ifvg: false,
       ob: false,
       tl: false,
-      liq: false
+      liq: false,
+      crt: false
     },
     candles: [],
     levels: [],
@@ -103,6 +105,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const toggleOB = document.getElementById("toggleOB");
   const toggleTL = document.getElementById("toggleTL");
   const toggleLIQ = document.getElementById("toggleLIQ");
+  const toggleCRT = document.getElementById("toggleCRT");
   
   const overlaySymbol = document.getElementById("overlaySymbol");
   const overlayTF = document.getElementById("overlayTF");
@@ -362,10 +365,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const wantOB = OB_ENABLED && state.indicators.ob;
       const wantTL = TL_ENABLED && state.indicators.tl;
       const wantLIQ = LIQ_ENABLED && state.indicators.liq;
+      const wantCRT = CRT_ENABLED && state.indicators.crt;
       const wantOCL = (OCL_ENABLED || INDICATORS_ENABLED) && state.indicators.ocl;
       const wantAPEX = (APEX_ENABLED || INDICATORS_ENABLED) && state.indicators.apex;
       const wantLegacy = wantOCL || wantAPEX;
-      if (!wantTS && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantTL && !wantLIQ && !wantLegacy) {
+      if (!wantTS && !wantCRT && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantTL && !wantLIQ && !wantLegacy) {
         state.levels = [];
       } else {
       // 5. Fetch Raw Indicators
@@ -387,7 +391,16 @@ document.addEventListener("DOMContentLoaded", () => {
           show_ob: OB_ENABLED && state.indicators.ob,
           show_tl: TL_ENABLED && state.indicators.tl,
           show_liq: LIQ_ENABLED && state.indicators.liq,
+          show_crt: CRT_ENABLED && state.indicators.crt,
         });
+
+        // Mode pills assign a *partial* indicator set, so whole layers can be
+        // undefined here. Sending the literal string "undefined" makes FastAPI
+        // reject the whole request (bool parsing -> 422) and the chart silently
+        // shows nothing, so drop those keys instead.
+        for (const key of [...params.keys()]) {
+          if (params.get(key) === "undefined") params.delete(key);
+        }
 
         const indRes = await fetch(`/api/indicators?${params.toString()}`, { signal: controller.signal });
         if (indRes.ok) {
@@ -646,6 +659,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.category === "fvg") return "FVG";
       if (lvl.category === "ifvg") return "IFVG";
       if (lvl.category === "ts") return (lvl.type || "").includes("HIGH") ? "TS-H" : "TS-L";
+      if (lvl.category === "crt") return lvl.variant === "inside_bar" ? "CRT·IB" : "CRT";
       if (lvl.category === "trendline") return lvl.flipped ? "BRT" : "TL";
       if (lvl.category === "apex") return t.includes("IAB") ? "IAB" : "APX";
       return t.slice(0, 3);
@@ -876,10 +890,22 @@ document.addEventListener("DOMContentLoaded", () => {
         color = (lvl.type || "").includes("HIGH") ? "#ff5252" : "#4dd0e1";
         lineStyle = LightweightCharts.LineStyle.Solid;
         lineWidth = 1;
+      } else if (lvl.category === "crt") {
+        // CRT: the swept boundary. Bullish (sell-side raid, target = range
+        // high) green; bearish red. The inside-bar accumulation is dashed —
+        // the nested range is the higher-probability read.
+        const crtBull = (lvl.type || "").includes("BULLISH");
+        color = crtBull ? "#00e676" : "#ff5c6c";
+        lineStyle = lvl.variant === "inside_bar"
+          ? LightweightCharts.LineStyle.Dashed
+          : LightweightCharts.LineStyle.Solid;
+        lineWidth = 1;
       }
 
       // Broken levels are history: thin gray dotted, no emphasis.
-      if (lvl.end_kind === "broken") {
+      // A CRT whose body closed through the swept boundary is the same story:
+      // the sweep was a real break, so the setup is void.
+      if (lvl.end_kind === "broken" || lvl.end_kind === "invalidated") {
         color = "#5a6b7a";
         lineStyle = LightweightCharts.LineStyle.Dotted;
         lineWidth = 1;
@@ -892,6 +918,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.category === "liquidity" && lvl.end_kind === "taken") {
         color = (lvl.type || "").includes("HIGH")
           ? "rgba(255, 82, 82, 0.35)" : "rgba(77, 208, 225, 0.35)";
+      }
+      // Distributed CRTs are played out (the target was reached): history.
+      if (lvl.category === "crt" && lvl.end_kind === "distributed") {
+        color = (lvl.type || "").includes("BULLISH")
+          ? "rgba(0, 230, 118, 0.35)" : "rgba(255, 92, 108, 0.35)";
       }
 
       // Zone-to-zone span: formation -> life-cycle end (or short active span).
@@ -935,6 +966,9 @@ document.addEventListener("DOMContentLoaded", () => {
               : lvl.rule === "ref_candle" ? "idm-rc" : "idm"))
             : lvl.category === "liquidity"
               ? ("tag-plain " + ((lvl.type || "").includes("HIGH") ? "liq-eqh" : "liq-eql"))
+              : lvl.category === "crt"
+                ? (lvl.end_kind === "invalidated" ? "tag-dim"
+                  : "tag-plain " + ((lvl.type || "").includes("BULLISH") ? "crt-bull" : "crt-bear"))
               : lvl.category === "bos"
               ? ("tag-plain " + ((lvl.type || "").includes("CHOCH") ? "choch" : "bos"))
               : "tag-dim";
@@ -964,6 +998,7 @@ document.addEventListener("DOMContentLoaded", () => {
       || (FVG_ENABLED && state.indicators.fvg)
       || (IFVG_ENABLED && state.indicators.ifvg)
       || (OB_ENABLED && state.indicators.ob)
+      || (CRT_ENABLED && state.indicators.crt)
       || ((SR_ENABLED || INDICATORS_ENABLED) && state.indicators.sr)
       || ((QM_ENABLED || INDICATORS_ENABLED) && state.indicators.qm)
       || ((OCL_ENABLED || INDICATORS_ENABLED) && state.indicators.ocl)
@@ -991,12 +1026,13 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (lvl.category === "ifvg") badgeClass = "badge-ifvg";
       else if (lvl.category === "ob") badgeClass = (lvl.type || "").includes("BREAKER") ? "badge-breaker" : "badge-ob";
       else if (lvl.category === "ts") badgeClass = "badge-ts";
+      else if (lvl.category === "crt") badgeClass = "badge-crt";
       else if (lvl.category === "apex") badgeClass = "badge-apex";
       else if (lvl.type.includes("RESISTANCE")) badgeClass = "badge-resistance";
 
       let statusClass = "tag-fresh";
-      if (lvl.state === "UNFRESH") statusClass = "tag-unfresh";
-      else if (lvl.state === "BROKEN") statusClass = "tag-broken";
+      if (lvl.state === "UNFRESH" || lvl.state === "DISTRIBUTED") statusClass = "tag-unfresh";
+      else if (lvl.state === "BROKEN" || lvl.state === "INVALIDATED") statusClass = "tag-broken";
 
       const distPts = Math.abs(lvl.price - state.currentPrice).toFixed(1);
 
@@ -1201,6 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mode === "fvg" && !FVG_ENABLED && !IFVG_ENABLED) return;
       if (mode === "ifvg" && !IFVG_ENABLED) return;
       if (mode === "ob" && !OB_ENABLED) return;
+      if (mode === "crt" && !CRT_ENABLED) return;
       modePills.forEach(p => p.classList.remove("active"));
       pill.classList.add("active");
       state.inspectMode = mode;
@@ -1214,6 +1251,7 @@ document.addEventListener("DOMContentLoaded", () => {
         fvg:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: true, ifvg: false, ob: false },
         ifvg:     { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: true, ob: false },
         ob:       { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: true },
+        crt:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false, crt: true },
         sr:       { sr: true, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
         qm:       { sr: false, ocl: false, qm: true, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
         ocl:      { sr: false, ocl: true, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
@@ -1231,6 +1269,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ob: OB_ENABLED,
           tl: TL_ENABLED,
           liq: LIQ_ENABLED,
+          crt: CRT_ENABLED,
         },
       };
       const next = MODES[mode];
@@ -1248,6 +1287,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (toggleOB) toggleOB.checked = next.ob;
       if (toggleTL) toggleTL.checked = next.tl;
       if (toggleLIQ) toggleLIQ.checked = !!next.liq;
+      if (toggleCRT) toggleCRT.checked = !!next.crt;
       if (mode === "apex") btnLine.click();
 
       refreshData();
@@ -1335,6 +1375,13 @@ document.addEventListener("DOMContentLoaded", () => {
     toggleLIQ.addEventListener("change", (e) => {
       if (!LIQ_ENABLED) { e.target.checked = false; return; }
       state.indicators.liq = e.target.checked;
+      refreshData();
+    });
+  }
+  if (toggleCRT) {
+    toggleCRT.addEventListener("change", (e) => {
+      if (!CRT_ENABLED) { e.target.checked = false; return; }
+      state.indicators.crt = e.target.checked;
       refreshData();
     });
   }
