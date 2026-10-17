@@ -28,6 +28,18 @@ Sweep (unchanged): the first bar after the break whose wick crosses the IDM
 and whose body closes back inside. A body close through is a break, not a
 sweep — the IDM is invalidated (``broken``). Swept IDMs render faded; broken
 ones render as thin gray "history" like the other detectors.
+
+Two families
+------------
+The detector emits inducement from two independent sources, both tagged on
+``IDMLevel.rule`` so the chart can tell them apart:
+
+* ``"bos"`` — the BOS-anchored pullback described above (unchanged).
+* ``"two_candle"`` — the Luap "True SMC" valid-pullback rule (Part 1 + Part 3),
+  implemented by :class:`LuapIDMDetector`. A pullback only counts once a candle
+  takes the liquidity (wick *or* body) of the candle that ended the impulse —
+  i.e. the low/high of the previous Highest-High / Lowest-Low candle. It is
+  added *alongside* the BOS family, not in place of it.
 """
 
 from __future__ import annotations
@@ -53,7 +65,7 @@ class IDMDirection(Enum):
 
 @dataclass
 class IDMLevel:
-    """A single BOS-anchored Inducement level."""
+    """A single Inducement level (BOS-anchored or two-candle pullback)."""
 
     idm_type: IDMType
     direction: IDMDirection
@@ -67,6 +79,8 @@ class IDMLevel:
     bos_price: Optional[float] = None       # structural level that broke
     bos_break_index: Optional[int] = None   # iloc of the break bar
     bos_kind: str = ""                      # BOS / CHoCH / I-BOS / I-CHOCH
+    rule: str = "bos"                       # "bos" | "two_candle"
+    confirm_index: Optional[int] = None     # two-candle: bar that made the new HH/LL
     forming_candle_indices: List[int] = field(default_factory=list)
 
     def __repr__(self) -> str:
@@ -76,9 +90,10 @@ class IDMLevel:
             state = f"broken@{self.broken_index}"
         else:
             state = "active"
+        origin = self.bos_kind or ("2-candle" if self.rule == "two_candle" else "BOS")
         return (
             f"IDMLevel({self.idm_type.value} @ {self.price:.5f} "
-            f"[idx={self.formation_index}] {self.bos_kind or 'BOS'} {state})"
+            f"[idx={self.formation_index}] {origin} {state})"
         )
 
 
@@ -104,12 +119,16 @@ class IDMDetector:
         Keep at most this many IDMs per direction (newest, unswept first).
     atr_period : int
         ATR lookback for the BOS tolerance band. Default 14.
+    two_candle_rule : bool
+        Also emit Luap "True SMC" valid-pullback IDMs (``rule="two_candle"``)
+        alongside the BOS-anchored ones. Default True.
     """
 
     def __init__(self, df: pd.DataFrame, swing_length: int = 2,
                  bos_swing_length: int = 25, bos_internal_length: int = 3,
                  show_internal: bool = True, swing_tol_atr: float = 0.05,
-                 max_per_side: int = 3, atr_period: int = 14):
+                 max_per_side: int = 3, atr_period: int = 14,
+                 two_candle_rule: bool = True):
         self._validate(df)
         self.df = df.copy()
         self.swing_length = max(1, int(swing_length))
@@ -119,6 +138,7 @@ class IDMDetector:
         self.swing_tol_atr = swing_tol_atr
         self.max_per_side = max(1, int(max_per_side))
         self.atr_period = atr_period
+        self.two_candle_rule = bool(two_candle_rule)
         self._levels: List[IDMLevel] = []
 
     def detect_all(self) -> List[IDMLevel]:
@@ -147,7 +167,18 @@ class IDMDetector:
             else:
                 self._anchor_bearish(bo, pivot_highs, h, o, c)
 
-        self._cap()
+        _cap_per_side(self._levels, self.max_per_side)
+
+        if self.two_candle_rule:
+            # Add the Luap two-candle family, but don't repeat a pullback the
+            # BOS family already marked (same type + same pullback bar).
+            bos_keys = {(lv.idm_type, lv.formation_index) for lv in self._levels}
+            for lv in LuapIDMDetector(
+                    self.df, max_per_side=self.max_per_side).detect_all():
+                if (lv.idm_type, lv.formation_index) in bos_keys:
+                    continue
+                self._levels.append(lv)
+
         self._levels.sort(key=lambda lv: lv.formation_index)
         return self._levels
 
@@ -255,17 +286,6 @@ class IDMDetector:
             + [x for x in (sweep, broken) if x is not None],
         ))
 
-    def _cap(self) -> None:
-        """Keep the newest ``max_per_side`` per direction, still-live first."""
-        for d in (IDMDirection.BULLISH, IDMDirection.BEARISH):
-            group = [lv for lv in self._levels if lv.direction == d]
-            if len(group) <= self.max_per_side:
-                continue
-            group.sort(key=lambda lv:
-                       (lv.swept or lv.broken, -lv.formation_index))
-            drop = {id(lv) for lv in group[self.max_per_side:]}
-            self._levels = [lv for lv in self._levels if id(lv) not in drop]
-
     @property
     def levels(self) -> List[IDMLevel]:
         return self._levels
@@ -280,3 +300,169 @@ class IDMDetector:
             raise ValueError("DataFrame index must be a DatetimeIndex.")
         if df.empty:
             raise ValueError("DataFrame is empty.")
+
+
+def _cap_per_side(levels: List[IDMLevel], max_per_side: int) -> None:
+    """Keep the newest ``max_per_side`` levels per direction (in place).
+
+    Live levels (not swept and not broken) are kept first; among equals the
+    newest (highest ``formation_index``) wins.
+    """
+    for d in (IDMDirection.BULLISH, IDMDirection.BEARISH):
+        group = [lv for lv in levels if lv.direction == d]
+        if len(group) <= max_per_side:
+            continue
+        group.sort(key=lambda lv: (lv.swept or lv.broken, -lv.formation_index))
+        drop = {id(lv) for lv in group[max_per_side:]}
+        levels[:] = [lv for lv in levels if id(lv) not in drop]
+
+
+class LuapIDMDetector:
+    """
+    Luap "True SMC" valid-pullback inducement (Part 1 + Part 3).
+
+    A pullback is only *valid* once a candle takes the liquidity of the candle
+    that ended the impulse — the low (bullish) / high (bearish) of the
+    **Target Candle**, i.e. the candle that made the current Highest High
+    (bullish) / Lowest Low (bearish). The take counts on a wick *or* a body,
+    colour irrelevant. A pullback that never takes that liquidity is not a
+    structure point, so it is not inducement.
+
+    The extreme of the most recent valid pullback becomes the **IDM**. When
+    price makes a *new* extreme without taking the IDM, the IDM **shifts** to
+    the newer pullback (the older unswept one is dropped). Inside bars are
+    non-events and ignored (Part 1 rule 3).
+
+    Resolution (Part 8, "IDM Sweep Entry Module"): a candle that **wicks**
+    through the IDM and **closes back inside** is a *sweep* (``swept``); a
+    candle whose **body closes through** the level is not a sweep — it cancels
+    the setup (``broken``), rendered as thin gray history like the other
+    detectors.
+
+    This is a state machine — one running Target Candle per leg — so it stays
+    clean instead of labelling a pullback around every bar.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        OHLCV dataframe with a DatetimeIndex.
+    max_per_side : int
+        Keep at most this many levels per direction (newest, live first).
+    ignore_inside_bars : bool
+        Skip candles fully inside the previous candle. Default True.
+    """
+
+    def __init__(self, df: pd.DataFrame, max_per_side: int = 3,
+                 ignore_inside_bars: bool = True):
+        IDMDetector._validate(df)
+        self.df = df.copy()
+        self.max_per_side = max(1, int(max_per_side))
+        self.ignore_inside_bars = bool(ignore_inside_bars)
+        self._levels: List[IDMLevel] = []
+
+    def detect_all(self) -> List[IDMLevel]:
+        self._levels = []
+        h = self.df["high"].values
+        l = self.df["low"].values
+        o = self.df["open"].values
+        c = self.df["close"].values
+
+        self._scan(h, l, o, c, bullish=True)
+        self._scan(h, l, o, c, bullish=False)
+
+        # Drop any duplicate (same price + same pullback bar) from shifting.
+        seen = set()
+        unique: List[IDMLevel] = []
+        for lv in self._levels:
+            key = (lv.idm_type, lv.price, lv.formation_index)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(lv)
+        self._levels = unique
+
+        _cap_per_side(self._levels, self.max_per_side)
+        self._levels.sort(key=lambda lv: lv.formation_index)
+        return self._levels
+
+    def _scan(self, h, l, o, c, bullish: bool) -> None:
+        n = len(h)
+        if n < 3:
+            return
+        idm_type = IDMType.IDM_LOW if bullish else IDMType.IDM_HIGH
+        direction = IDMDirection.BULLISH if bullish else IDMDirection.BEARISH
+
+        t_high = float(h[0])          # Target Candle = current HH
+        t_low = float(l[0])
+        pb_price = None               # running extreme of the valid pullback
+        pb_idx = None
+        active = None                 # confirmed IDM awaiting a take
+
+        for i in range(1, n):
+            if (self.ignore_inside_bars
+                    and h[i] <= h[i - 1] and l[i] >= l[i - 1]):
+                continue
+
+            # 1) Has the live IDM been resolved? (Part 8)
+            #    wick through + body back inside -> sweep; body through -> break.
+            if active is not None:
+                if bullish:
+                    if l[i] < active["price"]:
+                        if min(o[i], c[i]) > active["price"]:
+                            self._emit(idm_type, direction, active, i, None)
+                        else:
+                            self._emit(idm_type, direction, active, None, i)
+                        active = None
+                else:
+                    if h[i] > active["price"]:
+                        if max(o[i], c[i]) < active["price"]:
+                            self._emit(idm_type, direction, active, i, None)
+                        else:
+                            self._emit(idm_type, direction, active, None, i)
+                        active = None
+
+            new_extreme = (h[i] > t_high) if bullish else (l[i] < t_low)
+            broke = (l[i] < t_low) if bullish else (h[i] > t_high)
+
+            if new_extreme:
+                # Impulse resumed: the completed pullback's extreme is the IDM.
+                # A newer pullback *shifts* the IDM (older unswept one drops).
+                if pb_price is not None:
+                    active = {"price": pb_price, "index": pb_idx, "confirm": i}
+                t_high, t_low = float(h[i]), float(l[i])
+                pb_price, pb_idx = None, None
+                continue
+
+            if broke:
+                # Valid pullback confirmed: track its extreme.
+                if bullish:
+                    if pb_price is None or l[i] < pb_price:
+                        pb_price, pb_idx = float(l[i]), i
+                else:
+                    if pb_price is None or h[i] > pb_price:
+                        pb_price, pb_idx = float(h[i]), i
+
+        # The live (unswept, unbroken) IDM, if the leg ran out of data.
+        if active is not None:
+            self._emit(idm_type, direction, active, None, None)
+
+    def _emit(self, idm_type: IDMType, direction: IDMDirection,
+              active: dict, sweep: Optional[int],
+              broken: Optional[int]) -> None:
+        idx = active["index"]
+        self._levels.append(IDMLevel(
+            idm_type=idm_type,
+            direction=direction,
+            price=float(active["price"]),
+            formation_index=idx,
+            candle_time=self.df.index[idx],
+            swept=sweep is not None,
+            sweep_index=sweep,
+            broken=broken is not None,
+            broken_index=broken,
+            rule="two_candle",
+            confirm_index=active.get("confirm"),
+            forming_candle_indices=[x for x in
+                                    (idx, active.get("confirm"), sweep, broken)
+                                    if x is not None],
+        ))

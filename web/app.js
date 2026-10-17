@@ -627,7 +627,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return "OCL";
       }
       if (lvl.category === "qm") return "QM";
-      if (lvl.category === "idm") return "IDM";
+      if (lvl.category === "idm") return lvl.rule === "two_candle" ? "IDM·2C" : "IDM";
       if (lvl.category === "liquidity") return (lvl.type || "").includes("HIGH") ? "EQH" : "EQL";
       if (lvl.category === "bos") return (lvl.type || "").split(" ")[0] || "BOS";
       if (lvl.category === "fvg") return "FVG";
@@ -847,7 +847,9 @@ document.addEventListener("DOMContentLoaded", () => {
         lineStyle = LightweightCharts.LineStyle.Solid;
         lineWidth = 1;
       } else if (lvl.category === "idm") {
-        color = "#ffd600";
+        // Two-candle (Luap valid-pullback) IDMs sit in amber; BOS-anchored
+        // ones stay yellow, so both families are readable together.
+        color = lvl.rule === "two_candle" ? "#ffab40" : "#ffd600";
         lineStyle = LightweightCharts.LineStyle.Solid;
         lineWidth = 1;
       } else if (lvl.category === "bos") {
@@ -915,7 +917,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const plainCls = lvl.category === "ts"
           ? ("tag-plain " + ((lvl.type || "").includes("HIGH") ? "ts-high" : "ts-low"))
           : lvl.category === "idm"
-            ? "tag-plain idm"
+            ? ("tag-plain " + (lvl.rule === "two_candle" ? "idm-2c" : "idm"))
             : lvl.category === "liquidity"
               ? ("tag-plain " + ((lvl.type || "").includes("HIGH") ? "liq-eqh" : "liq-eql"))
               : lvl.category === "bos"
@@ -965,7 +967,7 @@ document.addEventListener("DOMContentLoaded", () => {
       let badgeClass = "badge-support";
       if (lvl.category === "ocl") badgeClass = "badge-ocl";
       else if (lvl.category === "qm") badgeClass = "badge-qm";
-      else if (lvl.category === "idm") badgeClass = "badge-idm";
+      else if (lvl.category === "idm") badgeClass = lvl.rule === "two_candle" ? "badge-idm-2c" : "badge-idm";
       else if (lvl.category === "liquidity") badgeClass = "badge-liq";
       else if (lvl.category === "bos") badgeClass = "badge-bos";
       else if (lvl.category === "fvg") badgeClass = "badge-fvg";

@@ -33,6 +33,7 @@ from config.settings import (
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
     TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
     IDM_SWING_LENGTH, IDM_SHOW_INTERNAL, IDM_MAX_PER_SIDE, IDM_ATR_PERIOD,
+    IDM_TWO_CANDLE_RULE,
     LIQ_ENABLED, LIQ_SWING_LENGTH, LIQ_EQ_TOL_ATR, LIQ_EQ_MAX_BARS,
     LIQ_MIN_TOUCHES, LIQ_MAX_PER_SIDE,
 )
@@ -323,10 +324,11 @@ def get_indicators(
                     "desc": f"TS: {ts.ts_type.value.upper()} {ts.direction.value.upper()}"
                 })
 
-        # 6. IDM (inducement): the internal pullback inside a BOS impulse leg,
-        # anchored on structure (not every bar, as before). One IDM per break,
-        # deduped and capped per direction. Swept ones draw formation -> sweep;
-        # active ones a short ray.
+        # 6. IDM (inducement): two families, tagged by `rule`. (a) BOS-anchored:
+        # the internal pullback inside a BOS impulse leg. (b) Two-candle (Luap
+        # "True SMC" valid pullback): a candle takes the liquidity of the candle
+        # that ended the impulse. Deduped and capped per direction. Swept ones
+        # draw formation -> sweep; broken ones stay gray history.
         idm_levels = IDMDetector(
             df,
             swing_length=IDM_SWING_LENGTH,
@@ -336,6 +338,7 @@ def get_indicators(
             swing_tol_atr=BOS_SWING_TOL_ATR,
             max_per_side=IDM_MAX_PER_SIDE,
             atr_period=IDM_ATR_PERIOD,
+            two_candle_rule=IDM_TWO_CANDLE_RULE,
         ).detect_all() if idm_on else []
         if idm_on:
             for im in idm_levels:
@@ -348,9 +351,16 @@ def get_indicators(
                     end_idx, end_kind = None, "active"
                 state = ("SWEPT" if im.swept
                          else "BROKEN" if im.broken else "FRESH")
+                if im.rule == "two_candle":
+                    label = f"{im.idm_type.value.upper()} ({im.direction.value.upper()} 2C)"
+                    origin = "valid pullback (2-candle rule)"
+                else:
+                    label = f"{im.idm_type.value.upper()} ({im.direction.value.upper()})"
+                    origin = f"{im.bos_kind or 'BOS'} break"
                 levels_data.append({
                     "category": "idm",
-                    "type": f"{im.idm_type.value.upper()} ({im.direction.value.upper()})",
+                    "type": label,
+                    "rule": im.rule,
                     "price": round(im.price, 3),
                     "state": state,
                     "time": int(times_unix[t_idx]),
@@ -358,7 +368,7 @@ def get_indicators(
                     "end_kind": end_kind,
                     "desc": (
                         f"IDM: {im.idm_type.value.upper()} {im.direction.value.upper()}"
-                        f" after {im.bos_kind or 'BOS'}"
+                        f" after {origin}"
                     )
                 })
 

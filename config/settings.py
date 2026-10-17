@@ -129,6 +129,10 @@ IDM_SWING_LENGTH = 2
 IDM_SHOW_INTERNAL = True
 IDM_MAX_PER_SIDE = 3
 IDM_ATR_PERIOD = 14
+# Luap "True SMC" valid-pullback rule (Part 1 + Part 3): a pullback only counts
+# once a candle takes the liquidity of the candle that ended the impulse. Emits
+# a second IDM family (rule="two_candle") alongside the BOS-anchored one.
+IDM_TWO_CANDLE_RULE = True
 
 # Liquidity pools (SMC) — enabled. Equal highs (buy-side) / equal lows
 # (sell-side) stop clusters. Pools need >= LIQ_MIN_TOUCHES touches within

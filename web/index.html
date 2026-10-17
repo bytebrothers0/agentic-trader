@@ -18,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=12" />
+  <link rel="stylesheet" href="/static/style.css?v=13" />
 </head>
 <body class="dark-theme">
   
@@ -141,7 +141,7 @@
         </div>
         <div class="tag-legend" title="Shorthand tags used on chart lines">
           S/R support/resistance · SBR/RBS role-flip · OCL sOCL/rOCL/1LAP/LS · QM · APX/IAB apex ·
-          IDM inducement · EQH/EQL liquidity · MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
+          IDM inducement · IDM·2C two-candle pullback · EQH/EQL liquidity · MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
         </div>
       </div>
 
@@ -181,7 +181,7 @@
             </label>
             <span class="color-indicator sr-color"></span>
           </div>
-          <p class="card-desc">Internal pullback inside a BOS impulse leg (structure-anchored). One per break, newest per side; swept IDMs fade.</p>
+          <p class="card-desc">Internal pullback inside a BOS impulse leg, plus the Luap two-candle valid-pullback rule (IDM·2C). One per leg, newest per side; swept IDMs fade.</p>
         </div>
 
         <!-- 0b2. Liquidity Pools (EQH/EQL) Card — NEW -->
@@ -327,6 +327,7 @@
           <div class="legend-item"><span class="dot color-apex-sup"></span> Apex Sup (Emerald)</div>
           <div class="legend-item"><span class="dot color-apex-res"></span> Apex Res (Crimson)</div>
           <div class="legend-item"><span class="dot color-idm"></span> IDM (Gold)</div>
+          <div class="legend-item"><span class="dot color-idm-2c"></span> IDM·2C (Amber)</div>
           <div class="legend-item"><span class="dot color-bos"></span> BOS (Blue)</div>
           <div class="legend-item"><span class="dot color-fvg-bull"></span> FVG+ (Teal)</div>
           <div class="legend-item"><span class="dot color-fvg-bear"></span> FVG- (Red)</div>
@@ -448,6 +449,6 @@
     </div>
   </aside>
 
-  <script src="/static/app.js?v=19"></script>
+  <script src="/static/app.js?v=20"></script>
 </body>
 </html>
