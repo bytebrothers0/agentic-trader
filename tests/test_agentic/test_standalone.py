@@ -46,6 +46,10 @@ PURE_MODULES = (
     "subscriptions.py",
     "watchdog.py",
     "lookup.py",
+    "_time.py",
+    "prompts.py",
+    "tools.py",
+    "agent_loop.py",
     "__init__.py",
 )
 #: The single sanctioned bridge. It may reach into the system, but only lazily.

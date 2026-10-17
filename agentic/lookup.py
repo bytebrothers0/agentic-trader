@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from agentic._time import as_aware
 from agentic.feed import FeedSnapshot, LevelRecord
 from agentic.models import LevelStatus, Serde
 
@@ -142,6 +143,7 @@ def level_view(
     string (parsed back to a datetime on :meth:`Serde.from_dict`).
     """
     points, atr_distance = _distances(level.price, current_price, atr)
+    formed_at = as_aware(level.formed_at)
     return {
         "level_key": level.level_key,
         "tag": tag,
@@ -151,7 +153,7 @@ def level_view(
         "price": float(level.price),
         "price_low": level.band_low,
         "price_high": level.band_high,
-        "created_at": level.formed_at.isoformat() if level.formed_at else None,
+        "created_at": formed_at.isoformat() if formed_at else None,
         "status": status_value(level),
         "origin": origin,
         "note": level.origin,

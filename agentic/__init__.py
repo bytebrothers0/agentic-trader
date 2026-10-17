@@ -12,16 +12,19 @@ Phase 2 (part B): ``watchdog.py``, the LLM-free loop that drives the evaluator,
 retires what fired and coalesces a burst of events into one turn.
 Phase 3: ``lookup.py``, the numeric ground truth for anything the agent saw, and
 ``renderer.py``, the deterministic server-side PNG render plus its tag manifest.
+Phase 4: ``tools.py`` (the tool surface, no order tool), ``prompts.py`` (the
+system prompt and the per-turn briefing) and ``agent_loop.py`` (one turn: briefing
+-> render -> LLM -> tools -> persist), with a zero-spend ``ScriptedAgent`` mock.
 
 The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
-``subscriptions``, ``watchdog``, ``lookup`` — imports nothing from the running
-system. ``feed`` is the single sanctioned bridge, and it reaches the indicator
-layer only lazily, so importing this package stays cheap. ``renderer`` is the one
-module that needs the vision stack, and it imports ``matplotlib``/``PIL`` inside
-its functions so the package import stays cheap too. Nothing here places an order
-(``mode=propose`` throughout), and nothing caches detector output in the store:
-levels are recomputed on every read. The agent loop, the panel and the LLM remain
-later phases.
+``subscriptions``, ``watchdog``, ``lookup``, ``tools``, ``prompts``,
+``agent_loop`` — imports nothing from the running system. ``feed`` is the single
+sanctioned bridge, and it reaches the indicator layer only lazily, so importing
+this package stays cheap. ``renderer`` is the one module that needs the vision
+stack, and it imports ``matplotlib``/``PIL`` inside its functions so the package
+import stays cheap too. Nothing here places an order (``mode=propose``
+throughout), and nothing caches detector output in the store: levels are
+recomputed on every read. The panel and the real vision model remain later phases.
 """
 from __future__ import annotations
 
@@ -90,6 +93,29 @@ from agentic.watchdog import (
     TurnRequest,
     Watchdog,
     bar_seconds,
+)
+from agentic.prompts import (
+    SYSTEM_PROMPT,
+    build_briefing,
+    build_system_prompt,
+    subscription_summary,
+)
+from agentic.tools import (
+    TOOL_NAMES,
+    TOOL_SCHEMAS,
+    ToolCall,
+    ToolRegistry,
+    ToolResult,
+    render_current,
+)
+from agentic.agent_loop import (
+    MAX_TOOL_ROUNDS,
+    AgentClient,
+    AgentLoop,
+    AgentReply,
+    AgentRequest,
+    ScriptedAgent,
+    TurnOutcome,
 )
 
 __all__ = [
@@ -160,4 +186,22 @@ __all__ = [
     "spec_for",
     "status_of",
     "validate",
+    # phase 4
+    "AgentClient",
+    "AgentLoop",
+    "AgentReply",
+    "AgentRequest",
+    "MAX_TOOL_ROUNDS",
+    "SYSTEM_PROMPT",
+    "ScriptedAgent",
+    "TOOL_NAMES",
+    "TOOL_SCHEMAS",
+    "ToolCall",
+    "ToolRegistry",
+    "ToolResult",
+    "TurnOutcome",
+    "build_briefing",
+    "build_system_prompt",
+    "render_current",
+    "subscription_summary",
 ]

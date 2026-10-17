@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+from agentic._time import as_aware
 from agentic.feed import Bars, FeedSnapshot, LevelRecord
 from agentic.lookup import level_view
 from agentic.models import Serde
@@ -198,16 +199,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _as_aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-
-
 def _iso_z(value: Any) -> Optional[str]:
     """ISO-8601 UTC with a ``Z`` suffix, from unix seconds or a datetime."""
     if value is None:
         return None
     if isinstance(value, datetime):
-        dt = _as_aware(value)
+        dt = as_aware(value)
     else:
         dt = datetime.fromtimestamp(int(value), tz=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

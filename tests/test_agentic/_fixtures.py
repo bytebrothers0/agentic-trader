@@ -6,11 +6,13 @@ build the same shapes without duplicating them.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from agentic.feed import parse_candles, parse_payload
+from agentic.feed import Feed, parse_candles, parse_payload
 from agentic.models import Subscription, SubscriptionKind, SubscriptionState
+from agentic.renderer import RenderResult
 
 UTC = timezone.utc
 
@@ -124,6 +126,113 @@ def sub(condition, params=None, *, kind="watch", one_shot=True, sub_id="sub_1"):
         one_shot=one_shot,
         state=SubscriptionState.ARMED,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Feed stub (phase 4: the agent loop)
+# --------------------------------------------------------------------------- #
+
+class FeedStub:
+    """A :class:`Feed` whose ``(symbol, timeframe)`` payloads a test can rewrite.
+
+    Records every ``snapshot``/``bars`` fetch so a test can prove the loop and the
+    tool registry re-used a ``(symbol, timeframe)`` or not. Levels and candles
+    default to empty, which renders a sane empty scene.
+    """
+
+    def __init__(self, *, symbol="XAUUSDm", price=100.0, atr=5.0):
+        self.symbol = symbol
+        self.price = price
+        self.atr = atr
+        self.levels = {}
+        self.candles = {}
+        self.snapshot_calls = []
+        self.bars_calls = []
+
+    def set_levels(self, levels, timeframe="M15"):
+        self.levels[timeframe] = list(levels)
+        return self
+
+    def set_candles(self, rows, timeframe="M15"):
+        self.candles[timeframe] = list(rows)
+        return self
+
+    def build(self) -> Feed:
+        def provider(*, symbol, timeframe, families=None, bars=300, **kwargs):
+            self.snapshot_calls.append((symbol, timeframe))
+            return snapshot_payload(
+                self.levels.get(timeframe, []),
+                symbol=symbol,
+                timeframe=timeframe,
+                price=self.price,
+                atr=self.atr,
+            )
+
+        def candles_provider(*, symbol, timeframe, bars=300, **kwargs):
+            self.bars_calls.append((symbol, timeframe))
+            return candles_payload(
+                self.candles.get(timeframe, []), symbol=symbol, timeframe=timeframe
+            )
+
+        return Feed(provider=provider, candles_provider=candles_provider)
+
+
+def bars_rows(count=40, *, start=None, price=100.0, step_s=900):
+    """``(time, open, high, low, close)`` rows for a deterministic little series."""
+    start = ts(day(16, 12)) if start is None else start
+    rows = []
+    current = float(price)
+    for i in range(count):
+        o = current
+        c = current + (1.0 if i % 2 else -0.5)
+        h = max(o, c) + 0.5
+        low = min(o, c) - 0.5
+        rows.append((start + i * step_s, o, h, low, c))
+        current = c
+    return rows
+
+
+class FakeRenderer:
+    """A renderer-shaped stub: records calls, writes a marker file, no manifest.
+
+    Deliberately *does not* synthesise a manifest. An earlier version re-implemented
+    the tag initials and the ``*`` pinned suffix, which made a "the manifest marks
+    the pin" test circular — it asserted the stub, not the real renderer. The real
+    :class:`~agentic.renderer.Renderer` is exercised by ``test_renderer`` and by the
+    ``test_agent_loop`` tests that need real tags; this stub only proves the loop and
+    the registry *call* the renderer, count renders and thread its result. Rendering
+    a PNG costs seconds on CI, so the loop's mechanics run here in milliseconds.
+    """
+
+    def __init__(self, *, out_dir, clock=None, width=64, height=48):
+        self.out_dir = str(out_dir)
+        self.clock = clock
+        self.width = width
+        self.height = height
+        self.calls = []
+
+    def render(self, snapshot, bars, *, pins=(), thesis_level_keys=(), out_dir=None):
+        self.calls.append(
+            {
+                "snapshot": snapshot,
+                "bars": bars,
+                "pins": list(pins),
+                "thesis_level_keys": list(thesis_level_keys),
+            }
+        )
+        target = str(out_dir or self.out_dir)
+        os.makedirs(target, exist_ok=True)
+        render_id = f"r_{len(self.calls):08d}"
+        path = os.path.join(target, f"{render_id}.png")
+        with open(path, "wb") as handle:
+            handle.write(b"fake-png")
+        return RenderResult(
+            render_id=render_id,
+            image_path=path,
+            width=self.width,
+            height=self.height,
+            manifest={},
+        )
 
 
 # --------------------------------------------------------------------------- #
