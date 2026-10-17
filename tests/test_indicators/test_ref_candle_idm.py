@@ -55,14 +55,52 @@ def _mirror(rows, base=200.0):
     return [(base - c, base - l, base - h, base - o) for o, h, l, c in rows]
 
 
-def test_upside_structure_marks_range_lows_only():
+def test_idm_side_follows_the_leg_it_belongs_to():
     lv = _ref(_df(BULL))
     assert {x.rule for x in lv} == {"ref_candle"}
-    # upside structure -> only range-low IDMs, never range-high ones
-    assert all(x.idm_type == IDMType.IDM_LOW for x in lv)
-    assert all(x.direction == IDMDirection.BULLISH for x in lv)
-    got = {(x.price, x.formation_index) for x in lv}
-    assert got == {(101.5, 8), (103.0, 13), (102.0, 18)}
+    lows = {(x.price, x.formation_index) for x in lv
+            if x.idm_type == IDMType.IDM_LOW}
+    highs = {(x.price, x.formation_index) for x in lv
+             if x.idm_type == IDMType.IDM_HIGH}
+    # Range lows for the up-breaks, plus the range high that fed the closing
+    # down-break (bar 18) — each IDM belongs to the break it precipitates.
+    assert lows == {(94.0, 2), (101.5, 8), (103.0, 13)}
+    assert highs == {(110.0, 16)}
+    assert all(x.direction == IDMDirection.BULLISH for x in lv
+               if x.idm_type == IDMType.IDM_LOW)
+    assert all(x.direction == IDMDirection.BEARISH for x in lv
+               if x.idm_type == IDMType.IDM_HIGH)
+
+
+def test_pullback_preceding_a_choch_is_detected():
+    """The gate reads the structure at the continuation, not at candle 1.
+
+    Candle 1 lies *before* its break, so gating on candle 1's bar misses every
+    pullback that precipitates a reversal (and the first break in view). Here the
+    down-leg rallies, pulls back, then breaks up — the pullback low (108 @11) is
+    the IDM, even though the structure was still bearish at candle 1 (bar 8).
+    """
+    rows = [
+        (120.0, 121.0, 119.0, 120.5),   # 0
+        (120.5, 121.0, 118.0, 118.5),   # 1
+        (118.5, 119.0, 116.0, 116.5),   # 2
+        (116.5, 117.0, 114.0, 114.5),   # 3
+        (114.5, 115.0, 112.0, 112.5),   # 4
+        (112.5, 113.0, 110.0, 110.5),   # 5
+        (110.5, 111.0, 108.0, 108.5),   # 6  down-leg low
+        (108.5, 112.0, 108.0, 111.5),   # 7  rally
+        (111.5, 116.0, 111.0, 115.5),   # 8  candle 1 (h116 / l111)
+        (115.5, 116.0, 113.0, 113.5),   # 9
+        (113.5, 114.0, 110.0, 110.5),   # 10 takes 111 -> pullback
+        (110.5, 111.0, 108.0, 108.5),   # 11 pullback low 108 -> IDM
+        (108.5, 113.0, 108.0, 112.5),   # 12
+        (112.5, 118.0, 112.0, 117.5),   # 13 takes 116 -> CHoCH up
+    ]
+    lv = _ref(_df(rows))
+    hit = next(x for x in lv if x.formation_index == 11)
+    assert hit.idm_type == IDMType.IDM_LOW
+    assert hit.price == 108.0
+    assert hit.confirm_index == 8          # candle 1
 
 
 def test_downside_structure_marks_range_highs_only():
@@ -91,14 +129,14 @@ def test_body_close_through_is_broken_not_swept():
 
 
 def test_candle_1_need_not_be_a_swing_point():
-    # The 102.0 @18 IDM comes from candle 1 @13, which is NOT a fractal pivot.
+    # The 103.0 @13 IDM comes from candle 1 @10, which is NOT a fractal pivot.
     df = _df(BULL)
     lv = _ref(df)
-    last = next(x for x in lv if x.formation_index == 18)
-    assert last.confirm_index == 13
+    mid = next(x for x in lv if x.formation_index == 13)
+    assert mid.confirm_index == 10
     pivots = {p.index for p in find_pivots(df["high"].values,
-                                           df["low"].values, 2) if p.is_low}
-    assert 13 not in pivots
+                                           df["low"].values, 2)}
+    assert 10 not in pivots
 
 
 def test_continuation_is_required():
@@ -111,8 +149,8 @@ def test_continuation_is_required():
     ]
     lv = _ref(_df(rows))
     assert all(x.confirm_index != 11 for x in lv)
-    # only the earlier, fully-formed pullback survives
-    assert {(x.price, x.formation_index) for x in lv} == {(101.5, 8)}
+    # only the earlier, fully-formed pullbacks survive
+    assert {(x.price, x.formation_index) for x in lv} == {(94.0, 2), (101.5, 8)}
 
 
 def test_no_structure_break_means_no_idm():

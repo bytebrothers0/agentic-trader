@@ -515,16 +515,18 @@ class RefCandleIDMDetector:
     Luap reference-candle ("candle 1") inducement, structure-gated.
 
     Every candle can be the reference candle ("candle 1"): its high/low define a
-    range. In an **upside** structure (the last BOS / I-BOS / CHoCH / I-CHOCH
-    broke up) a later candle taking candle 1's LOW arms the pullback, and a later
-    candle then taking candle 1's HIGH completes it — the **lowest low** of that
-    pullback series is the IDM. In a **downside** structure the mirror holds:
-    candle 1's HIGH is taken, then its LOW, and the **highest high** of the
-    pullback series is the IDM.
+    range. In an **upside** structure a later candle taking candle 1's LOW arms
+    the pullback, and a later candle taking candle 1's HIGH completes it — the
+    **lowest low** of that pullback series is the IDM. In a **downside**
+    structure the mirror holds: candle 1's HIGH is taken, then its LOW, and the
+    **highest high** of the pullback series is the IDM.
 
-    The structure gate ties every IDM to the leg it belongs to: range lows are
-    only inducement while the structure is up, range highs only while it is down
-    — so this "follows the leg or trend" instead of labelling every wick.
+    The gate is the direction of the leg the pullback belongs to, read at the
+    **continuation** bar — the break the IDM precipitates. That matters: candle 1
+    lies *before* its break, so reading the structure there would miss every
+    pullback that precedes a break (i.e. every CHoCH / reversal, and the first
+    break in view). Reading it at the continuation ties each IDM to the break it
+    fed, which is what "follows the leg or trend" means.
 
     Candle 1 need not be a swing point, so this catches the smaller intra-leg
     pullbacks the two-candle family skips. Out: `swept` (wick through, body back
@@ -581,41 +583,38 @@ class RefCandleIDMDetector:
 
         # key -> the best resolution seen for that exact IDM
         best: dict = {}
-        for i in range(n):
-            d = dirs[i]
-            if d is None:
-                continue
-            bullish = (d == BOSDirection.BULLISH)
-            hi, lo = float(h[i]), float(l[i])
-            end = min(n, i + 1 + self.max_bars)
 
-            if bullish:
-                j = next((m for m in range(i + 1, end) if l[m] < lo), None)
-                if j is None:
-                    continue
-                k = next((m for m in range(j, end) if h[m] > hi), None)
-                if k is None:
-                    continue
-                window = l[j:k + 1]
-                idx = j + int(window.argmin())
-                price = float(l[idx])
-                sweep, broken = IDMDetector._resolve_low(price, k, l, o, c)
-            else:
-                j = next((m for m in range(i + 1, end) if h[m] > hi), None)
-                if j is None:
-                    continue
-                k = next((m for m in range(j, end) if l[m] < lo), None)
-                if k is None:
-                    continue
-                window = h[j:k + 1]
-                idx = j + int(window.argmax())
-                price = float(h[idx])
-                sweep, broken = IDMDetector._resolve_high(price, k, h, o, c)
-
+        def keep(bullish, idx, price, sweep, broken, ref):
             key = (bullish, idx, price)
             prev = best.get(key)
             if prev is None or self._earlier(sweep, broken, prev[0], prev[1]):
-                best[key] = (sweep, broken, i)
+                best[key] = (sweep, broken, ref)
+
+        for i in range(n):
+            hi, lo = float(h[i]), float(l[i])
+            end = min(n, i + 1 + self.max_bars)
+
+            # Upside leg: take candle 1's LOW, then its HIGH, on an up-break.
+            j = next((m for m in range(i + 1, end) if l[m] < lo), None)
+            if j is not None:
+                k = next((m for m in range(j, end) if h[m] > hi), None)
+                if k is not None and dirs[k] == BOSDirection.BULLISH:
+                    window = l[j:k + 1]
+                    idx = j + int(window.argmin())
+                    price = float(l[idx])
+                    sweep, broken = IDMDetector._resolve_low(price, k, l, o, c)
+                    keep(True, idx, price, sweep, broken, i)
+
+            # Downside leg: take candle 1's HIGH, then its LOW, on a down-break.
+            j = next((m for m in range(i + 1, end) if h[m] > hi), None)
+            if j is not None:
+                k = next((m for m in range(j, end) if l[m] < lo), None)
+                if k is not None and dirs[k] == BOSDirection.BEARISH:
+                    window = h[j:k + 1]
+                    idx = j + int(window.argmax())
+                    price = float(h[idx])
+                    sweep, broken = IDMDetector._resolve_high(price, k, h, o, c)
+                    keep(False, idx, price, sweep, broken, i)
 
         for (bullish, idx, price), (sweep, broken, ref) in sorted(
                 best.items(), key=lambda kv: kv[0][1]):

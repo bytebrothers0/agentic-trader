@@ -160,11 +160,13 @@ BOTH = [
 def test_idm_detector_merges_both_families():
     # two_candle_rule off -> BOS family only; on -> both, deduped by pullback.
     off = IDMDetector(_df(BOTH), bos_swing_length=2, bos_internal_length=2,
-                      swing_tol_atr=0.0, two_candle_rule=False).detect_all()
+                      swing_tol_atr=0.0, two_candle_rule=False,
+                      ref_candle_rule=False).detect_all()
     assert off and all(lv.rule == "bos" for lv in off)
 
     on = IDMDetector(_df(BOTH), bos_swing_length=2, bos_internal_length=2,
-                     swing_tol_atr=0.0, two_candle_rule=True).detect_all()
+                     swing_tol_atr=0.0, two_candle_rule=True,
+                     ref_candle_rule=False).detect_all()
     # Both families flag the same pullback bar -> one level, BOS wins.
     assert len(on) == 1
     assert on[0].rule == "bos"
