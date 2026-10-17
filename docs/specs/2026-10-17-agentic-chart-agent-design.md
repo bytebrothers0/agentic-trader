@@ -1,8 +1,8 @@
 # Agentic Chart Agent — Self-Directed Perception, Pins and Watches
 
 Date: 2026-10-17
-Status: In progress — Phase 0 (schemas + durable store) and Phase 1 (feed + CRT playbook) landed 2026-10-17; the loop, renderer, panel and LLM remain.
-Module: `agentic/` (new). Phase 0 is pure. Phase 1 adds `feed.py` as the single **read-only** bridge to the indicator suite, plus `crt_strategy.py` and a read-only `GET /api/agent/crt`.
+Status: Phases 0–6 built and wired 2026-10-17; Phase 7 (execution) deferred. The pure core, the loop, the renderer, the LLM client, the runtime service and the web panel are all in place.
+Module: `agentic/` (new) — the pure, LLM-free substrate (`models`, `conditions`, `store`, `crt_strategy`, `subscriptions`, `watchdog`, `lookup`, `tools`, `prompts`, `agent_loop`, `_time`, `llm`), the two impure edges (`feed.py`, the single lazy read-only bridge; `renderer.py`, which loads the vision stack inside its functions), and the repo-root runtime `agent_service.py`. `GET /api/agent/*` wires it into the running system.
 
 ## Problem
 
@@ -491,18 +491,18 @@ Cost drivers: **images** (vision tokens) and **turn count**.
 An armed agent that self-starts needs a leash, not as a flourish but as a required
 component: a chatty watchdog is a subscription you did not sign up for.
 
-## Integration points (deferred — not touched until after the build)
+## Integration points (as wired — phase 6)
 
-| Where | What will change |
+Phases 0–5 add `agentic/*` only. **Phase 1 already touched `server.py`** (the read-only `GET /api/agent/crt` and the `atr` field on `/api/indicators`); **phase 6 is the first phase to wire the runtime into the running system** — the endpoints, the startup hook, the `AGENT_*` settings, the registry entry and the web panel.
+
+| Where | What changed |
 |---|---|
-| `agentic/feed.py` | read-only adapter over `indicators/*` (or `server.get_indicators`) producing the level payload + statuses |
-| `server.py` | mount `/api/agent/*` (panel state, chat, enable/pause, kill switch) in the existing try/except style |
-| `web/` | Agent Panel + settings toggle; cache-buster bump in `index.html` |
-| `config/settings.py` | an `AGENT_*` block |
-| `strategy/registry.py` | register the agent module id for the settings tab |
+| `agentic/feed.py` | read-only adapter over `indicators/*` (via `server.get_indicators`) producing the level payload + statuses; the single **lazy** bridge |
+| `server.py` | mounts `/api/agent/*` (panel state, turns, render, enable/disable/pause/resume, run-now) in the existing try/except style; a `startup` hook arms the service when `AGENT_ENABLED`; `_sync_agent_module` keeps the registry entry in step with the store gate |
+| `web/` | Agent Panel drawer + chat box + kill switch; cache-buster bump in `index.html` |
+| `config/settings.py` | an `AGENT_*` block (`AGENT_ENABLED` autostart, `AGENT_MODE`, `AGENT_MODEL`, `AGENT_SYMBOL`/`AGENT_TIMEFRAME`/`AGENT_BARS`, `AGENT_POLL_S`, `AGENT_API_BASE`/`AGENT_API_KEY_ENV`, `AGENT_MAX_TOKENS`/`AGENT_TEMPERATURE`, `AGENT_HTTP_TIMEOUT_S`, `AGENT_STATE_DIR`/`AGENT_RENDER_DIR`) |
+| `strategy/registry.py` | the `agent` module id for the settings tab (default disabled) |
 | `ai_agent/` | untouched. Its broken imports (`strategy.storyline_engine`, `strategy.entry_engine`) and the MQL5 MSNR world are legacy; retiring it is a separate decision. |
-
-**Phases 0–4 require no change to any existing file.**
 
 ## Build order
 
@@ -510,17 +510,19 @@ component: a chatty watchdog is a subscription you did not sign up for.
 |---|---|---|
 | **0** ✅ | `models.py` + `store.py`: schemas, atomic persistence, caps/expiry enforcement, budget accounting | round-trip a store; caps and expiries reject with a reason; no LLM, no repo changes |
 | **1** ✅ | `feed.py`: read-only level adapter, level-key identity, status mapping from the freshness tracker. Landed with `crt_strategy.py` (the top-down CRT playbook) and a read-only `GET /api/agent/crt`, and `atr` added to the `/api/indicators` payload | keys are stable across recomputation; a swept level reports `swept`, not `live` |
-| **2** | `conditions.py` + `subscriptions.py` + `watchdog.py`: the vocabulary, edge-triggered evaluation, dedupe, coalescing, backfill | every vocabulary entry tested against a fake feed; backfill reports a retroactive fire across simulated downtime |
-| **3** | `renderer.py`: store → PNG + manifest, tags, vision-optimised style | byte-identical render for identical state (image hash test); manifest resolves every tag |
-| **4** | `agent_loop.py` with a **scripted mock agent** | full turn end-to-end with zero API spend; turn log complete; leash enforced |
-| **5** | real vision model: prompt, tool-calling, structured output | a boot turn produces a thesis, a view change and at least one armed watch |
-| **6** | Agent Panel + settings toggle + kill switch | panel reflects the store; disable stops all waking |
+| **2** ✅ | `feed.py` bars + `subscriptions.py` + `watchdog.py`: the vocabulary, edge-triggered evaluation, dedupe, coalescing, backfill | every vocabulary entry tested against a fake feed; backfill reports a retroactive fire across simulated downtime |
+| **3** ✅ | `renderer.py` + `lookup.py`: store → PNG + manifest, tags, vision-optimised style; exact numbers on request | byte-identical render for identical state (image hash test, incl. across processes); manifest resolves every tag |
+| **4** ✅ | `tools.py` + `prompts.py` + `agent_loop.py` with a **scripted mock agent** | full turn end-to-end with zero API spend; turn log complete; leash enforced |
+| **5** ✅ | `llm.py`: the vision client — prompt, tool-calling, structured output — pure over an **injected transport** | the request/parse path is exercised on a canned transport; the live call is wired by phase 6, never by the core |
+| **6a** ✅ | *(backend)* `agent_service.py` + the `AGENT_*` settings + the registry entry + `/api/agent/*` | panel reflects the store; disable stops all waking; the store gate is authoritative |
+| **6b** ✅ | *(web)* Agent Panel + chat + kill switch in `web/` | the drawer reads `/api/agent/panel`; enable toggle and pause/resume drive the service |
 | **7** | *(deferred)* execution | out of scope for this spec |
 
-Phases 0–2 are pure logic and can be built and tested **today**, in parallel with any
-indicator work, because they depend on nothing outside themselves.
+Phases 0–2 were pure logic, buildable and testable independently of any indicator
+work, because they depend on nothing outside themselves; the loop, renderer, LLM
+client and the wiring followed in phases 3–6.
 
-## As built — phase 0 and 1 (2026-10-17)
+## As built — phases 0–6 (2026-10-17)
 
 **Phase 0** shipped `models.py` + `conditions.py` + `store.py` as specified.
 
@@ -540,6 +542,32 @@ indicator work, because they depend on nothing outside themselves.
 - `server.py`: `atr` added to the `/api/indicators` payload, and `GET /api/agent/crt` exposes the read (read-only).
 - `tests/test_agentic/test_standalone.py` now enforces: the pure core imports nothing from the repo, and `feed.py` is lazy.
 
+**Phase 2a** — `feed.py` gained OHLC `Bars` (`snapshot` + `bars`); `subscriptions.py` (598 lines) added the deterministic, edge-triggered evaluator. `evaluate(sub, snapshot, bars, now=, last_evaluated_at=)` fires on the rising edge `false → true` only; `event_time` picks the fire instant per condition; sessions are fixed UTC windows; `price_crosses` needs strictly opposite closes; `range_expands` compares the UTC-day range to `ATR`/`ADR`. Two consecutive windows share no event time, so nothing double-fires.
+
+**Phase 2b** — `watchdog.py` (420 lines): the LLM-free, render-free loop over the store's open subscriptions. `scan` retires expiries, evaluates, applies the repeating-watch cooldown, buffers fires, and emits **one** `fire` turn once `COALESCE_WINDOW_S` (45s) has elapsed; `backfill` recovers downtime fires (`retroactive=True`) and emits no turn; `flush` force-emits for `request`/`boot`. Expiry is not a fire unless `wake_on_expiry` is set. The clock is injected, never read.
+
+**Phase 3** — `renderer.py` (560 lines) + `lookup.py` (298 lines). The renderer draws a vision-optimised PNG (default 1536×864) with a tag per drawn level and a canonical tag→`level_key` manifest; determinism is enforced by stripping PNG metadata and deriving `render_id = "r_" + sha256(png)[:16]` (`rendered_at` is manifest-only), so identical state → byte-identical image (asserted across processes). `lookup.py` is the single canonical `level_view` projection that both the manifest and `level_lookup` build from, so exact numbers can never drift from what was drawn; it resolves by `tag`, `level_key`, `family`(+`timeframe`) or `near_price`(+`radius`).
+
+**Phase 4** — `tools.py` (628 lines) + `prompts.py` (330 lines) + `agent_loop.py` (575 lines) + `_time.py` (51 lines). The tool surface is eleven tools and **no order tool**; `ToolRegistry.execute` never raises (a refusal returns the store's own reason) and owns the `MAX_RENDERS_PER_TURN` budget (the initial perception render is render #1). `prompts.py` holds the policy prompt (top-down CRT playbook + vocabulary + perception/truth/discipline rules) and rebuilds the briefing fresh from the store each turn. `agent_loop.py` runs one turn — leash → gate → briefing + render → LLM + tools → output → persist — with a zero-spend `ScriptedAgent` so the whole loop is testable without a model. `_time.py` is the shared `as_aware`/`seconds_remaining`/`new_id` helper set.
+
+**Phase 5** — `llm.py` (548 lines): the OpenAI-compatible vision client, pure over an injected `Transport`. `build_messages` assembles the system prompt, the briefing text, the image as a data URI and any prior tool calls; `parse_reply` reads the model's reply back tolerantly (a malformed tool-argument string becomes `{}` rather than an exception). `DEFAULT_MODEL` is `gpt-4o-mini`; `PRICES` is a configurable estimate table used only for leash accounting. **No real model call has been made yet** — the transport is supplied by phase 6, and the default mode is mock.
+
+**Phase 6a** *(backend)* — `agent_service.py` (745 lines, repo root, non-pure: stdlib + `agentic` at module level only), the `AGENT_*` block in `config/settings.py`, the `agent` registry entry in `strategy/registry.py`, and the `/api/agent/*` routes in `server.py` (panel, turns, render, enable/disable/pause/resume, run-now) plus a `startup` hook. `AgentService` holds one symbol's store, watchdog and loop; a single `RLock` serialises whole turns across `boot`/`scan_once`/`run_now`. `scan_once` pre-checks the leash and, on `LeashExceeded`, returns without scanning (nothing is consumed, so the next poll re-detects). The scanning thread owns its own `threading.Event`; `stop()` clears the handle only after the join confirms exit, otherwise the service is *draining* and refuses a second thread. `enable()` also makes sure the thread is running.
+
+**Phase 6b** *(web)* — the Agent Panel drawer (`#agentDrawer`) and top-nav button (`#btnAgent`) in `web/`: it reads `/api/agent/panel` (thesis, open subscriptions with server-side `seconds_remaining`, the dedicated `pins` projection, view, proposals, budget, recent turns, last render), exposes the enable toggle and pause/resume, and runs a chat box through `POST /api/agent/run-now?message=`. It polls only while the drawer is open and escapes model-authored text. Cache busters bumped (`style.css?v=16`, `app.js?v=24`).
+
+**Invariants now enforced by tests**
+
+- **Purity** — `agentic/*` imports only stdlib + `agentic.*`; `feed.py` is the single lazy bridge; `renderer.py` loads `matplotlib`/`PIL` inside functions. `tests/test_agentic/test_standalone.py` pins this with an AST check (`PURE_MODULES`/`BRIDGE_MODULES`).
+- **Store root is exactly 11 fields** — pinned by `tests/test_agentic/test_store.py::ROOT_FIELDS`; notes are **not** a field but live in `TurnRecord.output["notes"]` and resurface in the briefing.
+- **Deterministic render** — same state → byte-identical PNG and `render_id`; `rendered_at` is manifest-only; asserted across processes.
+- **Turn serialisation** — one `RLock` across `boot`/`scan_once`/`run_now`; `ContextStore.save` writes a unique per-process/per-thread temp file before `os.replace`.
+- **Per-thread stop event** — each scanning thread owns its own `threading.Event`; a timed-out `stop()` leaves the service *draining* and no second thread can spawn.
+- **Leash pre-check** — `scan_once` checks the leash before scanning; a refusal consumes nothing.
+- **Mock by default** — `AGENT_MODE="mock"` runs the whole loop against a scripted agent with zero spend.
+
+Baseline: **414 passed, 1 skipped**; `import server` → **38 routes**.
+
 ## Deferred / out of scope
 
 - Order placement and position management (Phase 7).
@@ -553,7 +581,7 @@ indicator work, because they depend on nothing outside themselves.
 
 | Decision | Choice |
 |---|---|
-| Scope | Agentic system; plan only for now, no wiring until the pending indicator work lands |
+| Scope | Agentic system — built and wired in phases 0–6 (see "As built"); initially planned with no wiring until the indicator work landed |
 | Data world | Python indicator suite (not the MQL5 objects) |
 | Render path | Server-side |
 | Turn driver | Deterministic watchdog + mandatory boot turn when armed |
@@ -562,17 +590,28 @@ indicator work, because they depend on nothing outside themselves.
 | Organisation | Explicit context store + lifecycle as prompted playbook |
 | Authority | Propose-only |
 | Store scope | One per symbol; one active symbol in v1 |
+| Runtime switch | The store gate (`store.data.agent.enabled`) is **authoritative** for "is it on"; `AGENT_ENABLED` is only the process **autostart** switch. The registry flag in `config/modules_state.json` is written *after* `enable()`/`disable()` succeeds, so the two cannot disagree. |
+| Default mode | `AGENT_MODE="mock"`: the full loop runs against a scripted agent with zero API spend. Live mode is wired by an injected transport only. |
+| Render determinism | The PNG is drawn once and `render_id = "r_" + sha256(png)[:16]`; `rendered_at` lives in the manifest only, so identical state yields a byte-identical image. |
+| Notes storage | Agent notes are **not** a store field: they persist in `TurnRecord.output["notes"]` and resurface in the briefing. The store root stays exactly 11 fields. |
+| Pins | A pin is a watch (`level_alive`) on level existence; the panel's `pins` are rendered from the shared subscription projection, so pins ≡ watches. |
+| Wake cadence | The daemon is woken by the watchdog only, and its fires are **coalesced** (`COALESCE_WINDOW_S`) into one turn; `scan_once` never force-flushes. |
 
 ## Open questions
 
 1. **Condition vocabulary** — is the table the right *shape* of things to wait for? What
-   would you sit and wait for that it misses?
+   would you sit and wait for that it misses? *(Still open — the build implemented the
+   vocabulary as specified.)*
 2. **Timezone** — label the axis in UTC or broker time? Levels carry bar timestamps, so the
-   render must be unambiguous about which.
-3. **Image size and style** — the proposed 1536×864 vision-optimised style needs a real
-   legibility check against the chosen model before Phase 3 is frozen.
-4. **Model choice** — which vision model, and does it support the tool-calling shape needed
-   in Phase 5?
-5. **Boot turn on reconnect** — should a reconnect without a process restart also schedule
-   a catch-up turn?
-6. **Agent Panel placement** — a new panel beside the chart, or a separate route?
+   render must be unambiguous about which. *(Still open.)*
+3. **Image size and style** — the 1536×864 vision-optimised style has not had a real
+   legibility check against the chosen model, because **no real model call has been made** —
+   the default mode is mock. This is the biggest unvalidated assumption. *(Still open.)*
+4. **Boot turn on reconnect** — should a reconnect without a process restart also schedule
+   a catch-up turn? *(Still open; the runtime currently backfills only on an armed `start()`.)*
+
+Settled during the build:
+
+- **Model choice** — defaulted to `gpt-4o-mini` (vision-capable, tool-calling-capable,
+  cheap) in the mock-default config; the live transport is injected and untested.
+- **Agent Panel placement** — a drawer in the web UI (`#agentDrawer`), not a separate route.
