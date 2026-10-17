@@ -122,13 +122,19 @@ class IDMDetector:
     two_candle_rule : bool
         Also emit Luap "True SMC" valid-pullback IDMs (``rule="two_candle"``)
         alongside the BOS-anchored ones. Default True.
+    ref_candle_rule : bool
+        Also emit Luap reference-candle ("candle 1") IDMs (``rule="ref_candle"``),
+        gated by the prevailing structure direction. Default True.
+    ref_candle_max_bars : int
+        Continuation look-ahead for the reference-candle family. Default 500.
     """
 
     def __init__(self, df: pd.DataFrame, swing_length: int = 2,
                  bos_swing_length: int = 25, bos_internal_length: int = 3,
                  show_internal: bool = True, swing_tol_atr: float = 0.05,
                  max_per_side: int = 3, atr_period: int = 14,
-                 two_candle_rule: bool = True):
+                 two_candle_rule: bool = True, ref_candle_rule: bool = True,
+                 ref_candle_max_bars: int = 500):
         self._validate(df)
         self.df = df.copy()
         self.swing_length = max(1, int(swing_length))
@@ -139,6 +145,8 @@ class IDMDetector:
         self.max_per_side = max(1, int(max_per_side))
         self.atr_period = atr_period
         self.two_candle_rule = bool(two_candle_rule)
+        self.ref_candle_rule = bool(ref_candle_rule)
+        self.ref_candle_max_bars = max(1, int(ref_candle_max_bars))
         self._levels: List[IDMLevel] = []
 
     def detect_all(self) -> List[IDMLevel]:
@@ -169,15 +177,29 @@ class IDMDetector:
 
         _cap_per_side(self._levels, self.max_per_side)
 
+        # Other families are added only where they mark a pullback the families
+        # already present did not (same type + same pullback bar).
+        keys = {(lv.idm_type, lv.formation_index) for lv in self._levels}
         if self.two_candle_rule:
-            # Add the Luap two-candle family, but don't repeat a pullback the
-            # BOS family already marked (same type + same pullback bar).
-            bos_keys = {(lv.idm_type, lv.formation_index) for lv in self._levels}
             for lv in LuapIDMDetector(
                     self.df, max_per_side=self.max_per_side).detect_all():
-                if (lv.idm_type, lv.formation_index) in bos_keys:
+                if (lv.idm_type, lv.formation_index) in keys:
                     continue
                 self._levels.append(lv)
+                keys.add((lv.idm_type, lv.formation_index))
+        if self.ref_candle_rule:
+            for lv in RefCandleIDMDetector(
+                    self.df, max_per_side=self.max_per_side,
+                    max_bars=self.ref_candle_max_bars,
+                    bos_swing_length=self.bos_swing_length,
+                    bos_internal_length=self.bos_internal_length,
+                    show_internal=self.show_internal,
+                    swing_tol_atr=self.swing_tol_atr,
+                    atr_period=self.atr_period).detect_all():
+                if (lv.idm_type, lv.formation_index) in keys:
+                    continue
+                self._levels.append(lv)
+                keys.add((lv.idm_type, lv.formation_index))
 
         self._levels.sort(key=lambda lv: lv.formation_index)
         return self._levels
@@ -466,3 +488,167 @@ class LuapIDMDetector:
                                     (idx, active.get("confirm"), sweep, broken)
                                     if x is not None],
         ))
+
+
+def _structure_direction(n: int, bos_levels) -> List[Optional[BOSDirection]]:
+    """Per-bar prevailing structure direction from the last break (BOS/CHoCH).
+
+    ``dirs[i]`` is the direction of the most recent break at or before bar ``i``
+    — up for BOS / I-BOS / CHoCH / I-CHOCH to the upside, down otherwise — or
+    ``None`` before the first break seen.
+    """
+    events = sorted((b.break_index, b.direction) for b in bos_levels
+                    if b.break_index is not None)
+    dirs: List[Optional[BOSDirection]] = [None] * n
+    cur: Optional[BOSDirection] = None
+    e = 0
+    for i in range(n):
+        while e < len(events) and events[e][0] <= i:
+            cur = events[e][1]
+            e += 1
+        dirs[i] = cur
+    return dirs
+
+
+class RefCandleIDMDetector:
+    """
+    Luap reference-candle ("candle 1") inducement, structure-gated.
+
+    Every candle can be the reference candle ("candle 1"): its high/low define a
+    range. In an **upside** structure (the last BOS / I-BOS / CHoCH / I-CHOCH
+    broke up) a later candle taking candle 1's LOW arms the pullback, and a later
+    candle then taking candle 1's HIGH completes it — the **lowest low** of that
+    pullback series is the IDM. In a **downside** structure the mirror holds:
+    candle 1's HIGH is taken, then its LOW, and the **highest high** of the
+    pullback series is the IDM.
+
+    The structure gate ties every IDM to the leg it belongs to: range lows are
+    only inducement while the structure is up, range highs only while it is down
+    — so this "follows the leg or trend" instead of labelling every wick.
+
+    Candle 1 need not be a swing point, so this catches the smaller intra-leg
+    pullbacks the two-candle family skips. Out: `swept` (wick through, body back
+    inside) / `broken` (body close through) / active, per Part 8.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        OHLCV dataframe with a DatetimeIndex.
+    max_per_side : int
+        Keep at most this many levels per direction (newest, live first).
+    max_bars : int
+        Give up looking for candle 1's continuation after this many bars.
+    bos_swing_length, bos_internal_length, show_internal, swing_tol_atr,
+    atr_period :
+        Passed to ``BOSDetector`` for the structure gate (keep in step with the
+        IDM detector's own BOS settings).
+    """
+
+    def __init__(self, df: pd.DataFrame, max_per_side: int = 3,
+                 max_bars: int = 500, bos_swing_length: int = 25,
+                 bos_internal_length: int = 3, show_internal: bool = True,
+                 swing_tol_atr: float = 0.05, atr_period: int = 14):
+        IDMDetector._validate(df)
+        self.df = df.copy()
+        self.max_per_side = max(1, int(max_per_side))
+        self.max_bars = max(1, int(max_bars))
+        self.bos_swing_length = bos_swing_length
+        self.bos_internal_length = bos_internal_length
+        self.show_internal = show_internal
+        self.swing_tol_atr = swing_tol_atr
+        self.atr_period = atr_period
+        self._levels: List[IDMLevel] = []
+
+    def detect_all(self) -> List[IDMLevel]:
+        self._levels = []
+        h = self.df["high"].values
+        l = self.df["low"].values
+        o = self.df["open"].values
+        c = self.df["close"].values
+        n = len(h)
+        if n < 3:
+            return self._levels
+
+        bos = BOSDetector(
+            self.df,
+            swing_length=self.bos_swing_length,
+            internal_length=self.bos_internal_length,
+            show_internal=self.show_internal,
+            swing_tol_atr=self.swing_tol_atr,
+            atr_period=self.atr_period,
+        ).detect_all()
+        dirs = _structure_direction(n, bos)
+
+        # key -> the best resolution seen for that exact IDM
+        best: dict = {}
+        for i in range(n):
+            d = dirs[i]
+            if d is None:
+                continue
+            bullish = (d == BOSDirection.BULLISH)
+            hi, lo = float(h[i]), float(l[i])
+            end = min(n, i + 1 + self.max_bars)
+
+            if bullish:
+                j = next((m for m in range(i + 1, end) if l[m] < lo), None)
+                if j is None:
+                    continue
+                k = next((m for m in range(j, end) if h[m] > hi), None)
+                if k is None:
+                    continue
+                window = l[j:k + 1]
+                idx = j + int(window.argmin())
+                price = float(l[idx])
+                sweep, broken = IDMDetector._resolve_low(price, k, l, o, c)
+            else:
+                j = next((m for m in range(i + 1, end) if h[m] > hi), None)
+                if j is None:
+                    continue
+                k = next((m for m in range(j, end) if l[m] < lo), None)
+                if k is None:
+                    continue
+                window = h[j:k + 1]
+                idx = j + int(window.argmax())
+                price = float(h[idx])
+                sweep, broken = IDMDetector._resolve_high(price, k, h, o, c)
+
+            key = (bullish, idx, price)
+            prev = best.get(key)
+            if prev is None or self._earlier(sweep, broken, prev[0], prev[1]):
+                best[key] = (sweep, broken, i)
+
+        for (bullish, idx, price), (sweep, broken, ref) in sorted(
+                best.items(), key=lambda kv: kv[0][1]):
+            idm_type = IDMType.IDM_LOW if bullish else IDMType.IDM_HIGH
+            direction = (IDMDirection.BULLISH if bullish
+                         else IDMDirection.BEARISH)
+            self._levels.append(IDMLevel(
+                idm_type=idm_type,
+                direction=direction,
+                price=price,
+                formation_index=idx,
+                candle_time=self.df.index[idx],
+                swept=sweep is not None,
+                sweep_index=sweep,
+                broken=broken is not None,
+                broken_index=broken,
+                rule="ref_candle",
+                confirm_index=ref,
+                forming_candle_indices=[x for x in (idx, ref, sweep, broken)
+                                        if x is not None],
+            ))
+
+        _cap_per_side(self._levels, self.max_per_side)
+        self._levels.sort(key=lambda lv: lv.formation_index)
+        return self._levels
+
+    @staticmethod
+    def _earlier(sweep_a, broken_a, sweep_b, broken_b) -> bool:
+        """True when A resolves at least as early as B (resolved beats not)."""
+        a = sweep_a if sweep_a is not None else broken_a
+        b = sweep_b if sweep_b is not None else broken_b
+        if a is None:
+            return False
+        if b is None:
+            return True
+        return a < b

@@ -14,7 +14,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 |------|------|
 | `start_live.py` (L1-91) | Main launcher. Self-heals interpreter (`_ensure_interpreter`, L27), `check_deps` (L54), runs `uvicorn server:app` (L87). |
 | `start_live.bat` | Windows double-click wrapper. |
-| `server.py` (L1-920) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
+| `server.py` (L1-928) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
 | `main.py` (L1-97) | Standalone CLI: `--test-indicators` renders an annotated chart (legacy demo, L32-87). |
 | `ai_agent/agent_loop.py` (L35 `run_once`) | CLI entry for one AI scan. |
 | `ai_agent/pilot/run_pilot.py` (L278 `main`) | Offline AI strategy pilot (build/analyze/score/revise phases). |
@@ -24,7 +24,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 ### 3.1 Config & Data
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `config/settings.py` | 239 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/LIQ/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
+| `config/settings.py` | 245 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/LIQ/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
 | `data/mt5_loader.py` | 154 | `MT5DataLoader` (L29). Symbol resolution (`_resolve_symbol` L64), `fetch_timeframe` (L108, unix `time` column for charts), `_resample` (L142, M45 = 3×M15), `fetch_all_timeframes` (L166). Thread-locked MT5 calls. |
 
 ### 3.2 Indicator Detectors (`indicators/`)
@@ -38,7 +38,7 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `qm_detector.py` | 277 | `QMDetector` (L90) | Quasimodo (QMR/QMM/QMC) reversal patterns. |
 | `apex_detector.py` | 191 | `ApexDetector` (L72) | Apex & IAB swings (HTF line-chart analysis). |
 | `ts_detector.py` | 166 | `TSDetector` (L58) | Turtle Soup liquidity sweeps (wick-gated, L28 enums). |
-| `idm_detector.py` | 468 | `IDMDetector` (L100), `LuapIDMDetector` (L320) | **Inducement, two families merged** (tagged on `IDMLevel.rule`). *BOS-anchored* (`rule="bos"`): after a structural break, the most recent minor fractal swing inside the impulse leg beyond the leg origin (a higher low / lower high). One IDM per BOS, deduped and capped per side; no internal pullback -> no IDM. *Two-candle* (`rule="two_candle"`): Luap "True SMC" valid pullback (Part 1 + Part 3) — a candle takes the wick/body liquidity of the candle that ended the impulse (the previous HH/LL candle); new-extreme-without-taking **shifts** the IDM; a cross takes it; inside bars ignored. `IDMDetector(two_candle_rule=...)` merges both, dropping a two-candle level that duplicates a BOS one (same type + pullback bar). Resolves each IDM to `swept` / `broken` (body close-through) / active. |
+| `idm_detector.py` | 654 | `IDMDetector` (L100), `LuapIDMDetector` (L342), `RefCandleIDMDetector` (L513) | **Inducement, three families merged** (tagged on `IDMLevel.rule`). *BOS-anchored* (`rule="bos"`): after a structural break, the most recent minor fractal swing inside the impulse leg beyond the leg origin (a higher low / lower high). One IDM per BOS, deduped and capped per side. *Two-candle* (`rule="two_candle"`): Luap "True SMC" valid pullback (Part 1 + Part 3) — a candle takes the wick/body liquidity of the candle that ended the impulse (the previous HH/LL candle); new-extreme-without-taking **shifts** the IDM; inside bars ignored. *Reference-candle* (`rule="ref_candle"`): **every** candle is "candle 1", gated by the prevailing structure direction (`_structure_direction`) — upside break -> the range LOW is the IDM, downside -> the range HIGH; a later candle must take candle 1's low then its high (mirror down), and the pullback series' extreme is the IDM. `IDMDetector(two_candle_rule=, ref_candle_rule=)` merges all three, dropping levels that repeat an earlier family's pullback (same type + bar). Resolves each IDM to `swept` (wick through, body back inside) / `broken` (body close-through) / active. |
 | `liquidity_detector.py` | 211 | `LiquidityDetector` (L67) | **Liquidity pools**: equal highs (buy-side) / equal lows (sell-side) stop clusters, from fractal pivots clustered within `eq_tol_atr` x ATR and `eq_max_bars`. Needs `>= min_touches`; single swings excluded. Marks each pool `taken` on the first wick through. Capped per side. |
 | `swings.py` | 73 | `find_pivots` (L41), `atr_series`, `Pivot` | Shared symmetric fractal-pivot finder + Wilder ATR for the IDM/liquidity detectors. |
 | `bos_detector.py` | 167 | `BOSDetector` (L58) | BOS / CHoCH (Mxwll-style; external + internal I-BOS). |
@@ -87,12 +87,12 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | File | Lines | Responsibility |
 |------|-------|----------------|
 | `index.html` | 439 | TradingView terminal shell. |
-| `app.js` | 1345 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-20). Two-candle IDMs are amber + tagged `IDM·2C` (`badge-idm-2c`); BOS-anchored IDMs stay yellow. |
-| `style.css` | 1253 | Styling. |
+| `app.js` | 1352 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-20). One IDM colour per family: gold = BOS-anchored `IDM`, amber = `IDM·2C`, lime = `IDM·RC` (badges `badge-idm`/`badge-idm-2c`/`badge-idm-rc`). |
+| `style.css` | 1256 | Styling. |
 | `backtest.html` / `backtest.js` | 99 / 820 | Backtest journal viewer (reads `/api/backtest/*`). |
 
 ### 3.8 Tests (`tests/`)
-`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py` (BOS family, pinned via `two_candle_rule=False`), `test_luap_idm.py` (two-candle family + merge/dedupe), `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
+`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py` (BOS family, pinned via `two_candle_rule=False` + `ref_candle_rule=False`), `test_luap_idm.py` (two-candle family + merge/dedupe), `test_ref_candle_idm.py` (reference-candle family + structure gate), `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
 
 ### 3.9 Docs & Reference (non-code)
 - `strategy_notes/` — strategy playbooks (phoenix_mnsr, ems mnsr, apa, abax mnsr, advance mnsr1) as markdown + subtitle transcripts.
@@ -134,7 +134,7 @@ AI layer (propose-only):
 - Enable/disable every indicator via `config/settings.py` flags; `INDICATORS_ENABLED=False` disables the legacy unified stack, but per-indicator flags (SR/QM/BOS/…) run independently.
 - Detectors are stateless and take a DataFrame in the constructor; `detect_all()` is the uniform entry.
 - `web/app.js` duplicates the switches at top (L10-22) — keep in sync with `settings.py`.
-- `backtest/` journals (CSV) feed `/api/backtest/*`; label map in `server.py` `_journal_label` (L820).
-- Inducement ships **two families at once**: the BOS-anchored IDMs plus the Luap "True SMC" two-candle valid-pullback IDMs (`IDM_TWO_CANDLE_RULE=True`), both under the `idm` category and told apart by `IDMLevel.rule` / the amber `IDM·2C` tag. Turn the second off with that flag. Both are capped by `IDM_MAX_PER_SIDE`.
+- `backtest/` journals (CSV) feed `/api/backtest/*`; label map in `server.py` `_journal_label` (L828).
+- Inducement ships **three families at once**: BOS-anchored, the Luap "True SMC" two-candle valid-pullback IDMs (`IDM_TWO_CANDLE_RULE=True`), and the Luap reference-candle ("candle 1") IDMs (`IDM_REF_CANDLE_RULE=True`, bounded by `IDM_REF_MAX_BARS`). All are the `idm` category and told apart by `IDMLevel.rule` / the gold-amber-lime tags (`IDM` / `IDM·2C` / `IDM·RC`). Each family is capped by `IDM_MAX_PER_SIDE`, so a side can hold up to 3 per family.
 - Interpreter quirk on Windows: `start_live.py` re-execs into Python311.
 - Trendlines are built as lines **through close-price apexes** using **multi-scale apex windows** (`TL_PIVOT_WINDOWS`, default `(5, 14)`, merged — small windows catch local channel swings, the large one the major swings) plus `TL_TOL_ATR`, `TL_CHANNEL_PARALLEL_ATR`, `TL_SWEEP_ATR` in `config/settings.py`, passed to `TLDetector`. `TLLine.slope` is signed and `value_at()` projects it; `role` = support/resistance by anchor set; lines carry `channel_id`, `flipped`/`retest_role` and `swept`. The old mid-line channel (`TLChannel`) is removed. `slope_mult`/`body_pivots` are deprecated no-ops.

@@ -133,6 +133,12 @@ IDM_ATR_PERIOD = 14
 # once a candle takes the liquidity of the candle that ended the impulse. Emits
 # a second IDM family (rule="two_candle") alongside the BOS-anchored one.
 IDM_TWO_CANDLE_RULE = True
+# Luap reference-candle ("candle 1") rule: EVERY candle's range counts, gated by
+# the prevailing structure — upside break -> IDM at the range low, downside
+# break -> IDM at the range high (rule="ref_candle"). REF_MAX_BARS bounds the
+# hunt for the continuation.
+IDM_REF_CANDLE_RULE = True
+IDM_REF_MAX_BARS = 500
 
 # Liquidity pools (SMC) — enabled. Equal highs (buy-side) / equal lows
 # (sell-side) stop clusters. Pools need >= LIQ_MIN_TOUCHES touches within

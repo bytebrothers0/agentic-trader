@@ -673,6 +673,7 @@ body {
 .color-apex-res { background-color: var(--accent-crimson); }
 .color-idm { background-color: #ffd600; }
 .color-idm-2c { background-color: #ffab40; }
+.color-idm-rc { background-color: #d4e157; }
 .color-bos { background-color: #7aa2ff; }
 .color-fvg-bull { background-color: #089981; }
 .color-fvg-bear { background-color: #f23645; }
@@ -995,6 +996,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 .chart-tag.tag-plain.ts-low { color: #00e676; }
 .chart-tag.tag-plain.idm { color: #ffd600; }
 .chart-tag.tag-plain.idm-2c { color: #ffab40; }
+.chart-tag.tag-plain.idm-rc { color: #d4e157; }
 .chart-tag.tag-plain.liq-eqh { color: #ff5252; }
 .chart-tag.tag-plain.liq-eql { color: #4dd0e1; }
 .chart-tag.tag-plain.bos { color: #7aa2ff; }
@@ -1149,6 +1151,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 .badge-ts { background-color: rgba(255, 92, 108, 0.15); color: #ff5c6c; }
 .badge-idm { background-color: rgba(255, 214, 0, 0.15); color: var(--accent-gold); }
 .badge-idm-2c { background-color: rgba(255, 171, 64, 0.15); color: #ffab40; }
+.badge-idm-rc { background-color: rgba(212, 225, 87, 0.15); color: #d4e157; }
 .badge-liq { background-color: rgba(77, 208, 225, 0.15); color: #4dd0e1; }
 .badge-bos { background-color: rgba(122, 162, 255, 0.15); color: #7aa2ff; }
 .badge-fvg { background-color: rgba(8, 153, 129, 0.15); color: #089981; }

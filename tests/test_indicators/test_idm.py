@@ -5,8 +5,9 @@ fractal swing inside the impulse leg that sits beyond the leg origin (a
 genuine higher low / lower high). No internal pullback -> no IDM. The detector
 emits one IDM per break, deduped and capped per direction.
 
-These tests pin the BOS family (``two_candle_rule=False``) so the Luap
-two-candle family doesn't pollute the assertions; see ``test_luap_idm.py``.
+These tests pin the BOS family (``two_candle_rule=False``, ``ref_candle_rule=
+False``) so the Luap families don't pollute the assertions; see
+``test_luap_idm.py`` and ``test_ref_candle_idm.py``.
 """
 import pandas as pd
 
@@ -24,6 +25,7 @@ def _det(df, **kw):
     kw.setdefault("bos_internal_length", 2)
     kw.setdefault("swing_tol_atr", 0.0)
     kw.setdefault("two_candle_rule", False)
+    kw.setdefault("ref_candle_rule", False)
     return IDMDetector(df, **kw)
 
 
