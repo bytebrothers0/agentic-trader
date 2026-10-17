@@ -6,13 +6,16 @@ Phase 0: the schemas and the durable context store (``models`` + ``store``).
 Phase 1: ``feed.py``, the read-only bridge to the indicator suite, and
 ``crt_strategy.py``, the top-down CRT playbook the agent runs (HTF bias from
 D1/W1/MN1 CRT, LTF confirmation, a propose-only plan).
+Phase 2 (part A): OHLC ``Bars`` on the feed, and ``subscriptions.py``, the
+deterministic, edge-triggered condition evaluator the Watchdog will drive.
 
-The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy`` — imports
-nothing from the running system. ``feed`` is the single sanctioned bridge, and it
-reaches the indicator layer only lazily, so importing this package stays cheap.
-Nothing here places an order (``mode=propose`` throughout), and nothing caches
-detector output in the store: levels are recomputed on every read. The agent
-loop, the renderer, the panel and the LLM remain later phases.
+The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
+``subscriptions`` — imports nothing from the running system. ``feed`` is the
+single sanctioned bridge, and it reaches the indicator layer only lazily, so
+importing this package stays cheap. Nothing here places an order
+(``mode=propose`` throughout), and nothing caches detector output in the store:
+levels are recomputed on every read. The agent loop, the renderer, the panel and
+the LLM remain later phases.
 """
 from __future__ import annotations
 
@@ -33,11 +36,14 @@ from agentic.crt_strategy import (
 )
 from agentic.feed import (
     KNOWN_FAMILIES,
+    Bars,
     Feed,
     FeedSnapshot,
     LevelRecord,
+    default_candles_provider,
     default_provider,
     family_of,
+    parse_candles,
     parse_level,
     parse_payload,
     status_of,
@@ -67,11 +73,13 @@ from agentic.store import (
     LeashExceeded,
     StoreError,
 )
+from agentic.subscriptions import FireResult, evaluate, event_time
 
 __all__ = [
     "SPEC_VERSION",
     "AgentMeta",
     "AgentMode",
+    "Bars",
     "Budget",
     "CapExceeded",
     "ChartType",
@@ -84,6 +92,7 @@ __all__ = [
     "CrtPlan",
     "Feed",
     "FeedSnapshot",
+    "FireResult",
     "HTF_BIAS_TIMEFRAMES",
     "HtfBias",
     "KNOWN_FAMILIES",
@@ -107,10 +116,14 @@ __all__ = [
     "View",
     "analyze",
     "build_plan",
+    "default_candles_provider",
     "default_provider",
     "derive_htf_bias",
+    "evaluate",
+    "event_time",
     "family_of",
     "find_confirmation",
+    "parse_candles",
     "parse_level",
     "parse_payload",
     "spec_for",

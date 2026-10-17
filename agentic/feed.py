@@ -134,6 +134,21 @@ def _dir_from_type(type_field: Any) -> str:
     return "neutral"
 
 
+def _bos_kind(type_field: Any) -> tuple:
+    """Split a BOS payload ``type`` into ``(kind, internal)``.
+
+    The detector emits uppercase tokens (``indicators/bos_detector.py``):
+    ``BOS`` / ``CHOCH``, prefixed with ``I-`` for the internal (I-BOS/I-CHOCH)
+    layer. The payload formats them as ``f"{kind} ({direction})"``. Comparison is
+    case-insensitive on the leading token, after stripping the ``I-`` prefix.
+    """
+    text = str(type_field or "").strip().upper()
+    internal = text.startswith("I-")
+    if internal:
+        text = text[2:]
+    return ("CHoCH" if text.startswith("CHOCH") else "BOS"), internal
+
+
 def _to_dt(value: Any) -> Optional[datetime]:
     if value is None:
         return None
@@ -141,6 +156,30 @@ def _to_dt(value: Any) -> Optional[datetime]:
         return datetime.fromtimestamp(int(value), tz=timezone.utc)
     except (TypeError, ValueError, OverflowError, OSError):
         return None
+
+
+def _unix_of(value: Any) -> Optional[int]:
+    """Coerce a bar timestamp to unix seconds.
+
+    Accepts unix seconds, an aware/naive :class:`datetime` (naive is read as
+    UTC), or an ISO-8601 string. Returns ``None`` when nothing sensible parses.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if not dt.tzinfo:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 def _band(level: Mapping[str, Any]) -> tuple:
@@ -258,6 +297,49 @@ class FeedSnapshot(Serde):
         return sorted(hits, key=lambda lvl: abs(lvl.price - price))
 
 
+@dataclass
+class Bars(Serde):
+    """An OHLC series for one ``(symbol, timeframe)`` — the evaluator's clock.
+
+    The ``/api/candles`` payload carries ``volume`` too, but the evaluator has no
+    use for it, so it is dropped here. ``times`` are unix seconds, ascending
+    (``parse_candles`` sorts them), and every price series is the same length as
+    ``times``. JSON round-trips through :class:`Serde`, which is what lets a
+    snapshot-and-bars pair be persisted or replayed.
+    """
+
+    symbol: str = ""
+    timeframe: str = ""
+    times: List[int] = field(default_factory=list)
+    open: List[float] = field(default_factory=list)
+    high: List[float] = field(default_factory=list)
+    low: List[float] = field(default_factory=list)
+    close: List[float] = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return len(self.times)
+
+    def index_at_or_before(self, ts: Any) -> int:
+        """Index of the last bar whose time is ``<= ts``; ``-1`` when there is none.
+
+        ``ts`` may be unix seconds, a :class:`datetime`, or an ISO string. The
+        binary search assumes ``times`` is ascending, which :func:`parse_candles`
+        guarantees.
+        """
+        target = _unix_of(ts)
+        if target is None or not self.times:
+            return -1
+        lo, hi, found = 0, len(self.times) - 1, -1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if int(self.times[mid]) <= target:
+                found = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return found
+
+
 def parse_level(
     level: Mapping[str, Any],
     *,
@@ -285,6 +367,12 @@ def parse_level(
         for key in _ATTR_KEYS
         if key in level and level[key] is not None
     }
+    if family == BOS:
+        # The evaluator must tell a BOS from a CHoCH, and internal from external;
+        # the payload encodes both in the leading token of ``type``.
+        kind, internal = _bos_kind(level.get("type"))
+        attrs["kind"] = kind
+        attrs["internal"] = internal
 
     return LevelRecord(
         level_key=level_key,
@@ -334,6 +422,37 @@ def parse_payload(
     )
 
 
+def parse_candles(
+    payload: Mapping[str, Any],
+    *,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+) -> Bars:
+    """Turn an ``/api/candles`` payload into a :class:`Bars`.
+
+    The endpoint shape is ``{"symbol", "timeframe", "candles": [{time, open,
+    high, low, close, volume}]}`` with ``time`` in unix seconds. ``volume`` is
+    ignored (see :class:`Bars`). Rows missing a ``time`` are dropped and the rest
+    are sorted ascending, so a ``Bars`` is always safe for
+    :meth:`Bars.index_at_or_before`.
+    """
+    sym = str(payload.get("symbol") or symbol or "")
+    tf = str(payload.get("timeframe") or timeframe or "")
+    rows = sorted(
+        (row for row in (payload.get("candles") or []) if row.get("time") is not None),
+        key=lambda row: int(row["time"]),
+    )
+    return Bars(
+        symbol=sym,
+        timeframe=tf,
+        times=[int(row["time"]) for row in rows],
+        open=[float(row.get("open", 0.0) or 0.0) for row in rows],
+        high=[float(row.get("high", 0.0) or 0.0) for row in rows],
+        low=[float(row.get("low", 0.0) or 0.0) for row in rows],
+        close=[float(row.get("close", 0.0) or 0.0) for row in rows],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The feed
 # --------------------------------------------------------------------------- #
@@ -343,10 +462,21 @@ Provider = Callable[..., Mapping[str, Any]]
 
 
 class Feed:
-    """Read-only access to the indicator suite for one or more timeframes."""
+    """Read-only access to the indicator suite for one or more timeframes.
 
-    def __init__(self, provider: Optional[Provider] = None):
+    Two independent seams: ``provider`` serves levels (``/api/indicators``) and
+    ``candles_provider`` serves OHLC bars (``/api/candles``). Either can be
+    injected; both default to the lazy live bridge, so ``Feed(provider=...)``
+    keeps working exactly as before.
+    """
+
+    def __init__(
+        self,
+        provider: Optional[Provider] = None,
+        candles_provider: Optional[Provider] = None,
+    ):
         self._provider = provider or default_provider()
+        self._candles_provider = candles_provider or default_candles_provider()
 
     def snapshot(
         self,
@@ -390,6 +520,26 @@ class Feed:
         """Re-resolve a level by key (a pin surviving a recomputation)."""
         return self.snapshot(symbol, timeframe, **kw).by_key(level_key)
 
+    def bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        *,
+        bars: int = 300,
+        **provider_kwargs: Any,
+    ) -> Bars:
+        """OHLC bars for ``(symbol, timeframe)`` — the evaluator's clock."""
+        tf = validate_timeframe(str(timeframe))
+        payload = self._candles_provider(
+            symbol=symbol,
+            timeframe=tf,
+            bars=int(bars),
+            **provider_kwargs,
+        )
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"candles provider returned {type(payload).__name__}, expected a mapping")
+        return parse_candles(payload, symbol=symbol, timeframe=tf)
+
 
 def _show_flags(families: Optional[Sequence[str]]) -> Dict[str, bool]:
     """Translate a wanted family set into the endpoint's ``show_*`` flags."""
@@ -426,5 +576,27 @@ def default_provider() -> Provider:
             bars=bars,
             **_show_flags(families),
         )
+
+    return _provider
+
+
+def default_candles_provider() -> Provider:
+    """The live candles provider: ``/api/candles``, imported lazily.
+
+    Same discipline as :func:`default_provider` — the ``server`` import lives
+    inside the closure so importing :mod:`agentic.feed` never drags in FastAPI or
+    the MT5 loader.
+    """
+
+    def _provider(
+        *,
+        symbol: str,
+        timeframe: str,
+        bars: int = 300,
+        **_: Any,
+    ) -> Mapping[str, Any]:
+        from server import get_candles  # lazy, deliberate (see module docstring)
+
+        return get_candles(symbol=symbol, timeframe=timeframe, bars=bars)
 
     return _provider

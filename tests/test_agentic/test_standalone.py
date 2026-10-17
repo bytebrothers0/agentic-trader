@@ -38,7 +38,14 @@ BANNED_LIBS = {
 }
 
 #: Modules that must import nothing from the running system, at any depth.
-PURE_MODULES = ("models.py", "conditions.py", "store.py", "crt_strategy.py", "__init__.py")
+PURE_MODULES = (
+    "models.py",
+    "conditions.py",
+    "store.py",
+    "crt_strategy.py",
+    "subscriptions.py",
+    "__init__.py",
+)
 #: The single sanctioned bridge. It may reach into the system, but only lazily.
 BRIDGE_MODULES = ("feed.py",)
 
