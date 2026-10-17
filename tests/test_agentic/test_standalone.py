@@ -45,6 +45,7 @@ PURE_MODULES = (
     "crt_strategy.py",
     "subscriptions.py",
     "watchdog.py",
+    "lookup.py",
     "__init__.py",
 )
 #: The single sanctioned bridge. It may reach into the system, but only lazily.
@@ -121,3 +122,22 @@ def test_the_package_exposes_its_surface():
     assert agentic.Feed is not None
     assert agentic.LevelRecord is not None
     assert "crt" in agentic.REQUIRED_FAMILIES
+    # phase 3 wiring: the renderer + manifest and the numeric lookup are public.
+    assert agentic.Renderer is not None
+    assert agentic.TagEntry is not None
+    assert agentic.RenderResult is not None
+    assert agentic.level_lookup is not None
+    assert agentic.LookupRecord is not None
+
+
+def test_renderer_imports_the_vision_stack_lazily():
+    # The renderer is not pure — it needs matplotlib and PIL — but importing
+    # ``agentic`` must stay cheap, so those imports live inside functions.
+    tree = ast.parse(_files()["renderer.py"].read_text(encoding="utf-8"))
+    module_level = set(_module_level_imports(tree))
+    assert "matplotlib" not in module_level
+    assert "PIL" not in module_level
+    # ...but the renderer must actually use them, or it is not rendering at all.
+    deep = set(_all_imports(tree))
+    assert "matplotlib" in deep, "renderer.py no longer uses matplotlib"
+    assert "PIL" in deep, "renderer.py no longer uses PIL"

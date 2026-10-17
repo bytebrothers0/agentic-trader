@@ -124,3 +124,47 @@ def sub(condition, params=None, *, kind="watch", one_shot=True, sub_id="sub_1"):
         one_shot=one_shot,
         state=SubscriptionState.ARMED,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Render scene (spec phase 3)
+# --------------------------------------------------------------------------- #
+
+def render_scene():
+    """A deterministic ``(snapshot, bars, pins, thesis_key)`` scene to render.
+
+    Gold-like prices around 4150 on M15: a live FVG with a box, a BOS, and a CRT
+    range. The pin is an H2 FVG — deliberately *not* in the M15 snapshot — so the
+    renderer has to merge, dedupe and mark species correctly.
+    """
+    start = ts(day(16, 12))
+    rows = []
+    price = 4150.0
+    for i in range(40):
+        o = price
+        c = price + (2.0 if i % 3 else -1.5)
+        h = max(o, c) + 1.0
+        low = min(o, c) - 1.0
+        rows.append((start + i * 900, o, h, low, c))
+        price = c
+
+    bars = series(rows, symbol="XAUUSDm", timeframe="M15")
+    snap = snapshot(
+        [
+            level("fvg", type="FVG (BULLISH)", price=4160.0, time=start, end_kind="active",
+                  box_top=4162.0, box_bottom=4158.0, desc="FVG bullish 4158-4162"),
+            level("bos", type="BOS (BEARISH)", price=4145.0, time=start + 900, end_kind="active"),
+            level("crt", type="BEARISH (CLASSIC)", price=4170.0, time=start + 1800,
+                  end_kind="active", range_high=4172.0, range_low=4166.0, target=4160.0),
+        ],
+        symbol="XAUUSDm", timeframe="M15", price=4155.0, atr=5.0,
+    )
+    pin_snap = snapshot(
+        [
+            level("fvg", type="FVG (BEARISH)", price=4180.0, time=start, end_kind="active",
+                  box_top=4183.0, box_bottom=4178.0, desc="H2 FVG bearish 4178-4183"),
+        ],
+        symbol="XAUUSDm", timeframe="H2", price=4155.0, atr=12.0,
+    )
+    pins = [pin_snap.levels[0]]
+    return snap, bars, pins, snap.levels[0].level_key

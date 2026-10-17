@@ -36,3 +36,7 @@ Thumbs.db
 
 # Scratch / embedded repos (kept out to avoid broken submodule gitlinks)
 /temp/
+
+# Agentic runtime output (state + rendered PNGs are never source)
+/agentic/state/
+/agentic/renders/

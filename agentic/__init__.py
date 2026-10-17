@@ -10,14 +10,18 @@ Phase 2 (part A): OHLC ``Bars`` on the feed, and ``subscriptions.py``, the
 deterministic, edge-triggered condition evaluator the Watchdog will drive.
 Phase 2 (part B): ``watchdog.py``, the LLM-free loop that drives the evaluator,
 retires what fired and coalesces a burst of events into one turn.
+Phase 3: ``lookup.py``, the numeric ground truth for anything the agent saw, and
+``renderer.py``, the deterministic server-side PNG render plus its tag manifest.
 
 The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
-``subscriptions``, ``watchdog`` — imports nothing from the running system.
-``feed`` is the single sanctioned bridge, and it reaches the indicator layer only
-lazily, so importing this package stays cheap. Nothing here places an order
+``subscriptions``, ``watchdog``, ``lookup`` — imports nothing from the running
+system. ``feed`` is the single sanctioned bridge, and it reaches the indicator
+layer only lazily, so importing this package stays cheap. ``renderer`` is the one
+module that needs the vision stack, and it imports ``matplotlib``/``PIL`` inside
+its functions so the package import stays cheap too. Nothing here places an order
 (``mode=propose`` throughout), and nothing caches detector output in the store:
-levels are recomputed on every read. The agent loop, the renderer, the panel and
-the LLM remain later phases.
+levels are recomputed on every read. The agent loop, the panel and the LLM remain
+later phases.
 """
 from __future__ import annotations
 
@@ -50,6 +54,7 @@ from agentic.feed import (
     parse_payload,
     status_of,
 )
+from agentic.lookup import LookupRecord, LookupResult, level_lookup
 from agentic.models import (
     SPEC_VERSION,
     AgentMeta,
@@ -69,6 +74,7 @@ from agentic.models import (
     TurnRecord,
     View,
 )
+from agentic.renderer import FAMILY_INITIALS, RenderResult, Renderer, TagEntry
 from agentic.store import (
     CapExceeded,
     ContextStore,
@@ -103,6 +109,7 @@ __all__ = [
     "ContextStore",
     "CrtAnalysis",
     "CrtPlan",
+    "FAMILY_INITIALS",
     "Feed",
     "FeedSnapshot",
     "FireResult",
@@ -114,17 +121,22 @@ __all__ = [
     "LeashExceeded",
     "LevelRecord",
     "LevelStatus",
+    "LookupRecord",
+    "LookupResult",
     "OPTIONAL_FAMILIES",
     "PRICE_CHECK_S",
     "Proposal",
     "ProposalStatus",
     "REQUIRED_FAMILIES",
+    "RenderResult",
+    "Renderer",
     "ScanResult",
     "StoreError",
     "StoreState",
     "Subscription",
     "SubscriptionKind",
     "SubscriptionState",
+    "TagEntry",
     "Thesis",
     "Trigger",
     "TurnRecord",
@@ -141,6 +153,7 @@ __all__ = [
     "event_time",
     "family_of",
     "find_confirmation",
+    "level_lookup",
     "parse_candles",
     "parse_level",
     "parse_payload",
