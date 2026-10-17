@@ -18,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=15" />
+  <link rel="stylesheet" href="/static/style.css?v=16" />
 </head>
 <body class="dark-theme">
   
@@ -101,6 +101,9 @@
       </button>
       <button class="action-btn" id="btnSettings" title="Bot Settings">
         <i data-lucide="settings"></i>
+      </button>
+      <button class="action-btn" id="btnAgent" title="Agent (panel & chat)">
+        <i data-lucide="bot"></i>
       </button>
       <a class="action-btn" href="/backtest" title="Backtest review (journal replay)" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
         <i data-lucide="flag"></i>
@@ -458,14 +461,116 @@
       <span class="badge" id="modulesCountBadge">0 on</span>
     </div>
     <div class="settings-actions">
-      <button class="mode-pill" id="btnModulesAll">Enable all</button>
-      <button class="mode-pill" id="btnModulesNone">Disable all</button>
+      <button class="action-pill" id="btnModulesAll">Enable all</button>
+      <button class="action-pill" id="btnModulesNone">Disable all</button>
     </div>
     <div class="modules-list" id="modulesList">
       <div class="empty-state">Loading modules...</div>
     </div>
   </aside>
 
-  <script src="/static/app.js?v=23"></script>
+  <!-- Agent drawer: reads the agent store (thesis, subscriptions, turns) — never duplicates it -->
+  <div class="settings-backdrop" id="agentBackdrop"></div>
+  <aside class="settings-drawer agent-drawer" id="agentDrawer">
+    <div class="drawer-header">
+      <h3><i data-lucide="bot"></i> Agent</h3>
+      <button class="action-btn" id="btnCloseAgent" title="Close agent panel">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <p class="section-hint">Reads the agent store. Pins are <code>kind=pin</code> subscriptions.</p>
+
+    <!-- Status + kill switch -->
+    <div class="agent-status-row">
+      <label class="switch" title="Enable / disable the agent (kill switch)">
+        <input type="checkbox" id="agentEnableToggle" />
+        <span class="slider round"></span>
+      </label>
+      <div class="agent-status-meta">
+        <span class="agent-status-line">
+          <span class="agent-mode" id="agentMode">—</span>
+          <span class="agent-dot" aria-hidden="true">·</span>
+          <span id="agentModel">—</span>
+        </span>
+        <span class="agent-status-line">
+          <span class="agent-dot" id="agentRunDot"></span>
+          <span id="agentRunState">unknown</span>
+        </span>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="action-pill" id="btnAgentPause">Pause</button>
+      <button class="action-pill" id="btnAgentRunNow">Run now</button>
+    </div>
+    <div class="agent-error" id="agentError" hidden></div>
+
+    <!-- View -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="eye"></i> VIEW</span>
+      <div class="agent-kv" id="agentView">—</div>
+    </div>
+
+    <!-- Thesis -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="quote"></i> THESIS</span>
+      <div id="agentThesis"><div class="empty-state">No thesis yet.</div></div>
+    </div>
+
+    <!-- Open subscriptions (pins are kind=pin) -->
+    <div class="agent-section">
+      <div class="section-header-bar">
+        <span class="section-label"><i data-lucide="radar"></i> OPEN SUBSCRIPTIONS</span>
+        <span class="badge" id="agentSubsCountBadge">0</span>
+      </div>
+      <div class="agent-subs" id="agentSubs"><div class="empty-state">No open subscriptions.</div></div>
+    </div>
+
+    <!-- Pins (dedicated projection: level_key / status / note) -->
+    <div class="agent-section">
+      <div class="section-header-bar">
+        <span class="section-label"><i data-lucide="pin"></i> PINS</span>
+        <span class="badge" id="agentPinsCountBadge">0</span>
+      </div>
+      <div class="agent-pins" id="agentPins"><div class="empty-state">No pins.</div></div>
+    </div>
+
+    <!-- Proposals -->
+    <div class="agent-section">
+      <div class="section-header-bar">
+        <span class="section-label"><i data-lucide="file-text"></i> PROPOSALS</span>
+        <span class="badge" id="agentProposalsCountBadge">0</span>
+      </div>
+      <div class="agent-proposals" id="agentProposals"><div class="empty-state">No proposals.</div></div>
+    </div>
+
+    <!-- Budget position -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="gauge"></i> BUDGET</span>
+      <div class="agent-kv agent-budget" id="agentBudget">—</div>
+    </div>
+
+    <!-- Recent turns -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="history"></i> RECENT TURNS</span>
+      <div class="agent-turns" id="agentTurns"><div class="empty-state">No turns logged.</div></div>
+    </div>
+
+    <!-- Last render -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="image"></i> LAST RENDER</span>
+      <div id="agentRender"><div class="empty-state">No render yet.</div></div>
+    </div>
+
+    <!-- Chat: starts a `request` turn -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="message-square"></i> CHAT — REQUEST TURN</span>
+      <div class="agent-chat-row">
+        <input type="text" id="agentChatInput" class="agent-chat-input" placeholder="Ask the agent…" autocomplete="off" />
+        <button class="action-pill" id="btnAgentSend">Send</button>
+      </div>
+    </div>
+  </aside>
+
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

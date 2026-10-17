@@ -19,6 +19,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const TL_ENABLED = true;
   const LIQ_ENABLED = true;
   const CRT_ENABLED = true;
+  // Agent autostart default — mirrors config/settings.py's AGENT_ENABLED gate.
+  // false means the runtime is armed only by the panel toggle / settings tab,
+  // never on page load. (The store gate stays authoritative server-side.)
+  const AGENT_ENABLED = false;
 
   if (window.lucide) {
     lucide.createIcons();
@@ -88,9 +92,38 @@ document.addEventListener("DOMContentLoaded", () => {
   const modulesCountBadge = document.getElementById("modulesCountBadge");
   const btnModulesAll = document.getElementById("btnModulesAll");
   const btnModulesNone = document.getElementById("btnModulesNone");
+  // Agent panel + chat (all optional — the drawer degrades gracefully if absent)
+  const btnAgent = document.getElementById("btnAgent");
+  const agentDrawer = document.getElementById("agentDrawer");
+  const agentBackdrop = document.getElementById("agentBackdrop");
+  const btnCloseAgent = document.getElementById("btnCloseAgent");
+  const agentEnableToggle = document.getElementById("agentEnableToggle");
+  const agentMode = document.getElementById("agentMode");
+  const agentModel = document.getElementById("agentModel");
+  const agentRunDot = document.getElementById("agentRunDot");
+  const agentRunState = document.getElementById("agentRunState");
+  const btnAgentPause = document.getElementById("btnAgentPause");
+  const btnAgentRunNow = document.getElementById("btnAgentRunNow");
+  const agentError = document.getElementById("agentError");
+  const agentView = document.getElementById("agentView");
+  const agentThesis = document.getElementById("agentThesis");
+  const agentSubs = document.getElementById("agentSubs");
+  const agentSubsCountBadge = document.getElementById("agentSubsCountBadge");
+  const agentPins = document.getElementById("agentPins");
+  const agentPinsCountBadge = document.getElementById("agentPinsCountBadge");
+  const agentProposals = document.getElementById("agentProposals");
+  const agentProposalsCountBadge = document.getElementById("agentProposalsCountBadge");
+  const agentBudget = document.getElementById("agentBudget");
+  const agentTurns = document.getElementById("agentTurns");
+  const agentRender = document.getElementById("agentRender");
+  const agentChatInput = document.getElementById("agentChatInput");
+  const btnAgentSend = document.getElementById("btnAgentSend");
   const connectionStatus = document.getElementById("connectionStatus");
   const connectionStatusText = connectionStatus ? connectionStatus.querySelector(".status-text") : null;
-  const modePills = document.querySelectorAll(".mode-pill");
+  // Only real chart-mode pills carry data-mode. Drawer action buttons (settings
+  // "Enable all"/"Disable all", agent Pause/Run now/Send) use .action-pill so the
+  // binding below can never touch chart-mode state.
+  const modePills = document.querySelectorAll(".mode-pill[data-mode]");
   const segButtons = document.querySelectorAll(".seg-btn");
   
   const toggleSR = document.getElementById("toggleSR");
@@ -1217,11 +1250,475 @@ document.addEventListener("DOMContentLoaded", () => {
   if (brandSection) brandSection.addEventListener("click", openSettings);
   if (btnCloseSettings) btnCloseSettings.addEventListener("click", closeSettings);
   if (settingsBackdrop) settingsBackdrop.addEventListener("click", closeSettings);
+  // Single Escape handler for both drawers — prefer whichever is open so one
+  // press never tears down both at once.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeSettings();
+    if (e.key !== "Escape") return;
+    if (agentDrawer && agentDrawer.classList.contains("open")) {
+      closeAgent();
+    } else if (settingsDrawer && settingsDrawer.classList.contains("open")) {
+      closeSettings();
+    }
   });
   if (btnModulesAll) btnModulesAll.addEventListener("click", () => setAllModules(true));
   if (btnModulesNone) btnModulesNone.addEventListener("click", () => setAllModules(false));
+
+  // =========================================================================
+  // Agent Panel + Chat — reads the store, never duplicates it. Every section
+  // is rendered from GET /api/agent/panel. Polling runs only while the drawer
+  // is open, so a closed panel costs nothing.
+  // =========================================================================
+
+  let agentPollTimer = null;
+  let agentLastPanel = null;
+
+  function openAgent() {
+    if (agentDrawer) agentDrawer.classList.add("open");
+    if (agentBackdrop) agentBackdrop.classList.add("open");
+    // Pre-fetch placeholder: AGENT_ENABLED mirrors config/settings.py's AGENT_ENABLED
+    // autostart default, so the kill switch and status row are not blank before the
+    // first GET. The /api/agent/panel fetch below corrects them to the store gate.
+    if (!agentLastPanel) {
+      if (agentEnableToggle) agentEnableToggle.checked = AGENT_ENABLED;
+      renderAgentStatus({ enabled: AGENT_ENABLED, running: false, paused: false });
+    }
+    fetchAgentPanel();
+    if (!agentPollTimer) {
+      agentPollTimer = setInterval(() => {
+        if (agentDrawer && agentDrawer.classList.contains("open")) fetchAgentPanel();
+      }, 10000);
+    }
+  }
+
+  function closeAgent() {
+    if (agentDrawer) agentDrawer.classList.remove("open");
+    if (agentBackdrop) agentBackdrop.classList.remove("open");
+    if (agentPollTimer) {
+      clearInterval(agentPollTimer);
+      agentPollTimer = null;
+    }
+  }
+
+  function agentShowError(message) {
+    if (!agentError) return;
+    agentError.textContent = message || "";
+    agentError.hidden = !message;
+  }
+
+  // Server-supplied seconds_remaining only — never the browser clock.
+  function formatCountdown(seconds) {
+    const n = Number(seconds);
+    if (seconds === null || seconds === undefined || !isFinite(n)) return "—";
+    const total = Math.max(0, Math.floor(n));
+    const d = Math.floor(total / 86400);
+    const h = Math.floor((total % 86400) / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (x) => String(x).padStart(2, "0");
+    if (d > 0) return `${d}d ${pad(h)}h`;
+    if (h > 0) return `${h}h ${pad(m)}m`;
+    if (m > 0) return `${m}m ${pad(s)}s`;
+    return `${s}s`;
+  }
+
+  function agentKvRow(key, value, container) {
+    if (!container) return;
+    const row = document.createElement("div");
+    row.className = "agent-kv-row";
+    const k = document.createElement("span");
+    k.className = "agent-kv-key";
+    k.textContent = key;
+    const v = document.createElement("span");
+    v.className = "agent-kv-val";
+    v.textContent = value == null || value === "" ? "—" : String(value);
+    row.appendChild(k);
+    row.appendChild(v);
+    container.appendChild(row);
+  }
+
+  function renderAgentView(view) {
+    if (!agentView) return;
+    const v = view || {};
+    const families = Array.isArray(v.families) ? v.families.join(", ") : (v.families || "");
+    agentView.textContent = "";
+    agentKvRow("symbol", v.symbol, agentView);
+    agentKvRow("timeframe", v.timeframe, agentView);
+    agentKvRow("bars", v.bars, agentView);
+    agentKvRow("families", families, agentView);
+  }
+
+  function renderAgentThesis(thesis) {
+    if (!agentThesis) return;
+    const t = thesis || {};
+    const hasThesis = !!(t.storyline || (t.bias && t.bias !== "none") || t.invalidation);
+    if (!hasThesis) {
+      agentThesis.innerHTML = `<div class="empty-state">No thesis yet.</div>`;
+      return;
+    }
+    agentThesis.textContent = "";
+    const head = document.createElement("div");
+    head.className = "agent-row-head";
+    const bias = document.createElement("span");
+    bias.className = "agent-bias";
+    bias.textContent = t.bias || "none";
+    head.appendChild(bias);
+    if (t.confidence != null && !isNaN(Number(t.confidence))) {
+      const conf = document.createElement("span");
+      conf.className = "agent-confidence";
+      conf.textContent = `${Math.round(Number(t.confidence) * 100)}%`;
+      head.appendChild(conf);
+    }
+    agentThesis.appendChild(head);
+    const story = document.createElement("p");
+    story.className = "agent-storyline";
+    story.textContent = t.storyline || "—";
+    agentThesis.appendChild(story);
+    if (t.invalidation) {
+      const inv = document.createElement("p");
+      inv.className = "agent-invalidation";
+      inv.textContent = `Invalidation: ${t.invalidation}`;
+      agentThesis.appendChild(inv);
+    }
+    if (t.updated_at) {
+      const up = document.createElement("span");
+      up.className = "agent-updated";
+      up.textContent = `updated ${t.updated_at}`;
+      agentThesis.appendChild(up);
+    }
+  }
+
+  function renderAgentSubs(subs) {
+    // Pins are rendered by renderAgentPins from the dedicated panel.pins projection,
+    // so drop kind==="pin" rows here to avoid showing the same pin twice.
+    const list = (Array.isArray(subs) ? subs : []).filter((s) => s.kind !== "pin");
+    if (agentSubsCountBadge) agentSubsCountBadge.textContent = String(list.length);
+    if (!agentSubs) return;
+    if (!list.length) {
+      agentSubs.innerHTML = `<div class="empty-state">No open subscriptions.</div>`;
+      return;
+    }
+    agentSubs.textContent = "";
+    list.forEach((sub) => {
+      const row = document.createElement("div");
+      row.className = "agent-row";
+      const head = document.createElement("div");
+      head.className = "agent-row-head";
+      const kind = document.createElement("span");
+      kind.className = "agent-kind";
+      kind.textContent = sub.kind || "watch";
+      const cond = document.createElement("span");
+      cond.className = "agent-cond";
+      cond.textContent = sub.condition || "";
+      const state = document.createElement("span");
+      state.className = "agent-state";
+      state.textContent = sub.state || "";
+      const rem = document.createElement("span");
+      rem.className = "agent-countdown";
+      rem.textContent = formatCountdown(sub.seconds_remaining);
+      head.appendChild(kind);
+      head.appendChild(cond);
+      head.appendChild(state);
+      head.appendChild(rem);
+      row.appendChild(head);
+      if (sub.summary) {
+        const sum = document.createElement("div");
+        sum.className = "agent-row-summary";
+        sum.textContent = sub.summary;
+        row.appendChild(sum);
+      }
+      agentSubs.appendChild(row);
+    });
+  }
+
+  function renderAgentPins(pins) {
+    const list = Array.isArray(pins) ? pins : [];
+    if (agentPinsCountBadge) agentPinsCountBadge.textContent = String(list.length);
+    if (!agentPins) return;
+    if (!list.length) {
+      agentPins.innerHTML = `<div class="empty-state">No pins.</div>`;
+      return;
+    }
+    agentPins.textContent = "";
+    list.forEach((pin) => {
+      const row = document.createElement("div");
+      row.className = "agent-row agent-row-pin";
+      const head = document.createElement("div");
+      head.className = "agent-row-head";
+      const kind = document.createElement("span");
+      kind.className = "agent-kind";
+      kind.textContent = "pin";
+      const level = document.createElement("span");
+      level.className = "agent-cond";
+      level.textContent = pin.level_key || "";
+      const state = document.createElement("span");
+      state.className = "agent-state";
+      state.textContent = pin.status || "";
+      head.appendChild(kind);
+      head.appendChild(level);
+      head.appendChild(state);
+      row.appendChild(head);
+      if (pin.note) {
+        const note = document.createElement("div");
+        note.className = "agent-row-summary";
+        note.textContent = pin.note;
+        row.appendChild(note);
+      }
+      agentPins.appendChild(row);
+    });
+  }
+
+  function renderAgentProposals(proposals) {
+    const list = Array.isArray(proposals) ? proposals : [];
+    if (agentProposalsCountBadge) agentProposalsCountBadge.textContent = String(list.length);
+    if (!agentProposals) return;
+    if (!list.length) {
+      agentProposals.innerHTML = `<div class="empty-state">No proposals.</div>`;
+      return;
+    }
+    agentProposals.textContent = "";
+    list.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "agent-row";
+      const head = document.createElement("div");
+      head.className = "agent-row-head";
+      const bias = document.createElement("span");
+      bias.className = "agent-bias";
+      bias.textContent = p.bias || "none";
+      const setup = document.createElement("span");
+      setup.className = "agent-cond";
+      setup.textContent = p.setup || "";
+      const state = document.createElement("span");
+      state.className = "agent-state";
+      state.textContent = p.status || "";
+      head.appendChild(bias);
+      head.appendChild(setup);
+      head.appendChild(state);
+      row.appendChild(head);
+      const parts = [];
+      if (p.entry != null) parts.push(`entry ${p.entry}`);
+      if (p.sl != null) parts.push(`SL ${p.sl}`);
+      if (p.tp != null) parts.push(`TP ${p.tp}`);
+      const detail = document.createElement("div");
+      detail.className = "agent-row-summary";
+      detail.textContent = parts.join(" · ") || (p.reason || "");
+      row.appendChild(detail);
+      agentProposals.appendChild(row);
+    });
+  }
+
+  function renderAgentBudget(budget) {
+    if (!agentBudget) return;
+    const b = budget || {};
+    const spend = b.spend_usd_today != null ? `$${Number(b.spend_usd_today).toFixed(4)}` : "—";
+    agentBudget.textContent = "";
+    agentKvRow("turns today", b.turns_today, agentBudget);
+    agentKvRow("turns this hour", b.turns_this_hour, agentBudget);
+    agentKvRow("renders today", b.renders_today, agentBudget);
+    agentKvRow("spend today", spend, agentBudget);
+    agentKvRow("last turn", b.last_turn_at, agentBudget);
+  }
+
+  function renderAgentTurns(turns) {
+    const list = Array.isArray(turns) ? turns : [];
+    if (!agentTurns) return;
+    if (!list.length) {
+      agentTurns.innerHTML = `<div class="empty-state">No turns logged.</div>`;
+      return;
+    }
+    agentTurns.textContent = "";
+    list.forEach((t) => {
+      const row = document.createElement("div");
+      row.className = "agent-turn";
+      const head = document.createElement("div");
+      head.className = "agent-row-head";
+      const trig = document.createElement("span");
+      trig.className = "agent-trigger";
+      trig.textContent = t.trigger || "";
+      const at = document.createElement("span");
+      at.className = "agent-updated";
+      at.textContent = t.started_at || "";
+      head.appendChild(trig);
+      head.appendChild(at);
+      row.appendChild(head);
+      const out = document.createElement("div");
+      out.className = "agent-row-summary";
+      out.textContent = t.summary || "";
+      row.appendChild(out);
+      agentTurns.appendChild(row);
+    });
+  }
+
+  function renderAgentRender(lastRender) {
+    if (!agentRender) return;
+    const lr = lastRender || {};
+    if (!lr.render_id) {
+      agentRender.innerHTML = `<div class="empty-state">No render yet.</div>`;
+      return;
+    }
+    agentRender.textContent = "";
+    const img = document.createElement("img");
+    img.className = "agent-render-img";
+    img.loading = "lazy";
+    img.alt = `Render ${lr.render_id}`;
+    img.src = `/api/agent/render?render_id=${encodeURIComponent(lr.render_id)}`;
+    agentRender.appendChild(img);
+    const m = lr.manifest || {};
+    const meta = document.createElement("span");
+    meta.className = "agent-updated";
+    meta.textContent = [m.symbol, m.timeframe, m.rendered_at].filter(Boolean).join(" · ") || lr.render_id;
+    agentRender.appendChild(meta);
+  }
+
+  function renderAgentStatus(panel) {
+    const enabled = !!panel.enabled;
+    const running = !!panel.running;
+    const paused = !!panel.paused;
+    if (agentEnableToggle) agentEnableToggle.checked = enabled;
+    if (agentMode) agentMode.textContent = panel.mode || "—";
+    if (agentModel) agentModel.textContent = panel.model || "—";
+    let label = "stopped";
+    let cls = "agent-off";
+    if (paused) {
+      label = "paused";
+      cls = "agent-paused";
+    } else if (running) {
+      label = "running";
+      cls = "agent-on";
+    } else if (enabled) {
+      label = "armed (idle)";
+      cls = "agent-on";
+    }
+    if (agentRunState) agentRunState.textContent = label;
+    if (agentRunDot) agentRunDot.className = `agent-dot ${cls}`;
+    if (btnAgentPause) btnAgentPause.textContent = paused ? "Resume" : "Pause";
+  }
+
+  function renderAgentPanel(panel) {
+    renderAgentStatus(panel);
+    renderAgentView(panel.view);
+    renderAgentThesis(panel.thesis);
+    renderAgentSubs(panel.subscriptions);
+    renderAgentPins(panel.pins);
+    renderAgentProposals(panel.proposals);
+    renderAgentBudget(panel.budget);
+    renderAgentTurns(panel.recent_turns);
+    renderAgentRender(panel.last_render);
+  }
+
+  async function fetchAgentPanel() {
+    try {
+      const res = await fetch("/api/agent/panel");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const panel = await res.json();
+      agentLastPanel = panel;
+      renderAgentPanel(panel);
+      agentShowError("");
+    } catch (err) {
+      renderAgentEmpty(err);
+    }
+  }
+
+  function renderAgentEmpty(err) {
+    const msg = "Agent panel unavailable.";
+    if (agentThesis) agentThesis.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentSubs) agentSubs.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentPins) agentPins.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentProposals) agentProposals.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentTurns) agentTurns.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentRender) agentRender.innerHTML = `<div class="empty-state">${msg}</div>`;
+    if (agentView) agentView.textContent = "—";
+    if (agentBudget) agentBudget.textContent = "—";
+    // Reset the status chrome too so a failed poll shows a coherent empty panel
+    // rather than stale mode/model/run-state and counts.
+    if (agentMode) agentMode.textContent = "—";
+    if (agentModel) agentModel.textContent = "—";
+    if (agentRunState) agentRunState.textContent = "unknown";
+    if (agentRunDot) agentRunDot.className = "agent-dot";
+    if (agentEnableToggle) agentEnableToggle.checked = AGENT_ENABLED;
+    if (agentSubsCountBadge) agentSubsCountBadge.textContent = "0";
+    if (agentPinsCountBadge) agentPinsCountBadge.textContent = "0";
+    if (agentProposalsCountBadge) agentProposalsCountBadge.textContent = "0";
+    if (btnAgentPause) btnAgentPause.textContent = "Pause";
+    agentShowError(`${msg} ${err && err.message ? `(${err.message})` : ""}`.trim());
+  }
+
+  async function agentSetEnabled(enabled, input) {
+    try {
+      const res = await fetch(`/api/agent/${enabled ? "enable" : "disable"}`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchAgentPanel();
+      // Enabling/disabling the agent syncs the registry entry server-side, so the
+      // Settings-tab module row and the dashboard entry zones go stale otherwise.
+      fetchModules();
+      refreshData();
+    } catch (err) {
+      if (input) input.checked = !enabled; // revert the optimistic toggle
+      agentShowError(`Could not ${enabled ? "enable" : "disable"} the agent: ${err.message}`);
+    }
+  }
+
+  async function agentTogglePause() {
+    const paused = !!(agentLastPanel && agentLastPanel.paused);
+    const action = paused ? "resume" : "pause";
+    try {
+      const res = await fetch(`/api/agent/${action}`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Drive the label/status from the POST response so it flips even if the
+      // follow-up panel refresh below fails.
+      const data = await res.json().catch(() => null);
+      if (data && data.status) renderAgentStatus(data.status);
+      await fetchAgentPanel();
+    } catch (err) {
+      agentShowError(`Could not ${action} the agent: ${err.message}`);
+    }
+  }
+
+  async function agentRunNow(message) {
+    const text = (message || "").trim();
+    try {
+      const url = text
+        ? `/api/agent/run-now?message=${encodeURIComponent(text)}`
+        : "/api/agent/run-now";
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.ok === false) {
+        const outcome = data.outcome || {};
+        const reason = outcome.reason || "the turn was refused";
+        agentShowError(`Turn not run: ${reason}`);
+      } else {
+        agentShowError("");
+      }
+      await fetchAgentPanel();
+    } catch (err) {
+      agentShowError(`Run failed: ${err.message}`);
+    }
+  }
+
+  if (btnAgent) btnAgent.addEventListener("click", openAgent);
+  if (btnCloseAgent) btnCloseAgent.addEventListener("click", closeAgent);
+  if (agentBackdrop) agentBackdrop.addEventListener("click", closeAgent);
+  if (agentEnableToggle) {
+    agentEnableToggle.addEventListener("change", () =>
+      agentSetEnabled(agentEnableToggle.checked, agentEnableToggle)
+    );
+  }
+  if (btnAgentPause) btnAgentPause.addEventListener("click", agentTogglePause);
+  if (btnAgentRunNow) btnAgentRunNow.addEventListener("click", () => agentRunNow(""));
+  if (btnAgentSend) {
+    btnAgentSend.addEventListener("click", () => {
+      agentRunNow(agentChatInput ? agentChatInput.value : "");
+      if (agentChatInput) agentChatInput.value = "";
+    });
+  }
+  if (agentChatInput) {
+    agentChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (btnAgentSend) btnAgentSend.click();
+      }
+    });
+  }
 
   modePills.forEach((pill) => {
     pill.addEventListener("click", () => {
