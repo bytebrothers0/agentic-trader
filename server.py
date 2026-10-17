@@ -28,7 +28,7 @@ from config.settings import (
     OB_USE_BODY, OB_REQUIRE_FVG, OB_REQUIRE_SWEEP, OB_DISPLACEMENT_MULT,
     OB_MARK_DECISIONAL,
     TS_MIN_WICK_BODY_FRAC, TS_MIN_WICK_RANGE_FRAC,
-    TL_ENABLED, TL_PIVOT_LENGTH, TL_SLOPE_MULT, TL_MAX_LINES,
+    TL_ENABLED, TL_PIVOT_LENGTH, TL_PIVOT_WINDOWS, TL_SLOPE_MULT, TL_MAX_LINES,
     TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
     TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
@@ -457,6 +457,7 @@ def get_indicators(
         # trendline-liquidity sweeps.
         if tl_on:
             tl_det = TLDetector(df, pivot_length=TL_PIVOT_LENGTH,
+                                pivot_windows=TL_PIVOT_WINDOWS,
                                 slope_mult=TL_SLOPE_MULT,
                                 max_lines=TL_MAX_LINES,
                                 retest_bars=TL_RETEST_BARS,

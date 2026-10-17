@@ -250,3 +250,29 @@ def test_max_lines_cap():
     lines = TLDetector(_from_closes(THREE_CLOSES), pivot_length=2,
                        max_lines=1).detect_all()
     assert len([x for x in lines if x.side == TLSide.UPPER]) <= 1
+
+
+def test_default_window_is_single():
+    # Backward compatible: no pivot_windows -> one window from pivot_length.
+    det = TLDetector(_from_closes(ASC_CLOSES), pivot_length=2)
+    assert det.pivot_windows == (2,)
+
+
+def test_multi_scale_pivots_are_merged():
+    df = _from_closes(THREE_CLOSES)
+    det = TLDetector(df, pivot_length=5, pivot_windows=(2, 5))
+    assert det.pivot_windows == (2, 5)
+    c = df["close"].values
+    for is_high in (True, False):
+        expect = sorted(set(det._pivots_at(c, is_high, 2))
+                        | set(det._pivots_at(c, is_high, 5)))
+        assert det._pivots(c, is_high) == expect
+
+
+def test_min_anchor_gap_blocks_adjacent_apexes():
+    # Adjacent (gap < smallest window) apexes must never be connected.
+    det = TLDetector(_from_closes(DESC_CLOSES), pivot_length=2,
+                     pivot_windows=(2, 5))
+    assert det.min_anchor_gap == 2
+    for line in det.detect_all():
+        assert line.second_anchor_index - line.pivot_index >= det.min_anchor_gap

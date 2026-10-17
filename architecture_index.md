@@ -24,7 +24,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 ### 3.1 Config & Data
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `config/settings.py` | 206 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/BOS/FVG/IFVG/OB/TL/TS/XF). `INDICATORS_ENABLED=False` master switch L109. Alchemist params L118-130. |
+| `config/settings.py` | 222 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/BOS/FVG/IFVG/OB/TL/TS/XF). `INDICATORS_ENABLED=False` master switch L109. Alchemist params L118-130. |
 | `data/mt5_loader.py` | 154 | `MT5DataLoader` (L29). Symbol resolution (`_resolve_symbol` L64), `fetch_timeframe` (L108, unix `time` column for charts), `_resample` (L142, M45 = 3×M15), `fetch_all_timeframes` (L166). Thread-locked MT5 calls. |
 
 ### 3.2 Indicator Detectors (`indicators/`)
@@ -42,7 +42,7 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `bos_detector.py` | 167 | `BOSDetector` (L58) | BOS / CHoCH (Mxwll-style; external + internal I-BOS). |
 | `fvg_detector.py` | 257 | `FVGDetector` (L103) | FVG zones (LuxAlgo port) + IFVG inversion (`detect_ifvg` L189). A zone is mitigated on the **first wick into it** (MSNR fresh rule) — tracked on both (`FVGLevel.fresh` / `IFVGLevel.fresh`); the API shows **unmitigated (fresh) zones only**. |
 | `ob_detector.py` | 320 | `OBDetector` (L68) | Order Blocks + Breaker Blocks (LuxAlgo port + Luap status). |
-| `trendline_detector.py` | 456 | `TLDetector` (L121), `TLLine` (L53) | **Point-to-point trendlines through 2-3 close-price apexes**, any slope. `TLDetector` builds resistance from peak apexes / support from valley apexes (`role`), tags **channel pairs** (`channel_id`), **break-retest role flips** (`flipped`/`retest_role`), and **liquidity sweeps** (`swept`). Break = body close through; retest = far-side wick touch. Tolerances `tol_atr`/`channel_parallel_atr`/`sweep_atr`. |
+| `trendline_detector.py` | 483 | `TLDetector` (L121), `TLLine` (L53) | **Point-to-point trendlines through 2-3 close-price apexes**, any slope, using **multi-scale apex windows** (`pivot_windows`, default `(5, 14)`, merged). Builds resistance from peak apexes / support from valley apexes (`role`), tags **channel pairs** (`channel_id`), **break-retest role flips** (`flipped`/`retest_role`), and **liquidity sweeps** (`swept`). Break = body close through; retest = far-side wick touch. Tolerances `tol_atr`/`channel_parallel_atr`/`sweep_atr`. |
 | `xfactor_detector.py` | 400 | `XDetector` (L201), `detect_storyline` (L393), `detect_engulfing_zones` (L153), `XLevel` (L71) | **Key strategy piece**: trendline × SNR confluences (X-Factor), engulfing zones, HTF storyline chains. |
 
 ### 3.3 Strategy (`strategy/`)
@@ -140,4 +140,4 @@ AI layer (propose-only):
 - `web/app.js` duplicates the switches at top (L10-22) — keep in sync with `settings.py`.
 - `backtest/` journals (CSV) feed `/api/backtest/*`; label map in `server.py` `_journal_label` (L886).
 - Interpreter quirk on Windows: `start_live.py` re-execs into Python311.
-- Trendlines are built as lines **through close-price apexes** (`TL_TOL_ATR`, `TL_CHANNEL_PARALLEL_ATR`, `TL_SWEEP_ATR` in `config/settings.py`, passed to `TLDetector`). `TLLine.slope` is signed and `value_at()` projects it; `role` = support/resistance by anchor set; lines carry `channel_id`, `flipped`/`retest_role` and `swept`. The old mid-line channel (`TLChannel`) is removed. `slope_mult`/`body_pivots` are deprecated no-ops.
+- Trendlines are built as lines **through close-price apexes** using **multi-scale apex windows** (`TL_PIVOT_WINDOWS`, default `(5, 14)`, merged — small windows catch local channel swings, the large one the major swings) plus `TL_TOL_ATR`, `TL_CHANNEL_PARALLEL_ATR`, `TL_SWEEP_ATR` in `config/settings.py`, passed to `TLDetector`. `TLLine.slope` is signed and `value_at()` projects it; `role` = support/resistance by anchor set; lines carry `channel_id`, `flipped`/`retest_role` and `swept`. The old mid-line channel (`TLChannel`) is removed. `slope_mult`/`body_pivots` are deprecated no-ops.

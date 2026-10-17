@@ -185,6 +185,12 @@ OB_MARK_DECISIONAL = True
 # forward window for break-retest scan.
 TL_ENABLED = True
 TL_PIVOT_LENGTH = 14
+# Multi-scale apex windows: a close swing counts as an apex if it is the
+# extreme of ANY of these symmetric windows, and the results are merged.
+# Window 5 catches the local swings a channel is built from; window 14 keeps
+# the major swings. (A 3-bar window is deliberately avoided: it produces
+# short, steep noise segments that crowd out the meaningful lines.)
+TL_PIVOT_WINDOWS = (5, 14)
 TL_SLOPE_MULT = 1.0
 TL_MAX_LINES = 3
 TL_RETEST_BARS = 30

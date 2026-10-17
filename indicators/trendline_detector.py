@@ -36,7 +36,7 @@ from __future__ import annotations
 import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 
 class TLSide(Enum):
@@ -128,7 +128,12 @@ class TLDetector:
         OHLCV dataframe with columns: open, high, low, close.
         Index must be a DatetimeIndex.
     pivot_length : int
-        Symmetric fractal window for the close apexes. Default 14.
+        Primary symmetric fractal window for the close apexes. Default 14.
+        Also sets the minimum bar overlap for a channel pair.
+    pivot_windows : sequence of int, optional
+        Multi-scale apex windows. A swing qualifies if it is the extreme of
+        ANY window here; the results are merged. When omitted, a single
+        window `(pivot_length,)` is used (legacy behaviour).
     max_lines : int
         Most recent lines kept per side. Default 3.
     retest_bars : int
@@ -161,10 +166,20 @@ class TLDetector:
                  gap_atr_mult: float = 0.1,
                  tol_atr: float = 0.25,
                  channel_parallel_atr: float = 0.2,
-                 sweep_atr: float = 0.5):
+                 sweep_atr: float = 0.5,
+                 pivot_windows: Optional[Sequence[int]] = None):
         self._validate(df)
         self.df = df.copy()
         self.pivot_length = max(1, int(pivot_length))
+        # Multi-scale apex windows (merged). Default = the single legacy
+        # window so existing callers keep their exact behaviour.
+        if pivot_windows:
+            self.pivot_windows = tuple(
+                sorted({max(2, int(w)) for w in pivot_windows}))
+        else:
+            self.pivot_windows = (max(2, int(pivot_length)),)
+        # Never connect two apexes closer than the smallest window.
+        self.min_anchor_gap = max(2, min(self.pivot_windows))
         # Deprecated knobs, kept so old callers keep working.
         self.slope_mult = float(slope_mult)
         self.body_pivots = bool(body_pivots)
@@ -236,14 +251,20 @@ class TLDetector:
         i = 0
         while i < m - 1:
             p1, p2 = apexes[i], apexes[i + 1]
+            if p2 - p1 < self.min_anchor_gap:
+                i += 1
+                continue
             line = self._try_build(side, p1, p2, o, h, l, c, times, last,
                                    engulf)
             if line is None:
                 i += 1
                 continue
-            # Extend the run while the next apex lands on the current line.
+            # Extend the run while the next apex lands on the current line
+            # (a line carries at most 3 apexes).
             k = i + 1
-            while k + 1 < m and self._on_line(line, apexes[k + 1], c):
+            while (k + 1 < m and (k - i + 1) < 3
+                   and apexes[k + 1] - p1 >= self.min_anchor_gap
+                   and self._on_line(line, apexes[k + 1], c)):
                 cand = self._try_build(side, p1, apexes[k + 1], o, h, l, c,
                                        times, last, engulf)
                 if cand is None:
@@ -421,8 +442,15 @@ class TLDetector:
     # ------------------------------------------------------------------
 
     def _pivots(self, vals, is_high: bool) -> List[int]:
+        """Multi-scale strict fractal pivots, merged across all windows."""
+        out: set = set()
+        for L in self.pivot_windows:
+            out.update(self._pivots_at(vals, is_high, L))
+        return sorted(out)
+
+    def _pivots_at(self, vals, is_high: bool, L: int) -> List[int]:
         """Strict fractal pivots: extreme strictly beats every window bar."""
-        L, n = self.pivot_length, len(self.df)
+        n = len(self.df)
         out = []
         for i in range(L, n - L):
             window = list(vals[i - L:i]) + list(vals[i + 1:i + L + 1])
