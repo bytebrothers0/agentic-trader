@@ -175,7 +175,14 @@ def subscription_summary(sub: Subscription) -> str:
     return f"watch {condition}({rendered})" if rendered else f"watch {condition}"
 
 
-def _subscription_briefing(sub: Subscription, now: datetime) -> Dict[str, Any]:
+def subscription_briefing(sub: Subscription, now: datetime) -> Dict[str, Any]:
+    """One subscription -> the projected row shared by a briefing and the panel.
+
+    The single projection of a subscription's derived view: its kind/condition/
+    state as plain strings, a one-line ``summary``, its ``reason``, its expiry and
+    a live countdown. A briefing and the Agent Panel both read this, so the two
+    can never drift apart.
+    """
     state = getattr(sub, "state", "")
     state = state.value if hasattr(state, "value") else str(state)
     expires_at = getattr(sub, "expires_at", None)
@@ -194,6 +201,23 @@ def _subscription_briefing(sub: Subscription, now: datetime) -> Dict[str, Any]:
     }
 
 
+def turn_conclusion(turn: Any) -> Dict[str, Any]:
+    """One turn record -> its identity plus the one-line conclusion the next
+    briefing (and the panel's turn log) shows. The single projection of a turn."""
+    output = getattr(turn, "output", {}) or {}
+    conclusion = _one_line(
+        output.get("reasoning") or output.get("conclusion") or output.get("summary")
+    )
+    trigger = getattr(turn, "trigger", "")
+    trigger = trigger.value if hasattr(trigger, "value") else str(trigger)
+    return {
+        "turn_id": getattr(turn, "id", ""),
+        "trigger": trigger,
+        "at": _iso(getattr(turn, "started_at", None)),
+        "conclusion": conclusion,
+    }
+
+
 def _fire_briefing(fire: "FireResult", now: datetime, *, live: bool) -> Dict[str, Any]:
     """One fire as briefing data. A retroactive fire is marked ``"not live"``."""
     data = fire.to_dict() if isinstance(fire, Serde) else dict(fire or {})
@@ -205,7 +229,7 @@ def _fire_briefing(fire: "FireResult", now: datetime, *, live: bool) -> Dict[str
 
 
 def _expiry_briefing(sub: Subscription, now: datetime) -> Dict[str, Any]:
-    data = _subscription_briefing(sub, now)
+    data = subscription_briefing(sub, now)
     data["note"] = "expired since your last turn"
     return data
 
@@ -219,19 +243,7 @@ def _previous_turn(store: ContextStore) -> Optional[Dict[str, Any]]:
     turns = list(getattr(store.data, "turns", []) or [])
     if not turns:
         return None
-    last = turns[-1]
-    output = getattr(last, "output", {}) or {}
-    conclusion = _one_line(
-        output.get("reasoning") or output.get("conclusion") or output.get("summary")
-    )
-    trigger = getattr(last, "trigger", "")
-    trigger = trigger.value if hasattr(trigger, "value") else str(trigger)
-    return {
-        "turn_id": getattr(last, "id", ""),
-        "trigger": trigger,
-        "at": _iso(getattr(last, "started_at", None)),
-        "conclusion": conclusion,
-    }
+    return turn_conclusion(turns[-1])
 
 
 def _recent_notes(store: ContextStore, limit: int = NOTES_IN_BRIEFING) -> List[Dict[str, Any]]:
@@ -289,7 +301,7 @@ def build_briefing(
         "detail": detail,
         "view": store.data.view.to_dict(),
         "thesis": store.data.thesis.to_dict(),
-        "subscriptions": [_subscription_briefing(s, now) for s in open_subs],
+        "subscriptions": [subscription_briefing(s, now) for s in open_subs],
         "budget": store.data.budget.to_dict(),
         "previous_turn": _previous_turn(store),
         "fires": [_fire_briefing(f, now, live=True) for f in fires],

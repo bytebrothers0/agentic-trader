@@ -18,7 +18,15 @@ _STATE_PATH = os.path.join(
     "config", "modules_state.json",
 )
 
-MODULES: List[Dict] = []
+MODULES: List[Dict] = [
+    {
+        "id": "agent",
+        "name": "Agentic Chart Agent",
+        "description": "Propose-only vision agent that watches CRT levels on a lower timeframe and wakes itself.",
+        "engine": "agentic",
+        "enabled": False,
+    },
+]
 
 
 def _load_state() -> Dict[str, bool]:

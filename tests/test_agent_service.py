@@ -1,0 +1,557 @@
+"""Tests for the agent runtime service (spec phase 6a backend).
+
+The whole runtime runs in-memory: a ``_fixtures``-style feed stub, a
+``FakeRenderer``-equivalent, the zero-spend ``ScriptedAgent`` and an injected
+``FakeClock``. ``agent_service`` is imported cheaply — it must not need ``server``,
+MT5 or ``config.settings`` — so this file is a real check of that contract too.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+
+import pytest
+
+# The shared fakes live beside the pure-core tests; make them importable without
+# duplicating them here.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "test_agentic"))
+
+from _fixtures import (  # noqa: E402
+    FakeClock,
+    FakeRenderer,
+    FeedStub,
+    at,
+    bars_rows,
+)
+
+from agent_service import (  # noqa: E402
+    AgentConfig,
+    AgentService,
+    build_client,
+    make_transport,
+)
+from agentic.agent_loop import AgentLoop  # noqa: E402
+from agentic.models import SubscriptionKind, SubscriptionState, Trigger  # noqa: E402
+from agentic.store import ContextStore  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# Harness
+# --------------------------------------------------------------------------- #
+
+def _config(tmp_path, **over) -> AgentConfig:
+    base = dict(
+        symbol="XAUUSDm",
+        timeframe="M15",
+        bars=300,
+        mode="mock",
+        model="gpt-4o-mini",
+        poll_s=3600.0,  # a huge cadence: a spawned thread never races the test
+        state_dir=str(tmp_path / "state"),
+        out_dir=str(tmp_path / "renders"),
+    )
+    base.update(over)
+    return AgentConfig(**base)
+
+
+def _service(tmp_path, clock, *, stub=None, **over) -> AgentService:
+    stub = stub if stub is not None else FeedStub(price=4155.0, atr=5.0)
+    stub.set_candles(bars_rows(), timeframe="M15")
+    config = _config(tmp_path, **over)
+    return AgentService(
+        config,
+        feed=stub.build(),
+        renderer=FakeRenderer(out_dir=config.out_dir, clock=clock),
+        clock=clock,
+    )
+
+
+def _due_watch(service: AgentService, clock: FakeClock, *, minute: int = 10):
+    """Arm a ``time_reached`` watch that fires once the clock passes ``minute``."""
+    service.store.add_subscription(
+        "watch",
+        "time_reached",
+        {"at": at(6, minute).isoformat()},
+        ttl_hours=2,
+        now=clock(),
+    )
+
+
+def _watchdog_threads(symbol: str):
+    """Every live watchdog thread for ``symbol`` (its name is unique per symbol)."""
+    name = f"agent-watchdog-{symbol}"
+    return [t for t in threading.enumerate() if t.name == name]
+
+
+# --------------------------------------------------------------------------- #
+# The panel reflects the store
+# --------------------------------------------------------------------------- #
+
+def test_panel_reflects_the_store(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    service.enable()
+    try:
+        outcome = service.run_now("what is the read")
+        assert outcome.ok is True
+
+        store = service.store
+        key = "fvg:H2:bullish:4152.86:2026-10-16T14:00"
+        store.add_subscription("pin", params={"level_key": key}, reason="hold the 2H draw")
+        store.set_thesis(
+            bias="bullish",
+            storyline="range reclaimed, continuation expected",
+            invalidation="below 4100",
+            confidence=0.4,
+        )
+        store.add_proposal(bias="bullish", setup="crt continuation", entry=4160.0, confidence=0.4)
+
+        panel = service.panel()
+
+        assert panel["enabled"] is True
+        assert panel["mode"] == "mock"
+        assert panel["model"] == "gpt-4o-mini"
+        assert panel["running"] is True
+        assert panel["paused"] is False
+        assert panel["view"]["timeframe"] == "M15"
+        assert panel["thesis"]["bias"] == "bullish"
+        assert panel["thesis"]["invalidation"] == "below 4100"
+
+        subs = panel["subscriptions"]
+        assert any(s["kind"] == "pin" for s in subs)
+        pin = next(s for s in subs if s["id"] and s["kind"] == "pin")
+        assert pin["seconds_remaining"] is not None and pin["seconds_remaining"] > 0
+        # the mock turn armed a watch too
+        assert any(s["kind"] == "watch" for s in subs)
+
+        assert len(panel["pins"]) == 1
+        assert panel["pins"][0]["level_key"] == key
+
+        assert len(panel["proposals"]) == 1
+        assert panel["proposals"][0]["bias"] == "bullish"
+        assert panel["budget"]["turns_today"] >= 1
+
+        assert len(panel["recent_turns"]) == 1
+        assert panel["recent_turns"][0]["trigger"] == "request"
+        assert panel["recent_turns"][0]["started_at"]
+
+        assert panel["last_render"]["render_id"]
+        assert panel["last_render"]["image_path"]
+        assert service.status()["symbol"] == "XAUUSDm"
+    finally:
+        service.stop()
+
+
+def test_turns_is_newest_first(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    try:
+        assert service.run_now("first").ok
+        clock.advance(minutes=5)
+        assert service.run_now("second").ok
+        rows = service.turns(limit=50)
+        assert [r["id"] for r in rows] == list(reversed([t.id for t in service.store.data.turns]))
+        assert len(service.turns(limit=1)) == 1
+    finally:
+        service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# The kill switch: disable stops waking, request is always allowed
+# --------------------------------------------------------------------------- #
+
+def test_disable_blocks_scanning_and_enable_wakes(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    _due_watch(service, clock)
+    store = service.store
+
+    service.disable()
+    assert service.enabled() is False
+
+    # disabled: a scan is a no-op and nothing is logged
+    assert service.scan_once() is None
+    assert store.data.turns == []
+
+    # enable: the watchdog can wake and a fire turn lands
+    service.enable()
+    assert service.enabled() is True
+    clock.set(at(6, 15))  # past the watch's deadline
+    assert service.scan_once() is None  # fire buffered; the coalesce window is open
+    clock.set(at(6, 16))  # the 45s coalescing window has elapsed
+    outcome = service.scan_once()
+    assert outcome is not None and outcome.ok is True
+    assert outcome.trigger == Trigger.FIRE.value
+    assert len(store.data.turns) == 1
+    assert store.data.turns[0].trigger is Trigger.FIRE
+
+    # a request still works while disabled
+    service.disable()
+    assert service.enabled() is False
+    clock.advance(minutes=5)
+    allowed = service.run_now("human asks anyway")
+    assert allowed.ok is True
+    assert allowed.trigger == Trigger.REQUEST.value
+    assert len(store.data.turns) == 2
+    service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Pause keeps the state
+# --------------------------------------------------------------------------- #
+
+def test_pause_and_resume_keep_the_store(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    _due_watch(service, clock)
+    store = service.store
+    service.enable()
+    clock.set(at(6, 15))
+
+    service.pause()
+    assert service.paused() is True
+    assert service.scan_once() is None  # paused: no waking
+    assert store.data.turns == []
+    assert len(store.data.subscriptions) == 1  # state intact
+    assert service.store.data.agent.enabled is True
+
+    service.resume()
+    assert service.paused() is False
+    assert service.scan_once() is None  # detects the fire; the coalesce window opens
+    clock.set(at(6, 16))
+    outcome = service.scan_once()
+    assert outcome is not None and outcome.ok is True
+    assert len(store.data.turns) == 1
+    service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Lifecycle
+# --------------------------------------------------------------------------- #
+
+def test_start_is_idempotent_and_disabled_starts_no_thread(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+
+    assert service.enabled() is False  # a fresh store is off
+    service.start()  # disabled -> no thread, no boot
+    assert service.running() is False
+    assert service._thread is None
+    service.start()  # idempotent
+    assert service.running() is False
+    assert service.store.data.turns == []
+    service.stop()
+    assert service.running() is False
+
+
+def test_start_when_enabled_boots_once_and_runs_a_thread(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    service.enable()  # arms the gate and spawns a (sleeping) thread
+    service.stop()    # drop it so start() owns the lifecycle
+
+    service.start()
+    try:
+        assert service.running() is True
+        assert len(service.store.data.turns) == 1
+        assert service.store.data.turns[0].trigger is Trigger.BOOT
+
+        service.start()  # idempotent: no second boot turn
+        assert len(service.store.data.turns) == 1
+    finally:
+        service.stop()
+    assert service.running() is False
+
+
+# --------------------------------------------------------------------------- #
+# Render path safety
+# --------------------------------------------------------------------------- #
+
+def test_render_path_refuses_traversal_and_unknown(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    out_dir = service.config.out_dir
+    os.makedirs(out_dir, exist_ok=True)
+    good = os.path.join(out_dir, "r_deadbeef.png")
+    with open(good, "wb") as handle:
+        handle.write(b"png")
+
+    assert service.render_path("r_deadbeef") == os.path.realpath(good)
+    assert service.render_path("../escape") is None
+    assert service.render_path("..\\escape") is None
+    assert service.render_path("sub/escape") is None
+    assert service.render_path("nope") is None
+    assert service.render_path("") is None
+    assert service.render_path("C:\\Windows\\system32") is None
+
+
+def test_render_path_refuses_a_symlink_that_escapes(tmp_path):
+    """A symlink planted inside the render dir must not leak a file outside it."""
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    out_dir = service.config.out_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.png"
+    secret.write_bytes(b"png")
+
+    link = os.path.join(out_dir, "r_link.png")
+    try:
+        os.symlink(str(secret), link)
+    except (OSError, NotImplementedError, AttributeError):
+        pytest.skip("symlinks are not available in this environment")
+
+    # realpath resolves the link to the outside file -> containment fails
+    assert service.render_path("r_link") is None
+
+
+# --------------------------------------------------------------------------- #
+# Mock client: a full, zero-spend turn
+# --------------------------------------------------------------------------- #
+
+def test_build_client_mock_performs_a_full_zero_spend_turn(tmp_path):
+    clock = FakeClock(at(6, 0))
+    config = _config(tmp_path)
+    client = build_client(config)
+
+    store = ContextStore.load_or_new(
+        "XAUUSDm", state_dir=str(tmp_path / "state"), clock=clock
+    )
+    store.set_enabled(True)
+    stub = FeedStub(price=4155.0, atr=5.0)
+    stub.set_candles(bars_rows(), timeframe="M15")
+
+    loop = AgentLoop(
+        store,
+        stub.build(),
+        FakeRenderer(out_dir=str(tmp_path / "renders"), clock=clock),
+        client,
+        clock=clock,
+    )
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.ok is True
+    assert store.data.thesis.bias == "bullish"
+    assert store.data.thesis.invalidation  # an explicit invalidation
+    assert store.data.thesis.confidence < 0.5  # low confidence
+
+    watches = store.open_subscriptions(SubscriptionKind.WATCH)
+    assert len(watches) >= 1
+    assert watches[0].condition == "level_forms"
+
+    assert len(store.data.turns) == 1
+    record = store.data.turns[0]
+    assert record.trigger is Trigger.REQUEST
+    assert record.output["reasoning"]
+    # zero spend: the mock bills nothing.
+    assert record.cost_usd == 0.0
+    assert record.tokens == 0
+    assert store.data.budget.spend_usd_today == 0.0
+
+
+def test_mock_client_is_repeatable_across_turns(tmp_path):
+    """The mock script replays on every turn, not just the first (spec review)."""
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    service.enable()
+    try:
+        first = service.run_now("first")
+        assert first.ok is True
+        clock.advance(minutes=2)  # clear MIN_TURN_INTERVAL_S
+        second = service.run_now("second")
+        assert second.ok is True
+
+        assert first.output.get("reasoning")
+        assert second.output.get("reasoning")  # the old list-based mock went silent
+        assert second.output.get("thesis", {}).get("bias") == "bullish"
+        rows = service.turns()
+        assert len(rows) == 2
+        assert all(row["summary"] for row in rows)
+    finally:
+        service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Coalescing: a burst is one turn, and a refused poll loses nothing
+# --------------------------------------------------------------------------- #
+
+def test_two_fires_inside_the_coalesce_window_make_one_turn(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    store = service.store
+    service.enable()
+    try:
+        # two watches that fire 30s apart — inside the 45s coalescing window
+        store.add_subscription(
+            "watch", "time_reached", {"at": at(6, 5, 0).isoformat()},
+            ttl_hours=2, now=clock(),
+        )
+        store.add_subscription(
+            "watch", "time_reached", {"at": at(6, 5, 30).isoformat()},
+            ttl_hours=2, now=clock(),
+        )
+        clock.set(at(6, 5, 0))
+        assert service.scan_once() is None  # fire #1 buffered; window opens
+        clock.set(at(6, 5, 30))
+        assert service.scan_once() is None  # fire #2 buffered; still inside 45s
+        clock.set(at(6, 6, 0))              # 60s since the window opened
+        outcome = service.scan_once()
+
+        assert outcome is not None and outcome.trigger == Trigger.FIRE.value
+        assert len(store.data.turns) == 1  # both fires coalesced into ONE turn
+        assert "2 fire" in store.data.turns[0].trigger_detail
+    finally:
+        service.stop()
+
+
+def test_leash_refused_poll_keeps_the_fire_for_the_next_poll(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    store = service.store
+    service.enable()
+    try:
+        store.add_subscription(
+            "watch", "time_reached", {"at": at(6, 0, 30).isoformat()},
+            ttl_hours=2, now=clock(),
+        )
+        assert service.run_now("kick").ok is True  # last_turn_at = 6:00
+
+        clock.set(at(6, 0, 30))  # within MIN_TURN_INTERVAL_S (60s) of the request
+        assert service.scan_once() is None
+        sub = store.data.subscriptions[0]
+        assert sub.state is SubscriptionState.ARMED  # the fire was NOT consumed
+        assert sub.fire_count == 0
+        assert len(store.data.turns) == 1  # only the request turn
+
+        # once the interval passes, the same fire is still there to be detected
+        clock.set(at(6, 2, 0))
+        assert service.scan_once() is None  # detected now; the window opens
+        clock.set(at(6, 3, 0))
+        outcome = service.scan_once()
+        assert outcome is not None and outcome.trigger == Trigger.FIRE.value
+        assert len(store.data.turns) == 2
+    finally:
+        service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# The daemon thread: it wakes on its own, and really stops
+# --------------------------------------------------------------------------- #
+
+def test_daemon_thread_wakes_and_logs_a_turn(tmp_path):
+    symbol = "AGENTTHREADT"
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock, symbol=symbol, poll_s=0.02)
+    store = service.store
+    store.add_subscription(
+        "watch", "time_reached", {"at": at(6, 5).isoformat()}, ttl_hours=2, now=clock()
+    )
+    service.enable()
+    try:
+        assert service.running() is True
+        assert len(_watchdog_threads(symbol)) == 1
+        clock.advance(minutes=10)
+        # Nudge the clock past the coalescing window while the thread polls.
+        for _ in range(300):
+            if store.data.turns:
+                break
+            clock.advance(seconds=30)
+            time.sleep(0.02)
+        assert store.data.turns, "the watchdog thread never woke"
+        assert store.data.turns[0].trigger is Trigger.FIRE
+    finally:
+        service.disable()
+    assert service.enabled() is False
+    assert service.running() is False
+    assert _watchdog_threads(symbol) == []
+
+
+def test_disable_stops_thread_driven_waking(tmp_path):
+    symbol = "AGENTTHREADD"
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock, symbol=symbol, poll_s=0.02)
+    store = service.store
+    # a repeating watch: a live thread would keep firing it
+    store.add_subscription(
+        "watch", "time_reached", {"at": at(6, 5).isoformat()},
+        ttl_hours=2, one_shot=False, now=clock(),
+    )
+    service.enable()
+    try:
+        clock.advance(minutes=10)
+        for _ in range(300):
+            if store.data.turns:
+                break
+            clock.advance(seconds=30)
+            time.sleep(0.02)
+        assert store.data.turns
+
+        service.disable()
+        assert service.enabled() is False
+        assert service.running() is False
+        assert _watchdog_threads(symbol) == []
+        logged = len(store.data.turns)
+
+        clock.advance(hours=2)
+        time.sleep(0.2)
+        assert len(store.data.turns) == logged  # the killed thread woke nothing
+    finally:
+        service.stop()
+
+
+def test_stop_joins_and_leaves_no_extra_threads(tmp_path):
+    symbol = "AGENTTHREADS"
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock, symbol=symbol, poll_s=0.02)
+    service.enable()
+    assert service.running() is True
+    assert len(_watchdog_threads(symbol)) == 1
+
+    service.stop()
+    assert service.running() is False
+    assert _watchdog_threads(symbol) == []
+    service.stop()  # idempotent
+    assert service.running() is False
+
+
+def test_no_duplicate_thread_after_stop_then_start(tmp_path):
+    symbol = "AGENTTHREADR"
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock, symbol=symbol, poll_s=0.02)
+    service.enable()
+    service.stop()
+    assert service.running() is False
+
+    service.start()  # the gate is still armed: boots and re-spawns exactly one
+    try:
+        assert service.running() is True
+        assert len(_watchdog_threads(symbol)) == 1
+    finally:
+        service.stop()
+    assert _watchdog_threads(symbol) == []
+
+
+def test_start_disabled_does_not_report_autostarted(tmp_path):
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock)
+    service.start()  # a fresh store is off: nothing starts
+    assert service.status()["autostarted"] is False
+    assert service.panel()["autostarted"] is False
+    assert service.running() is False
+    service.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Live transport: a missing key is a clear error, not a network call
+# --------------------------------------------------------------------------- #
+
+def test_make_transport_requires_the_key(monkeypatch):
+    monkeypatch.delenv("AGENT_TEST_KEY", raising=False)
+    with pytest.raises(RuntimeError) as excinfo:
+        make_transport(AgentConfig(api_key_env="AGENT_TEST_KEY"))
+    assert "AGENT_TEST_KEY" in str(excinfo.value)
+    assert "key" in str(excinfo.value).lower()

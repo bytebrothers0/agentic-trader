@@ -10,6 +10,7 @@ FastAPI backend serving:
 from __future__ import annotations
 
 import os
+import threading
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -40,7 +41,12 @@ from config.settings import (
     CRT_ENABLED, CRT_MIN_RANGE_ATR, CRT_MIN_SWEEP_ATR, CRT_MIN_CLOSE_BACK_ATR,
     CRT_MAX_INSIDE_BARS, CRT_REQUIRE_DIRECTIONAL_ANCHOR,
     CRT_MAX_PER_SIDE, CRT_MAX_LIVE_PER_SIDE, CRT_ATR_PERIOD,
+    AGENT_ENABLED, AGENT_MODE, AGENT_MODEL, AGENT_SYMBOL, AGENT_TIMEFRAME,
+    AGENT_BARS, AGENT_POLL_S, AGENT_API_BASE, AGENT_API_KEY_ENV,
+    AGENT_MAX_TOKENS, AGENT_TEMPERATURE, AGENT_HTTP_TIMEOUT_S,
+    AGENT_STATE_DIR, AGENT_RENDER_DIR,
 )
+from agent_service import AgentConfig, AgentService
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
 from indicators.crt_detector import CRTDetector
@@ -84,6 +90,57 @@ def get_loader(symbol: str) -> MT5DataLoader:
     if clean_sym not in loader_instances:
         loader_instances[clean_sym] = MT5DataLoader(symbol=clean_sym)
     return loader_instances[clean_sym]
+
+
+# Agentic chart agent (propose-only). Built lazily and started only by the
+# startup hook when AGENT_ENABLED is true. The store's own agent.enabled gate is
+# the runtime switch the panel toggles — see config/settings.py's AGENT block.
+_agent_service = None
+_agent_service_lock = threading.Lock()
+
+
+def get_agent_service() -> AgentService:
+    """The process-wide agent service, built once.
+
+    Guarded by a module lock: two concurrent first requests must not each build
+    a service (which would spawn two watchdog threads over two stores).
+    """
+    global _agent_service
+    if _agent_service is None:
+        with _agent_service_lock:
+            if _agent_service is None:
+                config = AgentConfig(
+                    symbol=AGENT_SYMBOL,
+                    timeframe=AGENT_TIMEFRAME,
+                    bars=int(AGENT_BARS),
+                    mode=AGENT_MODE,
+                    model=AGENT_MODEL,
+                    api_base=AGENT_API_BASE,
+                    api_key_env=AGENT_API_KEY_ENV,
+                    max_tokens=int(AGENT_MAX_TOKENS),
+                    temperature=float(AGENT_TEMPERATURE),
+                    poll_s=float(AGENT_POLL_S),
+                    http_timeout_s=float(AGENT_HTTP_TIMEOUT_S),
+                    state_dir=(AGENT_STATE_DIR or None),
+                    out_dir=(AGENT_RENDER_DIR or None),
+                )
+                _agent_service = AgentService(config)
+    return _agent_service
+
+
+@app.on_event("startup")
+def _start_agent_service():
+    """Autostart the watchdog + loop when AGENT_ENABLED is true.
+
+    Swallows every error — a missing API key or an unreachable MT5 must never
+    stop the server from starting.
+    """
+    if not AGENT_ENABLED:
+        return
+    try:
+        get_agent_service().start()
+    except Exception as exc:  # noqa: BLE001 — startup must not fail on the agent
+        print(f"Agent service not started: {exc}")
 
 
 @app.get("/api/symbols")
@@ -683,6 +740,111 @@ def get_agent_crt(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _sync_agent_module(enabled: bool) -> None:
+    """Keep strategy/registry.py's 'agent' entry in step with the store gate.
+
+    A failure is surfaced (logged), not swallowed: the store gate already moved,
+    so a silent miss would leave the two sources of truth disagreeing invisibly.
+    """
+    try:
+        from strategy.registry import set_enabled
+        set_enabled("agent", bool(enabled))
+    except Exception as exc:  # noqa: BLE001 — a registry write must not fail the request
+        print(f"Agent registry sync failed (agent enabled={enabled}): {exc}")
+
+
+@app.get("/api/agent/panel")
+def get_agent_panel():
+    """The Agent Panel's read of the store (read-only) plus service state."""
+    try:
+        service = get_agent_service()
+        panel = service.panel()
+        panel["service"] = service.status()
+        return panel
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/turns")
+def get_agent_turns(limit: int = Query(50, ge=1, le=500)):
+    """The append-only turn log, newest first."""
+    try:
+        service = get_agent_service()
+        return {"turns": service.turns(limit)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/render")
+def get_agent_render(render_id: str = Query(...)):
+    """Serve a rendered PNG by id. 404 for an unknown or unsafe id."""
+    try:
+        service = get_agent_service()
+        path = service.render_path(render_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not path:
+        raise HTTPException(status_code=404, detail="Render not found.")
+    return FileResponse(path)
+
+
+@app.post("/api/agent/enable")
+def enable_agent():
+    """Arm the agent runtime (kill switch off). Syncs the registry entry."""
+    try:
+        service = get_agent_service()
+        status = service.enable()
+        _sync_agent_module(True)
+        return {"ok": True, "status": status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/disable")
+def disable_agent():
+    """Disarm the agent runtime (kill switch on). Syncs the registry entry."""
+    try:
+        service = get_agent_service()
+        status = service.disable()
+        _sync_agent_module(False)
+        return {"ok": True, "status": status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/pause")
+def pause_agent():
+    """Stop waking, keep state."""
+    try:
+        service = get_agent_service()
+        service.pause()
+        return {"ok": True, "status": service.status()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/resume")
+def resume_agent():
+    """Resume waking after a pause."""
+    try:
+        service = get_agent_service()
+        service.resume()
+        return {"ok": True, "status": service.status()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/run-now")
+def agent_run_now(message: str = Query("")):
+    """Start a ``request`` turn, no matter the gate (a human asked)."""
+    try:
+        service = get_agent_service()
+        outcome = service.run_now(message)
+        return {"ok": bool(outcome.ok), "outcome": outcome.to_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/settings/modules")
 def get_settings_modules():
     """Entry-module registry for the settings tab."""
@@ -695,9 +857,25 @@ def get_settings_modules():
 
 @app.post("/api/settings/modules/{module_id}")
 def toggle_settings_module(module_id: str, enabled: bool = Query(True)):
-    """Enable/disable one entry module (persists to config/)."""
+    """Enable/disable one entry module (persists to config/).
+
+    The 'agent' module is special-cased. The **store gate is authoritative**, so
+    the runtime enable()/disable() runs FIRST; only if it succeeds is the registry
+    flag persisted. If it fails the registry is left untouched and a 500 is
+    returned — the store gate and the registry can never disagree.
+    """
+    from strategy.registry import set_enabled
+
+    if module_id == "agent":
+        try:
+            service = get_agent_service()
+            if enabled:
+                service.enable()
+            else:
+                service.disable()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     try:
-        from strategy.registry import set_enabled
         return {"ok": True, "modules": set_enabled(module_id, enabled)}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))

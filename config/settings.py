@@ -263,6 +263,46 @@ CRT_MAX_LIVE_PER_SIDE = 20
 CRT_ATR_PERIOD = 14
 
 # =============================================================================
+# AGENT (agentic chart agent) — propose-only, perception-first
+# =============================================================================
+# IMPORTANT: two different switches, and they are not the same thing.
+#   * AGENT_ENABLED (below) is the AUTOSTART switch. When True the server's
+#     FastAPI startup hook boots the watchdog + agent loop for AGENT_SYMBOL. When
+#     False the process never begins watching on its own.
+#   * The store's ``agent.enabled`` (persisted per symbol under
+#     agentic/state/<symbol>.json) is the RUNTIME gate. It is what the Agent
+#     Panel / Settings tab toggles at runtime via POST /api/agent/enable|disable
+#     and POST /api/settings/modules/agent. The panel writes both the store gate
+#     and this registry's entry so the two can never disagree.
+# A restart autostarts only when BOTH are true: AGENT_ENABLED lets the process
+# begin, the store gate lets it keep watching.
+#
+# AGENT_MODE = "mock" runs the full loop against a scripted agent and spends
+# nothing; "live" calls AGENT_MODEL over the OpenAI-compatible chat API, reading
+# the key from the environment variable named by AGENT_API_KEY_ENV.
+#
+# AGENT_STATE_DIR / AGENT_RENDER_DIR default (empty string) to agentic/state and
+# agentic/renders inside the package; both are gitignored runtime output. Set
+# them to move the agent's durable state (per-symbol JSON) or its rendered PNGs
+# elsewhere (e.g. a mounted volume). AGENT_HTTP_TIMEOUT_S is the per-request read
+# timeout for the live transport, and the ceiling the runtime uses to size its
+# thread-join budget.
+AGENT_ENABLED = False          # autostart the watchdog+loop at server start
+AGENT_MODE = "mock"            # "mock" (scripted agent, zero spend) | "live" (vision model)
+AGENT_MODEL = "gpt-4o-mini"
+AGENT_SYMBOL = "XAUUSDm"
+AGENT_TIMEFRAME = "M15"
+AGENT_BARS = 300
+AGENT_POLL_S = 15.0            # watchdog poll cadence
+AGENT_API_BASE = "https://api.openai.com/v1"
+AGENT_API_KEY_ENV = "OPENAI_API_KEY"
+AGENT_MAX_TOKENS = 1500
+AGENT_TEMPERATURE = 0.0
+AGENT_HTTP_TIMEOUT_S = 120.0   # per-request timeout for the live transport
+AGENT_STATE_DIR = ""           # "" -> agentic/state (gitignored default)
+AGENT_RENDER_DIR = ""          # "" -> agentic/renders (gitignored default)
+
+# =============================================================================
 # LOGGING
 # =============================================================================
 LOG_DIR = "logs"

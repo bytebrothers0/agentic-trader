@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 import uuid
 from dataclasses import fields as dc_fields
 from datetime import datetime, timedelta, timezone
@@ -136,14 +138,49 @@ class ContextStore:
         return self.data.to_dict()
 
     def save(self) -> str:
-        """Write atomically (temp file + replace) so a crash cannot truncate state."""
+        """Write atomically (temp file + replace) so a crash cannot truncate state.
+
+        The temp name is unique per process **and** per thread. ``save`` is called
+        from more than one thread (the agent's watchdog thread and a request thread
+        can both persist the same store), and a *shared* ``path + ".tmp"`` let two
+        concurrent writers interleave into one file — the ``os.replace`` then
+        published a corrupt JSON document. A per-thread temp file makes each write
+        private, so the last replace wins with a complete document.
+        """
         self.data.updated_at = self._clock()
         os.makedirs(self.state_dir, exist_ok=True)
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.data.to_dict(), f, indent=2, ensure_ascii=False)
-        os.replace(tmp, self.path)
+        tmp = self.path + f".{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data.to_dict(), f, indent=2, ensure_ascii=False)
+            self._replace(tmp)
+        finally:
+            # A failed (or already-replaced) write must not leave a temp behind.
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
         return self.path
+
+    def _replace(self, tmp: str) -> None:
+        """``os.replace`` with a brief retry for the Windows transient lock.
+
+        Replacing a path that another thread is *also* replacing can fail with
+        ``PermissionError`` ("access is denied") on Windows even though the temp
+        files are distinct. A few short retries turn that momentary lock into a
+        clean last-writer-wins; elsewhere the first attempt succeeds.
+        """
+        last: Optional[OSError] = None
+        for attempt in range(8):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError as exc:
+                last = exc
+                time.sleep(0.002 * (attempt + 1))
+        assert last is not None  # only reachable if every attempt raised
+        raise last  # all retries exhausted: surface the real error
 
     @classmethod
     def load(

@@ -4,6 +4,7 @@ Round-trip, atomic persistence, caps, expiries, dedupe and the leash. Plus the
 structural guard: the store holds intent and metadata, never detector output.
 """
 import json
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -79,6 +80,37 @@ def test_saves_and_reloads_atomically(tmp_path):
 
     again = ContextStore.load("XAUUSDm", state_dir=str(tmp_path))
     assert again.to_dict() == store.to_dict()
+
+
+def test_concurrent_saves_never_corrupt_the_file(tmp_path):
+    """Two threads saving the same store must not interleave into bad JSON.
+
+    The watchdog thread and a request thread can both persist the same store; a
+    shared ``path + '.tmp'`` let their writes mix and published a corrupt file.
+    """
+    store = _store(tmp_path)
+    errors = []
+
+    def writer(n):
+        try:
+            for _ in range(25):
+                store.set_view(bars=100 + n, timeframe="M15")
+                store.save()
+        except Exception as exc:  # pragma: no cover — the assertion below is the point
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    with open(store.path, "r", encoding="utf-8") as handle:
+        raw = json.load(handle)  # a corrupt/interleaved file fails here
+    assert raw["symbol"] == "XAUUSDm"
+    # every per-thread temp file was cleaned up (none linger)
+    assert [p for p in Path(tmp_path).iterdir() if p.name.endswith(".tmp")] == []
 
 
 def test_load_or_new_starts_fresh_when_absent(tmp_path):
