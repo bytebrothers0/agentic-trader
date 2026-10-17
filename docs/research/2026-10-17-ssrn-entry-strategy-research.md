@@ -643,3 +643,35 @@ Confidence = how much I'd rely on it *before* testing on our own data.
 | 6 | 6938742 | Order-Flow Imbalance and Short-Horizon Predictability in Crypto (Vafin) |
 
 SSRN URLs are `https://papers.ssrn.com/sol3/papers.cfm?abstract_id=<id>`.
+
+---
+
+## Status: entry-module build parked (2026-10-17)
+
+Research stage complete. **No entry-module code has been written.** Nothing in the
+indicator/rendering path was touched.
+
+**Decisions locked in during the design conversation:**
+
+- **Scope:** all three, staged — (1) rule engine + validation harness, (2) chart signal overlay,
+  (3) MT5 execution last, once an entry is proven.
+- **The engine is a read-only consumer** of the existing indicator payload. It defines its own
+  rules *on top of* the levels; the indicator system and its chart rendering are not modified.
+- **Toggleable from the settings tab:** each entry rule registers in `strategy/registry.py`
+  (`MODULES`) and is switched via `GET/POST /api/settings/modules`, persisting to
+  `config/modules_state.json` — already scaffolded, currently `MODULES = []`.
+- **Layering:** indicators answer *"what is on the chart"*; the entry engine answers *"given that,
+  is there a trade, and what is it"*.
+
+**Still open:** the proof bar for calling a rule "working" (full gate stack vs a staged
+visual → expectancy → gates progression).
+
+**Highest-value first experiments, using indicators we already have:**
+
+1. **Post-sweep direction on XAUUSD** — 7430998 finds continuation, 6592020 finds reversal in FX
+   but continuation in gold. Our sweep detectors already fire, so this is measurable with no new
+   indicators.
+2. **Does the CHoCH+FVG fade (7430998's flagship) transfer to gold?** It attacks the exact
+   assumption our structure → IDM → entry chain rests on.
+3. **Session-conditional expectancy** (Asia vs Europe vs US) against 7257240's inversion of the
+   London/NY consensus.
