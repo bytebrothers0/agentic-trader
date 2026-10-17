@@ -8,11 +8,13 @@ Phase 1: ``feed.py``, the read-only bridge to the indicator suite, and
 D1/W1/MN1 CRT, LTF confirmation, a propose-only plan).
 Phase 2 (part A): OHLC ``Bars`` on the feed, and ``subscriptions.py``, the
 deterministic, edge-triggered condition evaluator the Watchdog will drive.
+Phase 2 (part B): ``watchdog.py``, the LLM-free loop that drives the evaluator,
+retires what fired and coalesces a burst of events into one turn.
 
 The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
-``subscriptions`` — imports nothing from the running system. ``feed`` is the
-single sanctioned bridge, and it reaches the indicator layer only lazily, so
-importing this package stays cheap. Nothing here places an order
+``subscriptions``, ``watchdog`` — imports nothing from the running system.
+``feed`` is the single sanctioned bridge, and it reaches the indicator layer only
+lazily, so importing this package stays cheap. Nothing here places an order
 (``mode=propose`` throughout), and nothing caches detector output in the store:
 levels are recomputed on every read. The agent loop, the renderer, the panel and
 the LLM remain later phases.
@@ -74,13 +76,24 @@ from agentic.store import (
     StoreError,
 )
 from agentic.subscriptions import FireResult, evaluate, event_time
+from agentic.watchdog import (
+    COALESCE_WINDOW_S,
+    PRICE_CHECK_S,
+    BackfillResult,
+    ScanResult,
+    TurnRequest,
+    Watchdog,
+    bar_seconds,
+)
 
 __all__ = [
     "SPEC_VERSION",
     "AgentMeta",
     "AgentMode",
+    "BackfillResult",
     "Bars",
     "Budget",
+    "COALESCE_WINDOW_S",
     "CapExceeded",
     "ChartType",
     "Condition",
@@ -102,9 +115,11 @@ __all__ = [
     "LevelRecord",
     "LevelStatus",
     "OPTIONAL_FAMILIES",
+    "PRICE_CHECK_S",
     "Proposal",
     "ProposalStatus",
     "REQUIRED_FAMILIES",
+    "ScanResult",
     "StoreError",
     "StoreState",
     "Subscription",
@@ -113,8 +128,11 @@ __all__ = [
     "Thesis",
     "Trigger",
     "TurnRecord",
+    "TurnRequest",
     "View",
+    "Watchdog",
     "analyze",
+    "bar_seconds",
     "build_plan",
     "default_candles_provider",
     "default_provider",

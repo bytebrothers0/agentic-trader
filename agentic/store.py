@@ -17,7 +17,7 @@ import re
 import uuid
 from dataclasses import fields as dc_fields
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from agentic import conditions as cond
 from agentic.models import (
@@ -380,6 +380,28 @@ class ContextStore:
             sub.state = SubscriptionState.FIRED
         self._touch()
         return sub
+
+    def mark_evaluated(
+        self,
+        sub_ids: Union[str, Iterable[str]],
+        now: Optional[datetime] = None,
+    ) -> None:
+        """Advance ``last_evaluated_at`` for armed subscriptions that did not fire.
+
+        A subscription's evaluation window must keep moving even when nothing
+        happened, or it would grow without bound and re-report old events. Only
+        armed subscriptions are advanced (a fired/expired/released one is done).
+        Accepts a single id or an iterable of ids.
+        """
+        ids = {sub_ids} if isinstance(sub_ids, str) else set(sub_ids)
+        now = now or self._clock()
+        changed = False
+        for sub in self.data.subscriptions:
+            if sub.id in ids and sub.state is SubscriptionState.ARMED:
+                sub.last_evaluated_at = now
+                changed = True
+        if changed:
+            self._touch()
 
     def expire_due(self, now: Optional[datetime] = None) -> List[Subscription]:
         """Retire armed subscriptions whose deadline has passed. Returns them."""

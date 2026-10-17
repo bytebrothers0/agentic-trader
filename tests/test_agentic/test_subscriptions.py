@@ -5,10 +5,20 @@ Every condition in the vocabulary is exercised with a positive fire, a negative
 exactly one of two consecutive windows). Snapshots and bars are built from plain
 payload dicts via ``parse_payload`` / ``parse_candles`` — nothing here touches MT5.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
+from _fixtures import (
+    UTC,
+    at as _at,
+    day as _day,
+    level as _level,
+    series as _series,
+    snapshot as _snapshot,
+    sub as _sub,
+    ts as _ts,
+)
 from agentic import subscriptions as subs
 from agentic.conditions import ALL_CONDITIONS
 from agentic.feed import (
@@ -17,77 +27,8 @@ from agentic.feed import (
     default_candles_provider,
     parse_candles,
     parse_level,
-    parse_payload,
 )
-from agentic.models import Subscription, SubscriptionKind, SubscriptionState
 from agentic.subscriptions import FireResult, evaluate, event_time
-
-UTC = timezone.utc
-
-
-# --------------------------------------------------------------------------- #
-# Builders
-# --------------------------------------------------------------------------- #
-
-def _at(hour, minute=0, second=0):
-    """2026-10-15 at the given UTC time."""
-    return datetime(2026, 10, 15, hour, minute, second, tzinfo=UTC)
-
-
-def _day(day, hour=0, minute=0):
-    """The given day of October 2026 at the given UTC time."""
-    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
-
-
-def _ts(dt):
-    return int(dt.timestamp())
-
-
-def _level(category, *, type="BULLISH", price=100.0, time=None, end_time=None,
-           end_kind=None, state=None, **extra):
-    lvl = {"category": category, "type": type, "price": price}
-    if time is not None:
-        lvl["time"] = time
-    if end_time is not None:
-        lvl["end_time"] = end_time
-    if end_kind is not None:
-        lvl["end_kind"] = end_kind
-    if state is not None:
-        lvl["state"] = state
-    lvl.update(extra)
-    return lvl
-
-
-def _snapshot(levels, *, symbol="XAUUSDm", timeframe="M15", price=100.0, atr=0.0):
-    return parse_payload({
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "current_price": price,
-        "atr": atr,
-        "levels": levels,
-    })
-
-
-def _series(rows, *, symbol="XAUUSDm", timeframe="M15"):
-    return parse_candles({
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "candles": [
-            {"time": t, "open": o, "high": h, "low": low, "close": c}
-            for (t, o, h, low, c) in rows
-        ],
-    })
-
-
-def _sub(condition, params=None, *, kind="watch", one_shot=True, sub_id="sub_1"):
-    return Subscription(
-        id=sub_id,
-        kind=SubscriptionKind(kind),
-        condition=condition,
-        params=dict(params or {}),
-        one_shot=one_shot,
-        state=SubscriptionState.ARMED,
-    )
 
 
 # --------------------------------------------------------------------------- #

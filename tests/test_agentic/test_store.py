@@ -206,6 +206,43 @@ def test_one_shot_watch_retires_on_fire_but_repeating_stays_armed(tmp_path):
     assert refreshed.fire_count == 1
 
 
+def test_mark_evaluated_advances_the_window_for_armed_subs(tmp_path):
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+    created = clock()
+
+    first, _ = store.add_subscription("watch", "price_crosses", {"price": 4160.0})
+    second, _ = store.add_subscription("watch", "price_crosses", {"price": 4161.0})
+    assert first.last_evaluated_at == created
+
+    clock.advance(minutes=5)
+    store.mark_evaluated(second.id)  # a single id is accepted
+    assert store.get_subscription(second.id).last_evaluated_at == clock()
+    assert store.get_subscription(first.id).last_evaluated_at == created
+
+    clock.advance(minutes=5)
+    store.mark_evaluated([first.id, second.id])  # an iterable of ids
+    assert store.get_subscription(first.id).last_evaluated_at == clock()
+    assert store.get_subscription(second.id).last_evaluated_at == clock()
+
+    store.mark_evaluated("sub_nope")  # unknown ids are ignored, not an error
+
+
+def test_mark_evaluated_leaves_a_fired_subscription_alone(tmp_path):
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+    watch, _ = store.add_subscription("watch", "price_crosses", {"price": 4160.0})
+
+    store.mark_fired(watch.id)
+    fired_at = clock()
+    clock.advance(hours=1)
+    store.mark_evaluated(watch.id)
+
+    marked = store.get_subscription(watch.id)
+    assert marked.state is SubscriptionState.FIRED
+    assert marked.last_evaluated_at == fired_at
+
+
 def test_pin_starts_live_with_its_key(tmp_path):
     store = _store(tmp_path)
     key = "fvg:H2:bullish:4152.86:2026-10-16T14:00"

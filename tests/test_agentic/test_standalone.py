@@ -44,6 +44,7 @@ PURE_MODULES = (
     "store.py",
     "crt_strategy.py",
     "subscriptions.py",
+    "watchdog.py",
     "__init__.py",
 )
 #: The single sanctioned bridge. It may reach into the system, but only lazily.
