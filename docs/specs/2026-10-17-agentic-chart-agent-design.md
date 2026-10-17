@@ -1,8 +1,8 @@
 # Agentic Chart Agent — Self-Directed Perception, Pins and Watches
 
 Date: 2026-10-17
-Status: Proposed (awaiting review; no code written)
-Module: `agentic/` (new, standalone, **unwired** — touches no existing file)
+Status: In progress — Phase 0 (schemas + durable store) and Phase 1 (feed + CRT playbook) landed 2026-10-17; the loop, renderer, panel and LLM remain.
+Module: `agentic/` (new). Phase 0 is pure. Phase 1 adds `feed.py` as the single **read-only** bridge to the indicator suite, plus `crt_strategy.py` and a read-only `GET /api/agent/crt`.
 
 ## Problem
 
@@ -508,8 +508,8 @@ component: a chatty watchdog is a subscription you did not sign up for.
 
 | Phase | Deliverable | Acceptance |
 |---|---|---|
-| **0** | `models.py` + `store.py`: schemas, atomic persistence, caps/expiry enforcement, budget accounting | round-trip a store; caps and expiries reject with a reason; no LLM, no repo changes |
-| **1** | `feed.py`: read-only level adapter, level-key identity, status mapping from the freshness tracker | keys are stable across recomputation; a swept level reports `swept`, not `live` |
+| **0** ✅ | `models.py` + `store.py`: schemas, atomic persistence, caps/expiry enforcement, budget accounting | round-trip a store; caps and expiries reject with a reason; no LLM, no repo changes |
+| **1** ✅ | `feed.py`: read-only level adapter, level-key identity, status mapping from the freshness tracker. Landed with `crt_strategy.py` (the top-down CRT playbook) and a read-only `GET /api/agent/crt`, and `atr` added to the `/api/indicators` payload | keys are stable across recomputation; a swept level reports `swept`, not `live` |
 | **2** | `conditions.py` + `subscriptions.py` + `watchdog.py`: the vocabulary, edge-triggered evaluation, dedupe, coalescing, backfill | every vocabulary entry tested against a fake feed; backfill reports a retroactive fire across simulated downtime |
 | **3** | `renderer.py`: store → PNG + manifest, tags, vision-optimised style | byte-identical render for identical state (image hash test); manifest resolves every tag |
 | **4** | `agent_loop.py` with a **scripted mock agent** | full turn end-to-end with zero API spend; turn log complete; leash enforced |
@@ -519,6 +519,26 @@ component: a chatty watchdog is a subscription you did not sign up for.
 
 Phases 0–2 are pure logic and can be built and tested **today**, in parallel with any
 indicator work, because they depend on nothing outside themselves.
+
+## As built — phase 0 and 1 (2026-10-17)
+
+**Phase 0** shipped `models.py` + `conditions.py` + `store.py` as specified.
+
+**Phase 1** shipped the wiring the CRT strategy needs:
+
+- `feed.py` — read-only adapter over `/api/indicators`. `LevelRecord` (family, timeframe, direction, price, band, status, CRT extras) with a stable `level_key`; `LevelStatus` mapped `end_kind`-first; `Feed(provider)` with a **lazily-importing** default provider. Family aliases normalise `liq`→`liquidity`.
+- `crt_strategy.py` — the **top-down CRT playbook** (research: CandelaCharts framework, crttrading.com, the ICT-derived community material):
+
+  | Tier | Timeframes | Role |
+  |---|---|---|
+  | HTF bias | MN1 → W1 → D1 | the CRT container: a live CRT (swept, target unmet) sets direction; its opposite boundary is the draw |
+  | LTF execution | H4 → H1 → M15 | confirmation: a BOS in the bias direction (CISD), then a fresh FVG/OB as the entry |
+
+  `analyze()` derives the bias from the highest live HTF CRT, requires an LTF confirmation matching the bias, and builds a `CrtPlan`: entry at the aligned zone (discount for longs / premium for shorts), stop beyond the zone padded by 0.25×ATR (else 5% of the HTF range), target the **nearest** HTF CRT boundary beyond entry, partial at equilibrium, R:R and provenance. Propose-only.
+- `conditions.py` gained `level_forms` optionals `variant` and `min_inside_bars` (watch for an inside-bar CRT specifically).
+- `models.py`: `DEFAULT_FAMILIES` includes `crt`; the timeframe regex now accepts monthly `MN1`/`MN`.
+- `server.py`: `atr` added to the `/api/indicators` payload, and `GET /api/agent/crt` exposes the read (read-only).
+- `tests/test_agentic/test_standalone.py` now enforces: the pure core imports nothing from the repo, and `feed.py` is lazy.
 
 ## Deferred / out of scope
 

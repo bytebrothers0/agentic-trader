@@ -21,10 +21,12 @@ SPEC_VERSION = "0.1.0"
 
 #: Timeframes are validated by shape rather than against a frozen list, so a
 #: derived timeframe such as H2 is expressible without touching the schema.
-_TIMEFRAME_RE = re.compile(r"^(M\d{1,2}|H\d{1,2}|D\d{1,2}|W\d{1,2})$")
+#: ``MN1``/``MN`` is MT5 monthly — note ``M1`` is 1-minute, not monthly, so the
+#: monthly form is spelled out rather than folded into ``M\d{1,2}``.
+_TIMEFRAME_RE = re.compile(r"^(M\d{1,2}|MN\d{0,2}|H\d{1,2}|D\d{1,2}|W\d{1,2})$")
 
 DEFAULT_FAMILIES: List[str] = [
-    "bos", "idm", "fvg", "ob", "liquidity", "trendline", "sr", "qm",
+    "crt", "ts", "bos", "idm", "fvg", "ob", "liquidity", "trendline", "sr", "qm",
 ]
 
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}

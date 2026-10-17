@@ -62,13 +62,16 @@ LEVEL_REF_ANY: Tuple[Tuple[str, ...], ...] = (("level_key",), ("family", "price"
 SESSIONS = ("asia", "london", "ny")
 DIRECTIONS = ("bullish", "bearish")
 RANGE_REFERENCES = ("ADR", "ATR")
+#: CRT variants (see ``indicators/crt_detector.py``): the strict 3-candle form,
+#: or the accumulation that nests inside bars inside the anchor.
+CRT_VARIANTS = ("classic", "inside_bar")
 
 CONDITION_SPECS: Dict[str, ConditionSpec] = {
     Condition.LEVEL_FORMS.value: ConditionSpec(
         name="level_forms",
         required=("family",),
-        optional=("direction", "min_size_atr", "timeframe"),
-        description="a new level of the family appears",
+        optional=("direction", "min_size_atr", "timeframe", "variant", "min_inside_bars"),
+        description="a new level of the family appears (for family 'crt': a CRT sweep forms)",
     ),
     Condition.LEVEL_TOUCHED.value: ConditionSpec(
         name="level_touched",
@@ -224,6 +227,18 @@ def validate(condition: Any, params: Optional[Dict[str, Any]] = None) -> Dict[st
             _coerce_float(params, "min_size_atr")
             if params["min_size_atr"] <= 0:
                 raise ConditionError("invalid_param", "min_size_atr must be > 0")
+        if _present(params, "variant"):
+            variant = str(params["variant"]).lower()
+            if variant not in CRT_VARIANTS:
+                raise ConditionError("invalid_param", f"variant must be one of {CRT_VARIANTS}")
+            params["variant"] = variant
+        if _present(params, "min_inside_bars"):
+            try:
+                params["min_inside_bars"] = int(params["min_inside_bars"])
+            except (TypeError, ValueError):
+                raise ConditionError("invalid_param", "min_inside_bars must be an integer")
+            if params["min_inside_bars"] < 0:
+                raise ConditionError("invalid_param", "min_inside_bars must be >= 0")
 
     if name in (Condition.LEVEL_TOUCHED.value, Condition.LEVEL_SWEPT.value, Condition.LEVEL_BROKEN.value):
         if _present(params, "level_key"):

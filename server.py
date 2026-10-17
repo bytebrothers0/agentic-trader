@@ -203,6 +203,17 @@ def get_indicators(
         current_price = float(df["close"].iloc[-1])
         times_unix = df["time"].values
 
+        # ATR(14), Wilder smoothing — the agent's volatility unit for stops,
+        # sizing and "distance in ATR" lookups. Surfaced here so the read-only
+        # feed can normalise risk without a second round-trip.
+        _prev_close = df["close"].shift(1)
+        _tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - _prev_close).abs(),
+            (df["low"] - _prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr14 = float(_tr.ewm(alpha=1.0 / 14, min_periods=1, adjust=False).mean().iloc[-1])
+
         levels_data = []
 
         def _end_time(candle_idx: Optional[int]):
@@ -642,9 +653,32 @@ def get_indicators(
             "symbol": loader.resolved_symbol,
             "timeframe": timeframe.upper(),
             "current_price": current_price,
+            "atr": round(atr14, 3),
             "total_levels": len(levels_data),
             "levels": levels_data
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/crt")
+def get_agent_crt(
+    symbol: str = Query("XAUUSD"),
+    ltf: str = Query("H1"),
+    bars: int = Query(400, ge=30, le=1500),
+):
+    """Read-only top-down CRT read for the agent.
+
+    HTF bias from D1/W1/MN1 CRT, LTF confirmation, and a propose-only plan.
+    Deliberately read-only: no store mutation, no orders. The agent loop, panel
+    and LLM live in a later phase — this is the perception+policy seam only.
+    """
+    try:
+        from agentic.crt_strategy import analyze
+        from agentic.feed import Feed
+
+        result = analyze(Feed(), symbol, ltf_timeframe=ltf.upper(), bars=bars)
+        return {"ok": True, "analysis": result.to_dict()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -84,7 +84,19 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `pilot/run_pilot.py` | 259 | Offline pilot harness (phases: build/analyze/score/revise). |
 | `state/*.json` | — | Runtime state: `proposals.json`, `ai_proposal.json`, `indicator_registry.json`. |
 
-### 3.7 Frontend (`web/`)
+### 3.7 Agentic Agent (`agentic/`) — read-only perception, propose-only policy
+Spec: `docs/specs/2026-10-17-agentic-chart-agent-design.md`. Built in phases; Phase 0 (schemas + store) and Phase 1 (feed + CRT playbook) are landed. Nothing here places an order; `mode=propose` throughout.
+
+| File | Lines | Responsibility |
+|------|-------|----------------|
+| `models.py` | 328 | Schemas (`View`/`Subscription`/`Thesis`/`Proposal`/`TurnRecord`/`Budget`/`StoreState`), the `Serde` JSON round-trip, and `make_level_key` (`family:timeframe:direction:price:born_at`). Timeframes are shape-validated (`M\d`/`MN\d`/`H\d`/`D\d`/`W\d`) — monthly is `MN1`/`MN`, **not** `M1` (which is 1-minute). `DEFAULT_FAMILIES` now includes `crt`. |
+| `conditions.py` | 345 | The closed condition vocabulary the watchdog can evaluate; a watch that cannot be evaluated deterministically is rejected at the door. `level_forms` gained CRT-aware optionals `variant` (`classic`/`inside_bar`) and `min_inside_bars`, so a watch can wait specifically for an inside-bar CRT. |
+| `store.py` | 558 | The durable context store: atomic JSON persistence, caps (8 pins / 20 subscriptions), TTLs (watch 24h/7d, pin 72h/14d), the turn leash (60s / 6 per hour / 60 per day / $5 per day) and budget accounting. Holds **intent + metadata only** — never detector output. |
+| `feed.py` | 430 | **Phase 1 — the single sanctioned bridge to the running system, read-only.** `Feed(provider)` calls the indicator layer and normalises the `/api/indicators` payload into `LevelRecord`s with stable `level_key`s and a `LevelStatus` (`end_kind` first, then `state`). Family aliases (`liq`→`liquidity`), zone bands (`box_*`/`range_*`), CRT extras (`variant`/`inside_bars`/`target`) and ATR are carried through. `default_provider()` **lazily** imports `server.get_indicators`, so importing the package stays cheap (the state-check test asserts the laziness). |
+| `crt_strategy.py` | 479 | **The top-down CRT playbook** the agent runs: HTF bias from D1/W1/MN1 CRT (`HTF_BIAS_TIMEFRAMES`, highest live CRT wins), LTF confirmation (`bos` → `fvg`/`ob` → raid, bias-direction matched), and a propose-only `CrtPlan` — entry at the aligned zone, stop padded by ATR (else 5% of the HTF range), target the **nearest** HTF CRT boundary beyond entry (draw-on-liquidity ladder), partial at equilibrium, R:R and provenance (CRT + confirmation + zone level keys). `analyze(feed, symbol, ltf_timeframe=…)` is the whole read. Depends only on `feed` records. |
+| `tests/test_agentic/` | — | `test_store.py`, `test_conditions.py`, `test_standalone.py` (AST guard: the pure core imports nothing from the repo; `feed.py` is the one lazy bridge), `test_feed.py`, `test_crt_strategy.py`. |
+
+### 3.8 Frontend (`web/`)
 | File | Lines | Responsibility |
 |------|-------|----------------|
 | `index.html` | 471 | TradingView terminal shell. |
@@ -92,10 +104,10 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `style.css` | 1261 | Styling. |
 | `backtest.html` / `backtest.js` | 99 / 820 | Backtest journal viewer (reads `/api/backtest/*`). |
 
-### 3.8 Tests (`tests/`)
+### 3.9 Tests (`tests/`)
 `test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_crt.py` (CRT: classic/inside-bar, dedupe, both-side bars, life cycle, gates, caps), `test_idm.py` (BOS family, pinned via `two_candle_rule=False` + `ref_candle_rule=False`), `test_luap_idm.py` (two-candle family + merge/dedupe), `test_ref_candle_idm.py` (reference-candle family + structure gate), `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
 
-### 3.9 Docs & Reference (non-code)
+### 3.10 Docs & Reference (non-code)
 - `strategy_notes/` — strategy playbooks (phoenix_mnsr, ems mnsr, apa, abax mnsr, advance mnsr1) as markdown + subtitle transcripts.
 - `mql5/` — MT5-side resource mirror (Experts/Indicators) and a nested `.agents/` skill copy; plan `.txt` files.
 - `temp/xauusd-ai-trading-signal/` — older standalone prototype (separate engines, `live_scanner.py`, dispatchers, README).
@@ -107,7 +119,7 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 Candles/indicators (L79-579):
 - `GET /api/symbols` — broker symbols, priority-sorted.
 - `GET /api/candles` — OHLCV for TradingView.
-- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl/liq).
+- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl/liq/crt). The payload also carries `atr` (ATR-14, Wilder) alongside `current_price`, for the agent's stops/sizing and level lookups.
 
 Settings: `GET /api/settings/modules`, `POST /api/settings/modules/{id}?enabled=`.
 
@@ -116,6 +128,8 @@ Account/trading (L676-824): `GET /api/account`, `GET /api/positions`, `POST /api
 Backtest (L827-972): `GET /api/backtest/trades`, `GET /api/backtest/journals`, `GET /backtest` (viewer HTML), `GET /` (index).
 
 AI (mounted router): `/api/ai/proposal|scan|indicators|journal|proposals|validate-ts`.
+
+Agent (read-only): `GET /api/agent/crt?symbol&ltf&bars` — the top-down CRT read (HTF bias + LTF confirmation + propose-only plan) through `agentic.feed` → `agentic.crt_strategy`. No store mutation, no orders.
 
 ## 5. Key Data Flow
 
@@ -129,6 +143,9 @@ MT5 terminal
   → POST /api/orders/place → OrderManager → MT5
 AI layer (propose-only):
   ai_agent/agent_loop.run_once → snapshot + news + LLM → decision_layer.validate → proposal JSON
+Agentic layer (propose-only, phase 1):
+  GET /api/agent/crt → agentic.feed.Feed (lazy server.get_indicators) → normalised levels
+  → crt_strategy.analyze: HTF bias (D1/W1/MN1 CRT) → LTF confirmation → CrtPlan
 ```
 
 ## 6. Conventions & Notes
@@ -140,3 +157,4 @@ AI layer (propose-only):
 - Interpreter quirk on Windows: `start_live.py` re-execs into Python311.
 - CRT (`CRT_*` in `config/settings.py`) keeps **one setup per manipulation candle**, resolved to the **widest** range (the outermost accumulation container). The ATR gates (`min_range_atr`/`min_sweep_atr`) are off by default — every candle is a candidate anchor and a sweep counts on price alone — and the per-side caps (`CRT_MAX_PER_SIDE` history / `CRT_MAX_LIVE_PER_SIDE` live) bound chart volume instead. Re-enable by setting the ATR floors >0 if micro-ranges ever need gating. `CRT_REQUIRE_DIRECTIONAL_ANCHOR` is off because sources disagree on the anchor's required colour — the sweep plus close-back-inside is the definition.
 - Trendlines are built as lines **through close-price apexes** using **multi-scale apex windows** (`TL_PIVOT_WINDOWS`, default `(5, 14)`, merged — small windows catch local channel swings, the large one the major swings) plus `TL_TOL_ATR`, `TL_CHANNEL_PARALLEL_ATR`, `TL_SWEEP_ATR` in `config/settings.py`, passed to `TLDetector`. `TLLine.slope` is signed and `value_at()` projects it; `role` = support/resistance by anchor set; lines carry `channel_id`, `flipped`/`retest_role` and `swept`. The old mid-line channel (`TLChannel`) is removed. `slope_mult`/`body_pivots` are deprecated no-ops.
+- The agentic layer (`agentic/`) is **read-only and propose-only**. `agentic/feed.py` is the only module allowed to touch the running system, and only **lazily** — importing `agentic` never pulls FastAPI/MT5. The pure core (`models`/`conditions`/`store`/`crt_strategy`) imports nothing from the repo; `tests/test_agentic/test_standalone.py` enforces this with an AST check. Its CRT playbook is **top-down**: bias from the D1/W1/MN1 CRT, confirmation/execution on a lower timeframe, target the **nearest** HTF CRT boundary. It never caches detector output (levels are recomputed each read) and holds no order tool.

@@ -2,22 +2,46 @@
 
 Spec: docs/specs/2026-10-17-agentic-chart-agent-design.md
 
-This package is deliberately **standalone and unwired**: nothing in it is imported
-by ``server.py``, the indicator suite, the web front-end, or the legacy
-``ai_agent`` package. It is built in isolation so it can be developed and tested
-in parallel with indicator work, and so that wiring it up later is a one-file
-adapter rather than a refactor.
+Phase 0: the schemas and the durable context store (``models`` + ``store``).
+Phase 1: ``feed.py``, the read-only bridge to the indicator suite, and
+``crt_strategy.py``, the top-down CRT playbook the agent runs (HTF bias from
+D1/W1/MN1 CRT, LTF confirmation, a propose-only plan).
 
-Phase 0 (this code): schemas + the durable context store.
-
-The store is the state of record. It holds *intent* (what the agent wants to look
-at) and *agent metadata* (what it pinned, what it is waiting for, what it thinks)
-— never detector output. Levels are recomputed by the feed on every render, so a
-bug in here can never change a level's price.
+The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy`` — imports
+nothing from the running system. ``feed`` is the single sanctioned bridge, and it
+reaches the indicator layer only lazily, so importing this package stays cheap.
+Nothing here places an order (``mode=propose`` throughout), and nothing caches
+detector output in the store: levels are recomputed on every read. The agent
+loop, the renderer, the panel and the LLM remain later phases.
 """
 from __future__ import annotations
 
 from agentic.conditions import Condition, ConditionError, ConditionSpec, spec_for, validate
+from agentic.crt_strategy import (
+    HTF_BIAS_TIMEFRAMES,
+    LTF_EXECUTION_TIMEFRAMES,
+    OPTIONAL_FAMILIES,
+    REQUIRED_FAMILIES,
+    Confirmation,
+    CrtAnalysis,
+    CrtPlan,
+    HtfBias,
+    analyze,
+    build_plan,
+    derive_htf_bias,
+    find_confirmation,
+)
+from agentic.feed import (
+    KNOWN_FAMILIES,
+    Feed,
+    FeedSnapshot,
+    LevelRecord,
+    default_provider,
+    family_of,
+    parse_level,
+    parse_payload,
+    status_of,
+)
 from agentic.models import (
     SPEC_VERSION,
     AgentMeta,
@@ -54,12 +78,24 @@ __all__ = [
     "Condition",
     "ConditionError",
     "ConditionSpec",
+    "Confirmation",
     "ContextStore",
+    "CrtAnalysis",
+    "CrtPlan",
+    "Feed",
+    "FeedSnapshot",
+    "HTF_BIAS_TIMEFRAMES",
+    "HtfBias",
+    "KNOWN_FAMILIES",
+    "LTF_EXECUTION_TIMEFRAMES",
     "Layout",
     "LeashExceeded",
+    "LevelRecord",
     "LevelStatus",
+    "OPTIONAL_FAMILIES",
     "Proposal",
     "ProposalStatus",
+    "REQUIRED_FAMILIES",
     "StoreError",
     "StoreState",
     "Subscription",
@@ -69,6 +105,15 @@ __all__ = [
     "Trigger",
     "TurnRecord",
     "View",
+    "analyze",
+    "build_plan",
+    "default_provider",
+    "derive_htf_bias",
+    "family_of",
+    "find_confirmation",
+    "parse_level",
+    "parse_payload",
     "spec_for",
+    "status_of",
     "validate",
 ]
