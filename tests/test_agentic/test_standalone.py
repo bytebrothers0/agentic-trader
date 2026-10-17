@@ -50,6 +50,7 @@ PURE_MODULES = (
     "prompts.py",
     "tools.py",
     "agent_loop.py",
+    "llm.py",
     "__init__.py",
 )
 #: The single sanctioned bridge. It may reach into the system, but only lazily.
@@ -132,6 +133,10 @@ def test_the_package_exposes_its_surface():
     assert agentic.RenderResult is not None
     assert agentic.level_lookup is not None
     assert agentic.LookupRecord is not None
+    # phase 5 wiring: the vision client surface is public.
+    assert agentic.VisionClient is not None
+    assert agentic.to_openai_tools is not None
+    assert agentic.DEFAULT_MODEL
 
 
 def test_renderer_imports_the_vision_stack_lazily():

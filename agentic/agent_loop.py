@@ -25,7 +25,10 @@ The turn algorithm (spec's six steps)
    tool calls (bounded by ``MAX_TOOL_CALLS_PER_TURN``) and re-renders (bounded by
    ``MAX_RENDERS_PER_TURN``); it feeds the results back and calls again, up to a
    small round cap. Truncation is surfaced both to the model (a refused
-   ``ToolResult``) and to the caller (``output["truncated"]``), never silent.
+   ``ToolResult``) and to the caller (``output["truncated"]``), never silent. A
+   transport exception is caught: the turn is refused with
+   ``client_error: ...`` (or ``bad_response: ...`` for a malformed reply), and if
+   earlier rounds already cost money the spend is billed as a partial turn.
 5. **Output.** :func:`_apply_output` applies the structured result — thesis,
    proposals — on top of the turn's notes. Applying it must never raise out of
    :meth:`run_turn`; a rejected mutation is captured in the turn's output.
@@ -112,6 +115,10 @@ class AgentRequest(Serde):
     manifest: Dict[str, Any] = field(default_factory=dict)
     tools: List[Dict[str, Any]] = field(default_factory=list)
     tool_results: List[ToolResult] = field(default_factory=list)  # fed back on the next round
+    #: The calls whose results are in ``tool_results``, in the same order. A real
+    #: client (``agentic.llm``) uses this to rebuild the assistant ``tool_calls``
+    #: message that precedes the ``tool`` results on the wire.
+    tool_calls_made: List[ToolCall] = field(default_factory=list)
 
 
 @dataclass
@@ -123,6 +130,9 @@ class AgentReply(Serde):
     text: str = ""
     tokens: Dict[str, int] = field(default_factory=dict)
     cost_usd: float = 0.0
+    #: The provider's ``finish_reason`` (e.g. ``tool_calls``/``stop``), recorded for
+    #: debugging. The loop ignores it; it is not a control input.
+    finish_reason: str = ""
 
 
 class AgentClient(Protocol):
@@ -193,6 +203,9 @@ class _ToolPhase:
     tokens: int = 0
     cost: float = 0.0
     renders: int = 0
+    #: Set when the model call itself failed (a transport exception). A failed
+    #: phase is never logged: the turn did not happen.
+    error: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +244,58 @@ def _apply_output(
 # --------------------------------------------------------------------------- #
 # The loop
 # --------------------------------------------------------------------------- #
+
+def _truncate(text: Any, limit: int = 200) -> str:
+    """One-line, length-capped text for a refusal reason (never leak a payload)."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1] + "…"
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """``bad_response:`` for a :class:`~agentic.llm.ResponseError`, else ``client_error:``.
+
+    The type name and a truncated message only — an exception's text can carry a
+    request body or a key, so it is capped and never stored verbatim.
+    """
+    # Imported locally: ``agentic.llm`` imports this module, so a module-level
+    # import would be circular; by the time a turn runs, both modules are loaded.
+    from agentic.llm import ResponseError
+
+    label = "bad_response" if isinstance(exc, ResponseError) else "client_error"
+    return f"{label}: {type(exc).__name__}: {_truncate(exc)}"
+
+
+def _execute_tool_call(
+    registry: ToolRegistry,
+    call: ToolCall,
+    executed: int,
+    truncations: List[str],
+    log: List[Dict[str, Any]],
+) -> Tuple[ToolResult, int]:
+    """Run one tool call, or refuse it at the per-turn cap.
+
+    Returns ``(result, executed_count)`` so the caller can keep the running count.
+    A call beyond ``MAX_TOOL_CALLS_PER_TURN`` becomes an ``ok=False`` result in the
+    log and in what the model sees next — visible on both sides, never dropped.
+    """
+    if executed >= MAX_TOOL_CALLS_PER_TURN:
+        truncations.append("tool_calls")
+        result = ToolResult(
+            call_id=call.call_id,
+            name=call.name,
+            ok=False,
+            error=f"tool_cap: {MAX_TOOL_CALLS_PER_TURN} tool calls per turn",
+        )
+    else:
+        result = registry.execute(call)
+        executed += 1
+        if call.name == "render" and not result.ok:
+            truncations.append("renders")
+    log.append({"call": call.to_dict(), "result": result.to_dict()})
+    return result, executed
+
 
 class AgentLoop:
     """Drives one turn at a time over a store, a feed, a renderer and a client."""
@@ -322,6 +387,13 @@ class AgentLoop:
         ``MAX_TOOL_ROUNDS`` model calls. A call beyond the cap is **not dropped
         silently** — it becomes an ``ok=False`` :class:`ToolResult` in the log and in
         the results the model sees next, so the truncation is visible on both sides.
+
+        The model call is hardened: an exception becomes ``_ToolPhase.error``
+        (``client_error: ...`` / ``bad_response: ...``) rather than propagating. On
+        that path the spend and log of the rounds that already succeeded are kept
+        on the returned phase, so :meth:`run_turn` can bill a partial turn. The
+        calls whose results were fed back are recorded on
+        ``request.tool_calls_made``, in order, for the wire layer.
         """
         log: List[Dict[str, Any]] = []
         truncations: List[str] = []
@@ -330,31 +402,34 @@ class AgentLoop:
         executed = 0
         reply = AgentReply()
         for _ in range(MAX_TOOL_ROUNDS):
-            reply = self.client.complete(request)
+            try:
+                reply = self.client.complete(request)
+            except Exception as exc:  # noqa: BLE001 — a failed model call must not crash the loop
+                return _ToolPhase(
+                    reply=reply,
+                    log=log,
+                    truncations=list(dict.fromkeys(truncations)),
+                    tokens=tokens,
+                    cost=cost,
+                    renders=registry.renders_used(),
+                    error=_failure_reason(exc),
+                )
             tokens += sum(int(v or 0) for v in (reply.tokens or {}).values())
             cost += float(reply.cost_usd or 0.0)
             if not reply.tool_calls:
                 break
             results: List[ToolResult] = []
+            made: List[ToolCall] = []
             for call in reply.tool_calls:
-                if executed >= MAX_TOOL_CALLS_PER_TURN:
-                    truncations.append("tool_calls")
-                    dropped = ToolResult(
-                        call_id=call.call_id,
-                        name=call.name,
-                        ok=False,
-                        error=f"tool_cap: {MAX_TOOL_CALLS_PER_TURN} tool calls per turn",
-                    )
-                    results.append(dropped)
-                    log.append({"call": call.to_dict(), "result": dropped.to_dict()})
-                    continue
-                executed += 1
-                result = registry.execute(call)
-                if call.name == "render" and not result.ok:
-                    truncations.append("renders")
+                made.append(call)
+                result, executed = _execute_tool_call(
+                    registry, call, executed, truncations, log
+                )
                 results.append(result)
-                log.append({"call": call.to_dict(), "result": result.to_dict()})
             request.tool_results = list(request.tool_results) + results
+            # The calls that produced those results, in the same order: what a
+            # real client needs to rebuild the assistant -> tool message pair.
+            request.tool_calls_made = list(request.tool_calls_made) + made
             if registry.last_result is not None:
                 request.image_path = registry.last_result.image_path
                 request.manifest = registry.last_result.manifest
@@ -422,6 +497,42 @@ class AgentLoop:
 
         # 4. LLM + tool phase.
         phase = self._tool_phase(registry, request)
+        if phase.error:
+            # A failed model call. Side effects that are *not* the turn record have
+            # already happened: ``expire_due`` retired deadlines in memory and
+            # ``initial_render`` wrote a PNG to disk. "Not recorded" below means no
+            # turn record and no save.
+            #
+            # If earlier rounds succeeded they cost real money, so bill them as a
+            # partial turn rather than dropping the spend and under-counting the
+            # leash. If the very first call failed there is nothing to bill: the
+            # turn is refused and nothing is written.
+            if not (phase.tokens or phase.cost):
+                return TurnOutcome(trigger=trigger, ok=False, reason=phase.error)
+            output = {"error": phase.error, "partial": True}
+            final = registry.last_result or initial
+            record = self.store.record_turn(
+                trigger,
+                trigger_detail=detail,
+                renders=registry.renders_used(),
+                tool_calls=phase.log,
+                tokens=phase.tokens,
+                cost_usd=phase.cost,
+                output=output,
+                now=now,
+            )
+            self.store.save()
+            return TurnOutcome(
+                turn_id=record.id,
+                trigger=trigger,
+                ok=False,
+                reason=phase.error,
+                renders=registry.renders_used(),
+                tool_calls=len(phase.log),
+                output=output,
+                image_path=final.image_path,
+                manifest=final.manifest,
+            )
 
         # 5. Output — applying it must never raise out of run_turn. The registry's
         # turn notes come first, then any the model wrote in its output.

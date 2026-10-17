@@ -93,6 +93,11 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
     "propose_trade": "Emit a plan (propose-only). Fields mirror AIProposal.",
 }
 
+#: The default JSON-Schema object for a tool whose arguments are free-form. Shared
+#: with the wire layer (:mod:`agentic.llm`) so the "no parameters" shape is defined
+#: exactly once.
+DEFAULT_TOOL_PARAMETERS: Dict[str, Any] = {"type": "object", "properties": {}}
+
 #: name -> JSON-Schema object describing the tool's arguments.
 TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "set_view": {
@@ -401,7 +406,7 @@ class ToolRegistry:
             {
                 "name": name,
                 "description": TOOL_DESCRIPTIONS.get(name, ""),
-                "parameters": TOOL_SCHEMAS.get(name, {"type": "object"}),
+                "parameters": TOOL_SCHEMAS.get(name, DEFAULT_TOOL_PARAMETERS),
             }
             for name in TOOL_NAMES
         ]

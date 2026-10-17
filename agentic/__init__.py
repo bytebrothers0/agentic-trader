@@ -15,10 +15,13 @@ Phase 3: ``lookup.py``, the numeric ground truth for anything the agent saw, and
 Phase 4: ``tools.py`` (the tool surface, no order tool), ``prompts.py`` (the
 system prompt and the per-turn briefing) and ``agent_loop.py`` (one turn: briefing
 -> render -> LLM -> tools -> persist), with a zero-spend ``ScriptedAgent`` mock.
+Phase 5: ``llm.py``, the OpenAI-compatible vision client — the request builder and
+a tolerant reply parser over an **injected transport**, so a live HTTP call is
+wired by the caller and the pure core still touches no network.
 
 The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
 ``subscriptions``, ``watchdog``, ``lookup``, ``tools``, ``prompts``,
-``agent_loop`` — imports nothing from the running system. ``feed`` is the single
+``agent_loop``, ``llm`` — imports nothing from the running system. ``feed`` is the single
 sanctioned bridge, and it reaches the indicator layer only lazily, so importing
 this package stays cheap. ``renderer`` is the one module that needs the vision
 stack, and it imports ``matplotlib``/``PIL`` inside its functions so the package
@@ -98,6 +101,7 @@ from agentic.prompts import (
     SYSTEM_PROMPT,
     build_briefing,
     build_system_prompt,
+    render_briefing_text,
     subscription_summary,
 )
 from agentic.tools import (
@@ -116,6 +120,19 @@ from agentic.agent_loop import (
     AgentRequest,
     ScriptedAgent,
     TurnOutcome,
+)
+from agentic.llm import (
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MODEL,
+    PRICES,
+    ResponseError,
+    Transport,
+    VisionClient,
+    build_messages,
+    encode_image,
+    estimate_cost,
+    parse_reply,
+    to_openai_tools,
 )
 
 __all__ = [
@@ -204,4 +221,17 @@ __all__ = [
     "build_system_prompt",
     "render_current",
     "subscription_summary",
+    # phase 5
+    "DEFAULT_MAX_TOKENS",
+    "DEFAULT_MODEL",
+    "PRICES",
+    "ResponseError",
+    "Transport",
+    "VisionClient",
+    "build_messages",
+    "encode_image",
+    "estimate_cost",
+    "parse_reply",
+    "render_briefing_text",
+    "to_openai_tools",
 ]

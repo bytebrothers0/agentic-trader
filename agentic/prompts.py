@@ -31,6 +31,7 @@ evaluator.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
@@ -79,7 +80,14 @@ _CONDITION_VOCABULARY = (
 )
 
 _OUTPUT_CONTRACT = (
-    "Output contract — end the turn with a structured object:\n"
+    "How a turn ends\n"
+    "- Think first, then act: reason over the briefing and the image, and call tools while you "
+    "still need to (change the view, look something up, arm a subscription).\n"
+    "- Use only the tools provided; there is no other way to act, and no order tool.\n"
+    "- When you have no more tool calls, end the turn with the structured object below, as "
+    "STRICT JSON — no prose around it, no markdown fence, no trailing commentary.\n"
+    "\n"
+    "Output contract — the final structured object:\n"
     "  thesis: {bias, storyline, levels_of_interest[], invalidation, confidence}\n"
     "  proposals: [{bias, setup, entry, sl, tp, invalidation, confidence, reason, "
     "provenance[]}]\n"
@@ -290,3 +298,21 @@ def build_briefing(
         "notes": _recent_notes(store),
         "now": now.isoformat(),
     }
+
+
+def render_briefing_text(briefing: Optional[Dict[str, Any]]) -> str:
+    """A briefing -> the stable text block the model's user message carries.
+
+    The briefing is JSON-serialisable by construction (:func:`build_briefing`
+    builds it as plain data), so this is a canonical JSON dump under a one-line
+    header naming the trigger. It lives here, beside the briefing that produced
+    it, so the wire layer (``agentic.llm``) never re-implements the format.
+    """
+    data = briefing or {}
+    trigger = str(data.get("trigger") or "turn")
+    detail = _one_line(data.get("detail"))
+    header = f"Turn briefing — trigger: {trigger}"
+    if detail:
+        header += f" ({detail})"
+    body = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    return f"{header}\n{body}"

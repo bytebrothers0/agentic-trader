@@ -768,3 +768,49 @@ def test_briefing_refuses_without_an_instant(tmp_path):
     store = _store(tmp_path, clock)
     with pytest.raises(RuntimeError):
         prompts.build_briefing(store, trigger="request", now=None)
+
+
+# --------------------------------------------------------------------------- #
+# The request records the calls it fed back (phase 5)
+# --------------------------------------------------------------------------- #
+
+def test_run_turn_records_the_calls_whose_results_it_fed_back(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    agent = ScriptedAgent([
+        AgentReply(tool_calls=[
+            ToolCall(call_id="c1", name="add_note", arguments={"text": "hello"}),
+            ToolCall(call_id="c2", name="render"),
+        ]),
+        AgentReply(output={"reasoning": "done"}),
+    ])
+    loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
+
+    loop.run_turn(trigger="request")
+
+    # the same object is handed to every round, so its tool activity accumulates
+    # in order, alongside the results, for the wire layer to rebuild.
+    request = agent.requests[0]
+    assert [call.call_id for call in request.tool_calls_made] == ["c1", "c2"]
+    assert [result.call_id for result in request.tool_results] == ["c1", "c2"]
+
+
+def test_tool_calls_made_includes_calls_dropped_by_the_cap(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    calls = [
+        ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": f"note {i}"})
+        for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
+    ]
+    agent = ScriptedAgent([AgentReply(tool_calls=calls), AgentReply()])
+    loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
+
+    loop.run_turn(trigger="request")
+
+    request = agent.requests[0]
+    # every emitted call has a result (executed or tool_cap-refused), and is recorded.
+    assert len(request.tool_calls_made) == MAX_TOOL_CALLS_PER_TURN + 2
+    assert len(request.tool_results) == MAX_TOOL_CALLS_PER_TURN + 2
+    assert [r.call_id for r in request.tool_results] == [c.call_id for c in calls]
