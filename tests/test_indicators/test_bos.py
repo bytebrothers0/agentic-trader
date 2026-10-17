@@ -2,11 +2,14 @@
 
 Logic: Donchian-zigzag swings (bar L ago exceeding all L bars after it) +
 CLOSE through the last swing. Wick-only crosses never fire; one shot per
-level; breaks against trend state are CHoCH.
+level; breaks against trend state are CHoCH. The range high/low since the
+range last expanded is armed as well, so a shallow pullback pivot cannot
+demote the boundary a continuation BOS still has to clear.
 """
 import pandas as pd
 
-from indicators.bos_detector import BOSDetector, BOSDirection
+from indicators.bos_detector import BOSDetector, BOSDirection, BOSLevel
+from indicators.idm_detector import _structure_direction
 
 
 def _df(rows):
@@ -145,3 +148,70 @@ def test_internal_hidden_by_flag():
     out = BOSDetector(df, swing_length=10, internal_length=2,
                       show_internal=False).detect_all()
     assert out == []
+
+
+def test_range_high_survives_a_lower_pullback_high():
+    """A shallow pullback high must not demote the range high.
+
+    Bar 0 leaves 102 behind, the leg flushes to 96 and recovers, and only
+    pivots a *lower* high 101.2 (bar 6). The nearer swing reports first when
+    its close comes; the range high (102 @ bar 0) still reports afterwards,
+    flagged as a range break.
+    """
+    df = _df([
+        {"open": 100.0, "high": 102.0, "low": 100.5, "close": 101.0},
+        {"open": 101.0, "high": 101.5, "low": 100.2, "close": 100.5},
+        {"open": 100.5, "high": 100.8, "low": 100.0, "close": 100.2},
+        {"open": 100.2, "high": 100.4, "low": 96.0, "close": 96.5},
+        {"open": 96.5, "high": 100.8, "low": 96.2, "close": 100.5},
+        {"open": 100.5, "high": 101.0, "low": 96.5, "close": 100.8},
+        {"open": 100.8, "high": 101.2, "low": 100.0, "close": 100.2},
+        {"open": 100.2, "high": 100.9, "low": 99.8, "close": 100.4},
+        {"open": 100.4, "high": 101.0, "low": 100.1, "close": 100.7},
+        {"open": 100.7, "high": 101.6, "low": 100.5, "close": 101.4},
+        {"open": 101.4, "high": 101.5, "low": 100.8, "close": 101.2},
+        {"open": 101.2, "high": 101.9, "low": 101.0, "close": 101.5},
+        {"open": 101.5, "high": 102.4, "low": 101.3, "close": 102.2},
+    ])
+    lv = _bos(df)
+    assert [(x.price, x.extreme_index, x.break_index, x.from_range)
+            for x in lv] == [(101.2, 6, 9, False), (102.0, 0, 12, True)]
+
+
+def test_range_low_survives_a_higher_pullback_low():
+    """Mirror of the range-high case: the range low is not demoted upward.
+
+    Bar 0 leaves 98 behind, the leg spikes to 102, and the pullback pivots a
+    *higher* low 98.8 (bar 9). The closer swing reports first; the range low
+    (98 @ bar 0) still reports at bar 13, flagged as a range break.
+    """
+    df = _df([
+        {"open": 99.0, "high": 99.6, "low": 98.0, "close": 99.2},
+        {"open": 99.2, "high": 100.2, "low": 99.0, "close": 100.0},
+        {"open": 100.0, "high": 100.6, "low": 99.8, "close": 100.4},
+        {"open": 100.4, "high": 101.0, "low": 100.2, "close": 100.8},
+        {"open": 100.8, "high": 101.6, "low": 100.6, "close": 101.2},
+        {"open": 101.2, "high": 102.0, "low": 101.0, "close": 101.6},
+        {"open": 101.6, "high": 101.8, "low": 100.4, "close": 100.6},
+        {"open": 100.6, "high": 100.8, "low": 99.4, "close": 99.8},
+        {"open": 99.8, "high": 100.4, "low": 99.0, "close": 99.4},
+        {"open": 99.4, "high": 99.8, "low": 98.8, "close": 99.2},
+        {"open": 99.2, "high": 100.4, "low": 99.0, "close": 100.0},
+        {"open": 100.0, "high": 100.2, "low": 99.6, "close": 99.8},
+        {"open": 99.8, "high": 100.0, "low": 98.5, "close": 98.6},
+        {"open": 98.6, "high": 98.8, "low": 97.6, "close": 97.9},
+    ])
+    lv = _bos(df)
+    assert [(x.price, x.extreme_index, x.break_index, x.from_range)
+            for x in lv] == [(98.8, 9, 12, False), (98.0, 0, 13, True)]
+
+
+def test_range_breaks_are_excluded_from_the_idm_gate():
+    """The IDM structure gate reads pivot breaks only."""
+    lv = [
+        BOSLevel(BOSDirection.BEARISH, 100.0, 0, 3, pd.Timestamp("2024-01-04")),
+        BOSLevel(BOSDirection.BULLISH, 110.0, 1, 5, pd.Timestamp("2024-01-06"),
+                 from_range=True),
+    ]
+    dirs = _structure_direction(8, lv)
+    assert dirs == [None, None, None] + [BOSDirection.BEARISH] * 5

@@ -512,9 +512,14 @@ def _structure_direction(n: int, bos_levels) -> List[Optional[BOSDirection]]:
     ``dirs[i]`` is the direction of the most recent break at or before bar ``i``
     — up for BOS / I-BOS / CHoCH / I-CHOCH to the upside, down otherwise — or
     ``None`` before the first break seen.
+
+    Range-boundary breaks (``BOSLevel.from_range``) are display detail: they
+    repeat a take of the swing structure on the same leg, so the gate reads
+    pivot breaks only and its timeline stays identical to the pivot-only
+    detector the IDM rules were specified against.
     """
     events = sorted((b.break_index, b.direction) for b in bos_levels
-                    if b.break_index is not None)
+                    if b.break_index is not None and not b.from_range)
     dirs: List[Optional[BOSDirection]] = [None] * n
     cur: Optional[BOSDirection] = None
     e = 0
