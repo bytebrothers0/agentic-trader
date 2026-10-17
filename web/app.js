@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const IFVG_ENABLED = true;
   const OB_ENABLED = true;
   const TL_ENABLED = true;
+  const LIQ_ENABLED = true;
 
   if (window.lucide) {
     lucide.createIcons();
@@ -40,7 +41,8 @@ document.addEventListener("DOMContentLoaded", () => {
       fvg: false,
       ifvg: false,
       ob: false,
-      tl: false
+      tl: false,
+      liq: false
     },
     candles: [],
     levels: [],
@@ -100,6 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const toggleIFVG = document.getElementById("toggleIFVG");
   const toggleOB = document.getElementById("toggleOB");
   const toggleTL = document.getElementById("toggleTL");
+  const toggleLIQ = document.getElementById("toggleLIQ");
   
   const overlaySymbol = document.getElementById("overlaySymbol");
   const overlayTF = document.getElementById("overlayTF");
@@ -358,10 +361,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const wantIFVG = IFVG_ENABLED && state.indicators.ifvg;
       const wantOB = OB_ENABLED && state.indicators.ob;
       const wantTL = TL_ENABLED && state.indicators.tl;
+      const wantLIQ = LIQ_ENABLED && state.indicators.liq;
       const wantOCL = (OCL_ENABLED || INDICATORS_ENABLED) && state.indicators.ocl;
       const wantAPEX = (APEX_ENABLED || INDICATORS_ENABLED) && state.indicators.apex;
       const wantLegacy = wantOCL || wantAPEX;
-      if (!wantTS && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantTL && !wantLegacy) {
+      if (!wantTS && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantTL && !wantLIQ && !wantLegacy) {
         state.levels = [];
       } else {
       // 5. Fetch Raw Indicators
@@ -382,6 +386,7 @@ document.addEventListener("DOMContentLoaded", () => {
           show_ifvg: IFVG_ENABLED && state.indicators.ifvg,
           show_ob: OB_ENABLED && state.indicators.ob,
           show_tl: TL_ENABLED && state.indicators.tl,
+          show_liq: LIQ_ENABLED && state.indicators.liq,
         });
 
         const indRes = await fetch(`/api/indicators?${params.toString()}`, { signal: controller.signal });
@@ -623,6 +628,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (lvl.category === "qm") return "QM";
       if (lvl.category === "idm") return "IDM";
+      if (lvl.category === "liquidity") return (lvl.type || "").includes("HIGH") ? "EQH" : "EQL";
       if (lvl.category === "bos") return (lvl.type || "").split(" ")[0] || "BOS";
       if (lvl.category === "fvg") return "FVG";
       if (lvl.category === "ifvg") return "IFVG";
@@ -849,6 +855,11 @@ document.addEventListener("DOMContentLoaded", () => {
         color = choch ? "#ff9100" : "#7aa2ff";
         lineStyle = LightweightCharts.LineStyle.Solid;
         lineWidth = 1;
+      } else if (lvl.category === "liquidity") {
+        // Buy-side pools (equal highs) above, sell-side (equal lows) below.
+        color = (lvl.type || "").includes("HIGH") ? "#ff5252" : "#4dd0e1";
+        lineStyle = LightweightCharts.LineStyle.Solid;
+        lineWidth = 1;
       }
 
       // Broken levels are history: thin gray dotted, no emphasis.
@@ -856,6 +867,15 @@ document.addEventListener("DOMContentLoaded", () => {
         color = "#5a6b7a";
         lineStyle = LightweightCharts.LineStyle.Dotted;
         lineWidth = 1;
+      }
+
+      // Swept inducement / taken liquidity fade out (history, not targets).
+      if (lvl.category === "idm" && lvl.end_kind === "swept") {
+        color = "rgba(255, 214, 0, 0.35)";
+      }
+      if (lvl.category === "liquidity" && lvl.end_kind === "taken") {
+        color = (lvl.type || "").includes("HIGH")
+          ? "rgba(255, 82, 82, 0.35)" : "rgba(77, 208, 225, 0.35)";
       }
 
       // Zone-to-zone span: formation -> life-cycle end (or short active span).
@@ -896,7 +916,9 @@ document.addEventListener("DOMContentLoaded", () => {
           ? ("tag-plain " + ((lvl.type || "").includes("HIGH") ? "ts-high" : "ts-low"))
           : lvl.category === "idm"
             ? "tag-plain idm"
-            : lvl.category === "bos"
+            : lvl.category === "liquidity"
+              ? ("tag-plain " + ((lvl.type || "").includes("HIGH") ? "liq-eqh" : "liq-eql"))
+              : lvl.category === "bos"
               ? ("tag-plain " + ((lvl.type || "").includes("CHOCH") ? "choch" : "bos"))
               : "tag-dim";
         pushLabel(anchorBar, lvl.price, endTag(lvl), plainCls, "mid");
@@ -920,6 +942,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const anyIndicatorOn = (TS_ENABLED && state.indicators.ts)
       || (TL_ENABLED && state.indicators.tl)
       || (IDM_ENABLED && state.indicators.idm)
+      || (LIQ_ENABLED && state.indicators.liq)
       || (BOS_ENABLED && state.indicators.bos)
       || (FVG_ENABLED && state.indicators.fvg)
       || (IFVG_ENABLED && state.indicators.ifvg)
@@ -943,6 +966,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.category === "ocl") badgeClass = "badge-ocl";
       else if (lvl.category === "qm") badgeClass = "badge-qm";
       else if (lvl.category === "idm") badgeClass = "badge-idm";
+      else if (lvl.category === "liquidity") badgeClass = "badge-liq";
       else if (lvl.category === "bos") badgeClass = "badge-bos";
       else if (lvl.category === "fvg") badgeClass = "badge-fvg";
       else if (lvl.category === "ifvg") badgeClass = "badge-ifvg";
@@ -1153,6 +1177,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (mode === "sr" && !SR_ENABLED && !INDICATORS_ENABLED) return;
       if (mode === "qm" && !QM_ENABLED && !INDICATORS_ENABLED) return;
       if (mode === "idm" && !IDM_ENABLED) return;
+      if (mode === "liq" && !LIQ_ENABLED) return;
       if (mode === "bos" && !BOS_ENABLED) return;
       if (mode === "fvg" && !FVG_ENABLED && !IFVG_ENABLED) return;
       if (mode === "ifvg" && !IFVG_ENABLED) return;
@@ -1165,6 +1190,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const MODES = {
         ts:       { sr: false, ocl: false, qm: false, apex: false, ts: true, idm: false, bos: false, fvg: false, ifvg: false, ob: false },
         idm:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: true, bos: false, fvg: false, ifvg: false, ob: false },
+        liq:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false, liq: true },
         bos:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: true, fvg: false, ifvg: false, ob: false },
         fvg:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: true, ifvg: false, ob: false },
         ifvg:     { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: true, ob: false },
@@ -1185,11 +1211,12 @@ document.addEventListener("DOMContentLoaded", () => {
           ifvg: IFVG_ENABLED,
           ob: OB_ENABLED,
           tl: TL_ENABLED,
+          liq: LIQ_ENABLED,
         },
       };
       const next = MODES[mode];
       if (!next) return;
-      state.indicators = { ...next };
+      state.indicators = { liq: false, ...next };
       toggleSR.checked = next.sr;
       toggleOCL.checked = next.ocl;
       toggleQM.checked = next.qm;
@@ -1201,6 +1228,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (toggleIFVG) toggleIFVG.checked = next.ifvg;
       if (toggleOB) toggleOB.checked = next.ob;
       if (toggleTL) toggleTL.checked = next.tl;
+      if (toggleLIQ) toggleLIQ.checked = !!next.liq;
       if (mode === "apex") btnLine.click();
 
       refreshData();
@@ -1281,6 +1309,13 @@ document.addEventListener("DOMContentLoaded", () => {
     toggleTL.addEventListener("change", (e) => {
       if (!TL_ENABLED) { e.target.checked = false; return; }
       state.indicators.tl = e.target.checked;
+      refreshData();
+    });
+  }
+  if (toggleLIQ) {
+    toggleLIQ.addEventListener("change", (e) => {
+      if (!LIQ_ENABLED) { e.target.checked = false; return; }
+      state.indicators.liq = e.target.checked;
       refreshData();
     });
   }

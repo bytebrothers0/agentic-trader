@@ -32,10 +32,14 @@ from config.settings import (
     TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
     TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
+    IDM_SWING_LENGTH, IDM_SHOW_INTERNAL, IDM_MAX_PER_SIDE, IDM_ATR_PERIOD,
+    LIQ_ENABLED, LIQ_SWING_LENGTH, LIQ_EQ_TOL_ATR, LIQ_EQ_MAX_BARS,
+    LIQ_MIN_TOUCHES, LIQ_MAX_PER_SIDE,
 )
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
 from indicators.idm_detector import IDMDetector
+from indicators.liquidity_detector import LiquidityDetector
 from indicators.bos_detector import BOSDetector
 from indicators.fvg_detector import FVGDetector
 from indicators.ob_detector import OBDetector
@@ -149,6 +153,7 @@ def get_indicators(
     show_ifvg: bool = Query(True),
     show_ob: bool = Query(True),
     show_tl: bool = Query(True),
+    show_liq: bool = Query(True),
 ):
     """
     Compute MSNR indicators on live MT5 data and return structured levels.
@@ -165,7 +170,8 @@ def get_indicators(
     ifvg_on = IFVG_ENABLED and show_ifvg
     ob_on = OB_ENABLED and show_ob
     tl_on = TL_ENABLED and show_tl
-    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on:
+    liq_on = LIQ_ENABLED and show_liq
+    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on and not liq_on:
         try:
             loader = get_loader(symbol)
             sym = loader.resolved_symbol
@@ -317,25 +323,76 @@ def get_indicators(
                     "desc": f"TS: {ts.ts_type.value.upper()} {ts.direction.value.upper()}"
                 })
 
-        # 6. IDM (inducement/liquidity). Swept IDMs draw formation -> sweep
-        # (full length); active ones are open-ended (fixed short ray).
-        idm_levels = IDMDetector(df).detect_all() if idm_on else []
+        # 6. IDM (inducement): the internal pullback inside a BOS impulse leg,
+        # anchored on structure (not every bar, as before). One IDM per break,
+        # deduped and capped per direction. Swept ones draw formation -> sweep;
+        # active ones a short ray.
+        idm_levels = IDMDetector(
+            df,
+            swing_length=IDM_SWING_LENGTH,
+            bos_swing_length=BOS_SWING_LENGTH,
+            bos_internal_length=BOS_INTERNAL_LENGTH,
+            show_internal=IDM_SHOW_INTERNAL,
+            swing_tol_atr=BOS_SWING_TOL_ATR,
+            max_per_side=IDM_MAX_PER_SIDE,
+            atr_period=IDM_ATR_PERIOD,
+        ).detect_all() if idm_on else []
         if idm_on:
             for im in idm_levels:
                 t_idx = min(im.formation_index, len(times_unix) - 1)
                 if im.swept and im.sweep_index is not None:
                     end_idx, end_kind = min(im.sweep_index, len(times_unix) - 1), "swept"
+                elif im.broken and im.broken_index is not None:
+                    end_idx, end_kind = min(im.broken_index, len(times_unix) - 1), "broken"
                 else:
                     end_idx, end_kind = None, "active"
+                state = ("SWEPT" if im.swept
+                         else "BROKEN" if im.broken else "FRESH")
                 levels_data.append({
                     "category": "idm",
                     "type": f"{im.idm_type.value.upper()} ({im.direction.value.upper()})",
                     "price": round(im.price, 3),
-                    "state": "SWEPT" if im.swept else "FRESH",
+                    "state": state,
                     "time": int(times_unix[t_idx]),
                     "end_time": _end_time(end_idx),
                     "end_kind": end_kind,
-                    "desc": f"IDM: {im.idm_type.value.upper()} {im.direction.value.upper()}"
+                    "desc": (
+                        f"IDM: {im.idm_type.value.upper()} {im.direction.value.upper()}"
+                        f" after {im.bos_kind or 'BOS'}"
+                    )
+                })
+
+        # 6b. Liquidity pools: equal highs (buy-side) / equal lows (sell-side).
+        # A pool spans its first -> last touch; taken pools draw to the sweep.
+        liq_levels = LiquidityDetector(
+            df,
+            swing_length=LIQ_SWING_LENGTH,
+            eq_tol_atr=LIQ_EQ_TOL_ATR,
+            eq_max_bars=LIQ_EQ_MAX_BARS,
+            min_touches=LIQ_MIN_TOUCHES,
+            max_per_side=LIQ_MAX_PER_SIDE,
+        ).detect_all() if liq_on else []
+        if liq_on:
+            last_i = len(times_unix) - 1
+            for ql in liq_levels:
+                start_i = min(ql.first_index, last_i)
+                if ql.taken and ql.taken_index is not None:
+                    end_i, end_kind = min(ql.taken_index, last_i), "taken"
+                else:
+                    end_i, end_kind = min(ql.last_index, last_i), "active"
+                side = ql.side.value.upper()
+                levels_data.append({
+                    "category": "liquidity",
+                    "type": f"{ql.liq_type.value.upper()} ({side})",
+                    "price": round(ql.price, 3),
+                    "state": "TAKEN" if ql.taken else "FRESH",
+                    "time": int(times_unix[start_i]),
+                    "end_time": _end_time(end_i),
+                    "end_kind": end_kind,
+                    "desc": (
+                        f"Liquidity: {ql.liq_type.value.upper()} "
+                        f"x{ql.pool_size} {side}"
+                    )
                 })
 
         # 7. BOS/CHoCH (Mxwll-style: swing + close through, one-shot),

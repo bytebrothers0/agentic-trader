@@ -1,27 +1,33 @@
 """
-idm_detector.py — Inducement (IDM / liquidity) indicator (Luap True SMC).
+idm_detector.py — Inducement (IDM) indicator, BOS-anchored.
 
-Valid pullback (Part 1, video examples 1-6):
-  Bullish: reference candle 1 holds the leg high. A LATER candle breaking
-    candle 1's LOW is the pullback; a (different or same) later candle
-    breaking candle 1's HIGH is the continuation. BOTH breaks are required —
-    one-sided drift with no pullback (ex. 3, 4, 6) yields no IDM.
-    Inside bars (range fully inside the previous candle) are non-events and
-    ignored for pullback identification. If the HIGH breaks first, reference
-    candle 1 is invalidated (the target shifts, per Part 1).
-  Bearish: mirror (pullback breaks candle 1's HIGH, continuation breaks LOW).
+Inducement is the *internal pullback* inside an impulse leg: the "higher low"
+(bullish) / "lower high" (bearish) that price has to sweep before the leg
+continues. It only means something **after a structural break** (BOS/CHoCH),
+so the detector anchors on ``BOSDetector`` events and reports the last minor
+fractal swing inside the leg that produced the break.
 
-IDM (Part 3):
-  - Bullish IDM = the swing low (lowest low between candle 1 and the
-    continuation candle). Bearish IDM = the swing high.
-  - A later new extreme does NOT discard the IDM — it confirms the leg the
-    IDM belongs to. The newest pullback simply adds the newest IDM (shift).
-  - If price sweeps the IDM (wick crosses it AND the body closes back
-    inside — a wick kiss without close-back is not a sweep) after
-    confirmation, the prior extreme is confirmed: the IDM is emitted
-    with its full formation->sweep span. Unswept IDMs emit with an
-    open end (fixed short ray on chart).
-  - Output = every confirmed IDM (swept or still active).
+Why the rewrite
+---------------
+The previous version treated *every* bar as "reference candle 1" and required a
+pullback + continuation around it. That labels essentially every push/pull on
+the chart — the "maps every high/low/wick" noise. Anchoring on structure and
+emitting **one IDM per BOS** (deduped, capped per side) keeps only the levels
+that actually matter.
+
+Rules
+-----
+Bullish BOS at ``break_index``:
+  - origin = the last minor pivot low before the broken swing high;
+  - IDM = the most recent minor pivot low between the origin and the break bar
+    that sits *above* the origin (a genuine higher low);
+  - no internal pullback (pure displacement) -> no IDM.
+Bearish BOS mirrors (a lower high below the origin high).
+
+Sweep (unchanged): the first bar after the break whose wick crosses the IDM
+and whose body closes back inside. A body close through is a break, not a
+sweep — the IDM is invalidated (``broken``). Swept IDMs render faded; broken
+ones render as thin gray "history" like the other detectors.
 """
 
 from __future__ import annotations
@@ -29,7 +35,10 @@ from __future__ import annotations
 import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Sequence
+
+from indicators.bos_detector import BOSDetector, BOSDirection
+from indicators.swings import Pivot, find_pivots
 
 
 class IDMType(Enum):
@@ -44,176 +53,218 @@ class IDMDirection(Enum):
 
 @dataclass
 class IDMLevel:
-    """A single Inducement level."""
+    """A single BOS-anchored Inducement level."""
+
     idm_type: IDMType
     direction: IDMDirection
-    price: float                  # pullback extreme (low or high)
-    formation_index: int          # iloc of the candle that set the extreme
+    price: float                            # pullback extreme (low or high)
+    formation_index: int                    # iloc of the pullback swing bar
     candle_time: pd.Timestamp
     swept: bool = False
     sweep_index: Optional[int] = None
+    broken: bool = False                    # body closed through (invalidated)
+    broken_index: Optional[int] = None
+    bos_price: Optional[float] = None       # structural level that broke
+    bos_break_index: Optional[int] = None   # iloc of the break bar
+    bos_kind: str = ""                      # BOS / CHoCH / I-BOS / I-CHOCH
     forming_candle_indices: List[int] = field(default_factory=list)
 
     def __repr__(self) -> str:
-        state = f"swept@{self.sweep_index}" if self.swept else "active"
+        if self.swept:
+            state = f"swept@{self.sweep_index}"
+        elif self.broken:
+            state = f"broken@{self.broken_index}"
+        else:
+            state = "active"
         return (
             f"IDMLevel({self.idm_type.value} @ {self.price:.5f} "
-            f"[idx={self.formation_index}] {state})"
+            f"[idx={self.formation_index}] {self.bos_kind or 'BOS'} {state})"
         )
 
 
 class IDMDetector:
     """
-    Detects IDM levels on OHLCV data (both legs independently).
+    BOS-anchored inducement detector.
 
     Parameters
     ----------
     df : pd.DataFrame
-        OHLCV dataframe with columns: open, high, low, close.
-        Index must be a DatetimeIndex.
+        OHLCV dataframe (open/high/low/close) with a DatetimeIndex.
+    swing_length : int
+        Fractal window for the *internal* pullback swing. Default 2.
+    bos_swing_length : int
+        External (major) BOS sensitivity, in bars. Default 25.
+    bos_internal_length : int
+        Internal (minor) BOS sensitivity, in bars. Default 3.
+    show_internal : bool
+        Also anchor on internal (I-BOS / I-CHOCH) breaks. Default True.
+    swing_tol_atr : float
+        Same-level tolerance for BOS swings (fraction of ATR). Default 0.05.
+    max_per_side : int
+        Keep at most this many IDMs per direction (newest, unswept first).
+    atr_period : int
+        ATR lookback for the BOS tolerance band. Default 14.
     """
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, swing_length: int = 2,
+                 bos_swing_length: int = 25, bos_internal_length: int = 3,
+                 show_internal: bool = True, swing_tol_atr: float = 0.05,
+                 max_per_side: int = 3, atr_period: int = 14):
         self._validate(df)
         self.df = df.copy()
+        self.swing_length = max(1, int(swing_length))
+        self.bos_swing_length = bos_swing_length
+        self.bos_internal_length = bos_internal_length
+        self.show_internal = show_internal
+        self.swing_tol_atr = swing_tol_atr
+        self.max_per_side = max(1, int(max_per_side))
+        self.atr_period = atr_period
         self._levels: List[IDMLevel] = []
 
     def detect_all(self) -> List[IDMLevel]:
         self._levels = []
-        self._scan_bullish()
-        self._scan_bearish()
+        h = self.df["high"].values
+        l = self.df["low"].values
+        o = self.df["open"].values
+        c = self.df["close"].values
+
+        pivots = find_pivots(h, l, self.swing_length)
+        pivot_lows = [p for p in pivots if p.is_low]
+        pivot_highs = [p for p in pivots if p.is_high]
+
+        bos = BOSDetector(
+            self.df,
+            swing_length=self.bos_swing_length,
+            internal_length=self.bos_internal_length,
+            show_internal=self.show_internal,
+            swing_tol_atr=self.swing_tol_atr,
+            atr_period=self.atr_period,
+        ).detect_all()
+
+        for bo in bos:
+            if bo.direction == BOSDirection.BULLISH:
+                self._anchor_bullish(bo, pivot_lows, l, o, c)
+            else:
+                self._anchor_bearish(bo, pivot_highs, h, o, c)
+
+        self._cap()
         self._levels.sort(key=lambda lv: lv.formation_index)
         return self._levels
 
     # ------------------------------------------------------------------
-    # Bullish: pullback breaks candle 1 low, continuation breaks its high.
-    # IDM = swing low between the two breaks.
+    # Bullish: higher low inside the up-leg that broke structure.
     # ------------------------------------------------------------------
-    def _scan_bullish(self):
-        h = self.df["high"].values
-        l = self.df["low"].values
-        o = self.df["open"].values
-        c = self.df["close"].values
-        times = self.df.index
-        n = len(self.df)
+    def _anchor_bullish(self, bo, pivot_lows: Sequence[Pivot],
+                        l, o, c) -> None:
+        origin = None
+        for p in pivot_lows:                       # index-sorted
+            if p.index < bo.extreme_index:
+                origin = p
+            else:
+                break
+        if origin is None:
+            return
 
-        for i in range(n):
-            # Phase 1: pullback = first break of low[i] before any break of high[i].
-            pull = None
-            both = False
-            for j in range(i + 1, n):
-                if self._is_inside(j):
-                    continue  # non-event
-                breaks_high = h[j] > h[i]
-                breaks_low = l[j] < l[i]
-                if breaks_high and breaks_low:
-                    pull, both = j, True
-                    break
-                if breaks_low:
-                    pull = j
-                    break
-                if breaks_high:
-                    break  # high first -> candle 1 invalidated, no IDM
-            if pull is None:
-                continue
-            # Phase 2: continuation = first break of high[i] at/after pull.
-            cont = pull if both else None
-            if cont is None:
-                for k in range(pull + 1, n):
-                    if h[k] > h[i]:
-                        cont = k
-                        break
-            if cont is None:
-                continue  # leg never continued -> no inducement
-            # Swing low = extreme between candle 1 and continuation.
-            seg = l[i + 1:cont + 1]
-            f = i + 1 + min(range(len(seg)), key=lambda t: seg[t])
-            price = float(l[f])
-            # Phase 3: sweep = first wick cross with body back inside.
-            sweep = None
-            for m in range(cont + 1, n):
-                if l[m] < price and min(o[m], c[m]) > price:
-                    sweep = m
-                    break
-            self._add(IDMType.IDM_LOW, IDMDirection.BULLISH, price, f,
-                      times[f], sweep, [i, f] + ([sweep] if sweep is not None else []))
+        pull = None
+        for p in pivot_lows:
+            if origin.index < p.index < bo.break_index and p.price > origin.price:
+                pull = p                              # keep the newest
+        if pull is None:
+            return
+
+        sweep, broken = self._resolve_low(pull.price, bo.break_index, l, o, c)
+        self._add(IDMType.IDM_LOW, IDMDirection.BULLISH, pull, sweep, broken,
+                  [origin.index, pull.index, bo.break_index], bo)
 
     # ------------------------------------------------------------------
-    # Bearish: pullback breaks candle 1 high, continuation breaks its low.
-    # IDM = swing high between the two breaks.
+    # Bearish: lower high inside the down-leg that broke structure.
     # ------------------------------------------------------------------
-    def _scan_bearish(self):
-        h = self.df["high"].values
-        l = self.df["low"].values
-        o = self.df["open"].values
-        c = self.df["close"].values
-        times = self.df.index
-        n = len(self.df)
+    def _anchor_bearish(self, bo, pivot_highs: Sequence[Pivot],
+                        h, o, c) -> None:
+        origin = None
+        for p in pivot_highs:
+            if p.index < bo.extreme_index:
+                origin = p
+            else:
+                break
+        if origin is None:
+            return
 
-        for i in range(n):
-            # Phase 1: pullback = first break of high[i] before any break of low[i].
-            pull = None
-            both = False
-            for j in range(i + 1, n):
-                if self._is_inside(j):
-                    continue  # non-event
-                breaks_high = h[j] > h[i]
-                breaks_low = l[j] < l[i]
-                if breaks_high and breaks_low:
-                    pull, both = j, True
-                    break
-                if breaks_high:
-                    pull = j
-                    break
-                if breaks_low:
-                    break  # low first -> candle 1 invalidated, no IDM
-            if pull is None:
-                continue
-            # Phase 2: continuation = first break of low[i] at/after pull.
-            cont = pull if both else None
-            if cont is None:
-                for k in range(pull + 1, n):
-                    if l[k] < l[i]:
-                        cont = k
-                        break
-            if cont is None:
-                continue  # leg never continued -> no inducement
-            # Swing high = extreme between candle 1 and continuation.
-            seg = h[i + 1:cont + 1]
-            f = i + 1 + min(range(len(seg)), key=lambda t: -seg[t])
-            price = float(h[f])
-            # Phase 3: sweep = first wick cross with body back inside.
-            sweep = None
-            for m in range(cont + 1, n):
-                if h[m] > price and max(o[m], c[m]) < price:
-                    sweep = m
-                    break
-            self._add(IDMType.IDM_HIGH, IDMDirection.BEARISH, price, f,
-                      times[f], sweep, [i, f] + ([sweep] if sweep is not None else []))
+        pull = None
+        for p in pivot_highs:
+            if origin.index < p.index < bo.break_index and p.price < origin.price:
+                pull = p                              # keep the newest
+        if pull is None:
+            return
 
-    def _add(self, idm_type: IDMType, direction: IDMDirection, price: float,
-             formation: int, candle_time: pd.Timestamp,
-             sweep: Optional[int], forming: List[int]):
+        sweep, broken = self._resolve_high(pull.price, bo.break_index, h, o, c)
+        self._add(IDMType.IDM_HIGH, IDMDirection.BEARISH, pull, sweep, broken,
+                  [origin.index, pull.index, bo.break_index], bo)
+
+    @staticmethod
+    def _resolve_low(price: float, from_i: int, l, o, c):
+        """First post-break event for a bullish IDM: sweep or body break.
+
+        Returns ``(sweep_index, broken_index)`` — at most one is set.
+        """
+        for m in range(from_i + 1, len(l)):
+            if l[m] < price:
+                if min(o[m], c[m]) > price:
+                    return m, None          # wick through, body back inside
+                return None, m              # body closed through -> invalidated
+        return None, None
+
+    @staticmethod
+    def _resolve_high(price: float, from_i: int, h, o, c):
+        """First post-break event for a bearish IDM: sweep or body break."""
+        for m in range(from_i + 1, len(h)):
+            if h[m] > price:
+                if max(o[m], c[m]) < price:
+                    return m, None
+                return None, m
+        return None, None
+
+    def _add(self, idm_type: IDMType, direction: IDMDirection, pull: Pivot,
+             sweep: Optional[int], broken: Optional[int],
+             forming: List[int], bo) -> None:
         for lv in self._levels:
-            if (lv.idm_type == idm_type and lv.price == price
-                    and lv.formation_index == formation):
-                return  # same swing from another reference; keep one ray
+            if (lv.idm_type == idm_type and lv.price == pull.price
+                    and lv.formation_index == pull.index):
+                # Same swing seen by another BOS anchor; keep one ray but
+                # upgrade the state if this anchor resolved a sweep/break.
+                if lv.sweep_index is None and lv.broken_index is None:
+                    if sweep is not None:
+                        lv.swept, lv.sweep_index = True, sweep
+                    elif broken is not None:
+                        lv.broken, lv.broken_index = True, broken
+                return
         self._levels.append(IDMLevel(
             idm_type=idm_type,
             direction=direction,
-            price=price,
-            formation_index=formation,
-            candle_time=candle_time,
+            price=float(pull.price),
+            formation_index=pull.index,
+            candle_time=self.df.index[pull.index],
             swept=sweep is not None,
             sweep_index=sweep,
-            forming_candle_indices=forming,
+            broken=broken is not None,
+            broken_index=broken,
+            bos_price=float(bo.price),
+            bos_break_index=bo.break_index,
+            bos_kind=bo.kind,
+            forming_candle_indices=list(forming)
+            + [x for x in (sweep, broken) if x is not None],
         ))
 
-    def _is_inside(self, j: int) -> bool:
-        """Range of candle j fully contained in candle j-1."""
-        h = self.df["high"].values
-        l = self.df["low"].values
-        return bool(h[j] <= h[j - 1] and l[j] >= l[j - 1])
+    def _cap(self) -> None:
+        """Keep the newest ``max_per_side`` per direction, still-live first."""
+        for d in (IDMDirection.BULLISH, IDMDirection.BEARISH):
+            group = [lv for lv in self._levels if lv.direction == d]
+            if len(group) <= self.max_per_side:
+                continue
+            group.sort(key=lambda lv:
+                       (lv.swept or lv.broken, -lv.formation_index))
+            drop = {id(lv) for lv in group[self.max_per_side:]}
+            self._levels = [lv for lv in self._levels if id(lv) not in drop]
 
     @property
     def levels(self) -> List[IDMLevel]:

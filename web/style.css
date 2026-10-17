@@ -993,6 +993,8 @@ input:checked + .slider:before { transform: translateX(14px); }
 .chart-tag.tag-plain.ts-high { color: #ff5c6c; }
 .chart-tag.tag-plain.ts-low { color: #00e676; }
 .chart-tag.tag-plain.idm { color: #ffd600; }
+.chart-tag.tag-plain.liq-eqh { color: #ff5252; }
+.chart-tag.tag-plain.liq-eql { color: #4dd0e1; }
 .chart-tag.tag-plain.bos { color: #7aa2ff; }
 .chart-tag.tag-plain.choch { color: #ff9100; }
 .chart-tag.tag-plain.fvg-bull { color: #089981; }
@@ -1144,6 +1146,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 .badge-apex { background-color: rgba(0, 230, 118, 0.15); color: var(--accent-emerald); }
 .badge-ts { background-color: rgba(255, 92, 108, 0.15); color: #ff5c6c; }
 .badge-idm { background-color: rgba(255, 214, 0, 0.15); color: var(--accent-gold); }
+.badge-liq { background-color: rgba(77, 208, 225, 0.15); color: #4dd0e1; }
 .badge-bos { background-color: rgba(122, 162, 255, 0.15); color: #7aa2ff; }
 .badge-fvg { background-color: rgba(8, 153, 129, 0.15); color: #089981; }
 .badge-ifvg { background-color: rgba(179, 136, 255, 0.15); color: #b388ff; }

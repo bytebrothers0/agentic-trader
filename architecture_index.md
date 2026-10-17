@@ -24,7 +24,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 ### 3.1 Config & Data
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `config/settings.py` | 218 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
+| `config/settings.py` | 235 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/LIQ/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
 | `data/mt5_loader.py` | 154 | `MT5DataLoader` (L29). Symbol resolution (`_resolve_symbol` L64), `fetch_timeframe` (L108, unix `time` column for charts), `_resample` (L142, M45 = 3×M15), `fetch_all_timeframes` (L166). Thread-locked MT5 calls. |
 
 ### 3.2 Indicator Detectors (`indicators/`)
@@ -38,7 +38,9 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `qm_detector.py` | 277 | `QMDetector` (L90) | Quasimodo (QMR/QMM/QMC) reversal patterns. |
 | `apex_detector.py` | 191 | `ApexDetector` (L72) | Apex & IAB swings (HTF line-chart analysis). |
 | `ts_detector.py` | 166 | `TSDetector` (L58) | Turtle Soup liquidity sweeps (wick-gated, L28 enums). |
-| `idm_detector.py` | 207 | `IDMDetector` (L65) | Inducement / pre-zone liquidity. |
+| `idm_detector.py` | 282 | `IDMDetector` (L85) | **BOS-anchored inducement**: after a structural break, the most recent minor fractal swing inside the impulse leg beyond the leg origin (a higher low / lower high). One IDM per BOS, deduped and capped per side (`max_per_side`); no internal pullback -> no IDM. Resolves each IDM to `swept` / `broken` (body close-through) / active. Replaced the old every-bar pullback scan (the "maps every high/low/wick" noise). |
+| `liquidity_detector.py` | 211 | `LiquidityDetector` (L67) | **Liquidity pools**: equal highs (buy-side) / equal lows (sell-side) stop clusters, from fractal pivots clustered within `eq_tol_atr` x ATR and `eq_max_bars`. Needs `>= min_touches`; single swings excluded. Marks each pool `taken` on the first wick through. Capped per side. |
+| `swings.py` | 73 | `find_pivots` (L41), `atr_series`, `Pivot` | Shared symmetric fractal-pivot finder + Wilder ATR for the IDM/liquidity detectors. |
 | `bos_detector.py` | 167 | `BOSDetector` (L58) | BOS / CHoCH (Mxwll-style; external + internal I-BOS). |
 | `fvg_detector.py` | 257 | `FVGDetector` (L103) | FVG zones (LuxAlgo port) + IFVG inversion (`detect_ifvg` L189). A zone is mitigated on the **first wick into it** (MSNR fresh rule) — tracked on both (`FVGLevel.fresh` / `IFVGLevel.fresh`); the API shows **unmitigated (fresh) zones only**. |
 | `ob_detector.py` | 320 | `OBDetector` (L68) | Order Blocks + Breaker Blocks (LuxAlgo port + Luap status). |
@@ -85,12 +87,12 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | File | Lines | Responsibility |
 |------|-------|----------------|
 | `index.html` | 439 | TradingView terminal shell. |
-| `app.js` | 1308 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-19). |
-| `style.css` | 1247 | Styling. |
+| `app.js` | 1343 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-20). |
+| `style.css` | 1250 | Styling. |
 | `backtest.html` / `backtest.js` | 99 / 820 | Backtest journal viewer (reads `/api/backtest/*`). |
 
 ### 3.8 Tests (`tests/`)
-`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
+`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py`, `test_liquidity.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
 
 ### 3.9 Docs & Reference (non-code)
 - `strategy_notes/` — strategy playbooks (phoenix_mnsr, ems mnsr, apa, abax mnsr, advance mnsr1) as markdown + subtitle transcripts.
@@ -104,7 +106,7 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 Candles/indicators (L79-579):
 - `GET /api/symbols` — broker symbols, priority-sorted.
 - `GET /api/candles` — OHLCV for TradingView.
-- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl).
+- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl/liq).
 
 Settings: `GET /api/settings/modules`, `POST /api/settings/modules/{id}?enabled=`.
 

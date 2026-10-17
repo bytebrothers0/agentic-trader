@@ -120,8 +120,25 @@ QM_ENABLED = True
 OCL_ENABLED = True
 APEX_ENABLED = True
 
-# IDM (inducement/liquidity, Luap True SMC) — enabled.
+# IDM (inducement, SMC) — enabled. BOS-anchored: the internal pullback (minor
+# fractal swing) inside an impulse leg that broke structure. SWING_LENGTH is
+# the minor fractal window; MAX_PER_SIDE caps rays kept per direction (newest,
+# unswept first) — the noise guard that replaces the old every-bar scan.
 IDM_ENABLED = True
+IDM_SWING_LENGTH = 2
+IDM_SHOW_INTERNAL = True
+IDM_MAX_PER_SIDE = 3
+IDM_ATR_PERIOD = 14
+
+# Liquidity pools (SMC) — enabled. Equal highs (buy-side) / equal lows
+# (sell-side) stop clusters. Pools need >= LIQ_MIN_TOUCHES touches within
+# LIQ_EQ_TOL_ATR x ATR and LIQ_EQ_MAX_BARS bars; single swings are excluded.
+LIQ_ENABLED = True
+LIQ_SWING_LENGTH = 5
+LIQ_EQ_TOL_ATR = 0.15
+LIQ_EQ_MAX_BARS = 60
+LIQ_MIN_TOUCHES = 2
+LIQ_MAX_PER_SIDE = 3
 
 # BOS (break of structure, Mxwll-style port) — enabled.
 # Swing sensitivity in bars (script's Externals options: 10/25/50,

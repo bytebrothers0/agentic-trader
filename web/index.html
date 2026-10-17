@@ -18,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=11" />
+  <link rel="stylesheet" href="/static/style.css?v=12" />
 </head>
 <body class="dark-theme">
   
@@ -119,7 +119,7 @@
     <aside class="sidebar" id="indicatorSidebar">
       <div class="sidebar-header">
         <h3><i data-lucide="compass"></i> Indicators</h3>
-        <span class="badge" id="storylineCountBadge">TS · S/R · QM · IDM · BOS · FVG · OB</span>
+        <span class="badge" id="storylineCountBadge">TS · S/R · QM · IDM · LIQ · BOS · FVG · OB</span>
       </div>
 
       <!-- Quick Mode Switcher -->
@@ -129,6 +129,7 @@
           <button class="mode-pill" data-mode="all">All Levels</button>
           <button class="mode-pill" data-mode="ts">Only TS</button>
           <button class="mode-pill" data-mode="idm">Only IDM</button>
+          <button class="mode-pill" data-mode="liq">Only LIQ</button>
           <button class="mode-pill" data-mode="bos">Only BOS</button>
           <button class="mode-pill" data-mode="fvg">Only FVG</button>
           <button class="mode-pill" data-mode="ifvg">Only IFVG</button>
@@ -140,7 +141,7 @@
         </div>
         <div class="tag-legend" title="Shorthand tags used on chart lines">
           S/R support/resistance · SBR/RBS role-flip · OCL sOCL/rOCL/1LAP/LS · QM · APX/IAB apex ·
-          MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
+          IDM inducement · EQH/EQL liquidity · MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
         </div>
       </div>
 
@@ -176,11 +177,24 @@
             <label class="custom-checkbox">
               <input type="checkbox" id="toggleIDM">
               <span class="checkmark sr-check"></span>
-              <span class="card-title">Inducement (IDM / Liquidity)</span>
+              <span class="card-title">Inducement (IDM)</span>
             </label>
             <span class="color-indicator sr-color"></span>
           </div>
-          <p class="card-desc">First valid pullback extreme per leg. Swept IDMs draw formation → sweep (full length); active ones are short rays.</p>
+          <p class="card-desc">Internal pullback inside a BOS impulse leg (structure-anchored). One per break, newest per side; swept IDMs fade.</p>
+        </div>
+
+        <!-- 0b2. Liquidity Pools (EQH/EQL) Card — NEW -->
+        <div class="indicator-card active" id="cardLIQ">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleLIQ">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Liquidity (EQH / EQL)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Equal highs (buy-side, red) / equal lows (sell-side, blue) stop clusters. A pool spans its touches; taken pools fade after the sweep.</p>
         </div>
 
         <!-- 0c. Break of Structure (BOS) Card — NEW -->
@@ -434,6 +448,6 @@
     </div>
   </aside>
 
-  <script src="/static/app.js?v=18"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>
