@@ -205,44 +205,43 @@ class OCLDetector:
 
     def _classify_socl_rocl(self, base_sr_levels: Optional[List] = None):
         """
-        Classify Support OCL (sOCL) and Resistance OCL (rOCL) per Video 2.
+        Classify Support OCL (sOCL) and Resistance OCL (rOCL) per Video 2
+        (web-exact engulf rule, not proximity):
 
-        Video 2: sOCL = two consecutive BULLISH candles formed immediately AFTER
-        a Support is created (continuation as price moves up from support).
-        rOCL = two consecutive BEARISH candles formed immediately AFTER a
-        Resistance is created (continuation as price drops from resistance).
-
-        The OCL pair must START within a few bars after the S/R formation candle.
+        sOCL = two consecutive BEARISH candles (a bearish OCL pair)
+        engulfed by the BULLISH candle that completes a Support
+        (bearish[i+1] -> bullish[i+2] V-shape).
+        rOCL = mirror: bullish pair engulfed by the bearish candle
+        completing a Resistance.
         """
         df = self.df
+        closes = df["close"].values
+        opens = df["open"].values
 
-        if base_sr_levels is None:
-            from indicators.candle_analyzer import CandleAnalyzer
-            analyzer = CandleAnalyzer(df)
-            base_sr_levels = analyzer.detect_all()
+        def _pair_extremes(i: int) -> tuple:
+            top = max(max(opens[i], closes[i]), max(opens[i + 1], closes[i + 1]))
+            bot = min(min(opens[i], closes[i]), min(opens[i + 1], closes[i + 1]))
+            return top, bot
 
-        from indicators.candle_analyzer import LevelType
-        support_indices = sorted(
-            s.candle_index for s in base_sr_levels
-            if s.level_type in (LevelType.SUPPORT, LevelType.RBS)
-        )
-        resistance_indices = sorted(
-            s.candle_index for s in base_sr_levels
-            if s.level_type in (LevelType.RESISTANCE, LevelType.SBR)
-        )
+        def _engulfed_by(i: int, j: int) -> bool:
+            """Candle j's body engulfs the [i, i+1] pair bodies."""
+            top, bot = _pair_extremes(i)
+            jtop, jbot = max(opens[j], closes[j]), min(opens[j], closes[j])
+            return (jtop >= top and jbot <= bot
+                    and (jtop > top or jbot < bot))
 
         for lvl in self._levels:
-            idx1 = lvl.candle_index_1
-
-            # sOCL: bullish pair starting 0-3 bars after a Support formed.
-            if lvl.ocl_type == OCLType.STANDARD_BULLISH:
-                if any(0 <= idx1 - s_idx <= 3 for s_idx in support_indices):
+            i = lvl.candle_index_1
+            if i + 2 >= len(df):
+                continue
+            # sOCL: bearish pair + bullish support-completer engulfing it.
+            if lvl.ocl_type == OCLType.STANDARD_BEARISH:
+                if closes[i + 2] > opens[i + 2] and _engulfed_by(i, i + 2):
                     lvl.ocl_type = OCLType.SOCL
                     continue
-
-            # rOCL: bearish pair starting 0-3 bars after a Resistance formed.
-            if lvl.ocl_type == OCLType.STANDARD_BEARISH:
-                if any(0 <= idx1 - r_idx <= 3 for r_idx in resistance_indices):
+            # rOCL: bullish pair + bearish resistance-completer engulfing it.
+            if lvl.ocl_type == OCLType.STANDARD_BULLISH:
+                if closes[i + 2] < opens[i + 2] and _engulfed_by(i, i + 2):
                     lvl.ocl_type = OCLType.ROCL
                     continue
 
@@ -289,24 +288,25 @@ class OCLDetector:
                 if second_break_idx is not None:
                     lvl.touch_scan_from = second_break_idx + 1
             elif lvl.ocl_type in (OCLType.STANDARD_BULLISH, OCLType.STANDARD_BEARISH) and breaks == 0:
-                # GAP 5: Validate 1-LAB OCL condition
-                # Find the closest S/R level in the reference direction
+                # GAP 5: Validate 1-LAB OCL condition (web-exact: next level
+                # in price-space is another OCL, forward or backward).
+                # Find the closest key level in the reference direction.
                 is_bullish_ocl = (lvl.ocl_type == OCLType.STANDARD_BULLISH)
                 other_ocls = [o for o in self._levels if o != lvl]
 
                 if is_bullish_ocl:
-                    # Look below for closest key level
-                    sr_below = [s for s in sr_levels if s.price < lvl.price and s.candle_index <= lvl.candle_index_2]
-                    ocl_below = [o for o in other_ocls if o.price < lvl.price and o.candle_index_1 <= lvl.candle_index_2]
+                    # Look below for closest key level (any position)
+                    sr_below = [s for s in sr_levels if s.price < lvl.price]
+                    ocl_below = [o for o in other_ocls if o.price < lvl.price]
                     nearest_sr = max([s.price for s in sr_below], default=-float('inf'))
                     nearest_ocl = max([o.price for o in ocl_below], default=-float('inf'))
                     # If nearest level below is another OCL (closer than any S/R), it's a 1-LAB OCL
                     if nearest_ocl > nearest_sr:
                         lvl.ocl_type = OCLType.ONE_LAP
                 else:
-                    # Look above for closest key level
-                    sr_above = [s for s in sr_levels if s.price > lvl.price and s.candle_index <= lvl.candle_index_2]
-                    ocl_above = [o for o in other_ocls if o.price > lvl.price and o.candle_index_1 <= lvl.candle_index_2]
+                    # Look above for closest key level (any position)
+                    sr_above = [s for s in sr_levels if s.price > lvl.price]
+                    ocl_above = [o for o in other_ocls if o.price > lvl.price]
                     nearest_sr = min([s.price for s in sr_above], default=float('inf'))
                     nearest_ocl = min([o.price for o in ocl_above], default=float('inf'))
                     # If nearest level above is another OCL (closer than any S/R), it's a 1-LAB OCL

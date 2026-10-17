@@ -61,3 +61,30 @@ def get_proposals() -> Dict[str, Any]:
               if v.get("status") in ("PROPOSED", "EXECUTED")]
     active.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"active": active[:20], "count": len(active)}
+
+
+@router.post("/validate-ts")
+def validate_ts(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Judge one TS M15 candidate: {symbol, signal: {...}} -> verdict dict.
+
+    signal follows /api/signals shape (direction, entry_price, stop_loss,
+    take_profit, confidence, storyline, + ts_price, qm_entry_level,
+    liq_kind, liq_price, break_kind, confluence, fallback when known).
+    """
+    from ai_agent.ts_validator import build_ts_snapshot, validate_signal
+    symbol = str(payload.get("symbol", "XAUUSD"))
+    signal = payload.get("signal", {}) or {}
+    mock = bool(payload.get("mock", False))
+    try:
+        from data.mt5_loader import MT5DataLoader
+        df = MT5DataLoader(symbol=symbol).fetch_timeframe("M15", count=120)
+        candles = [{"time": int(r["time"]), "open": float(r["open"]),
+                    "high": float(r["high"]), "low": float(r["low"]),
+                    "close": float(r["close"])} for _, r in df.iterrows()]
+    except Exception as e:
+        return {"verdict": "SKIP", "confidence": 0.0,
+                "reasons": [f"candle fetch failed: {e}"[:200]],
+                "failed_checks": ["DATA"], "invalidation": ""}
+    snapshot = build_ts_snapshot(candles[-60:], {"symbol": symbol, **signal})
+    verdict = validate_signal(snapshot, mock=mock)
+    return {"symbol": symbol, **verdict}

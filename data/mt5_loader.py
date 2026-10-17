@@ -116,6 +116,9 @@ class MT5DataLoader:
         mt5_tf = TIMEFRAME_MAP.get(tf_key.upper())
         if mt5_tf is None:
             raise ValueError(f"Unknown timeframe '{tf_key}'. Valid options: {list(TIMEFRAME_MAP.keys())}")
+        if isinstance(mt5_tf, str):
+            # Synthesized timeframe (e.g. M45 = 3xM15, no native MT5 TF).
+            return self._resample(tf_key.upper(), count)
 
         bars_count = count or CANDLE_FETCH_COUNT.get(tf_key.upper(), 500)
         with _mt5_lock:
@@ -135,6 +138,30 @@ class MT5DataLoader:
         df.set_index("datetime", inplace=True)
         df.rename(columns={"tick_volume": "volume"}, inplace=True)
         return df[["time", "open", "high", "low", "close", "volume"]]
+
+    def _resample(self, tf_key: str, count: Optional[int] = None) -> pd.DataFrame:
+        """Build a non-native timeframe from M15 (currently only M45)."""
+        if tf_key != "M45":
+            raise ValueError(f"No synthesis rule for '{tf_key}'.")
+        per = 3  # 3 x M15 = M45
+        want = count or CANDLE_FETCH_COUNT.get("M45", 500)
+        m15 = self.fetch_timeframe("M15", count=want * per + per)
+        m15 = m15.set_index(pd.to_datetime(m15["time"], unit="s", utc=True))
+        agg = {"open": "first", "high": "max", "low": "min",
+               "close": "last", "volume": "sum"}
+        # Midnight-anchored 45-min grid (:00/:45/1:30/2:15/3:00...),
+        # same grid TradingView uses. Bin label = bar OPEN time.
+        bars = m15.resample("45min", origin="start_day").agg(agg).dropna()
+        bars = bars.tail(want)
+        out = pd.DataFrame({
+            "time": (bars.index.astype("int64") // 10**9).astype(int),
+            "open": bars["open"].values,
+            "high": bars["high"].values,
+            "low": bars["low"].values,
+            "close": bars["close"].values,
+            "volume": bars["volume"].values,
+        }, index=bars.index)
+        return out[["time", "open", "high", "low", "close", "volume"]]
 
     def fetch_all_timeframes(self) -> Dict[str, pd.DataFrame]:
         """Fetch all timeframes simultaneously (MN1/W1/D1/H4/H1 + M15 for TTFL)."""

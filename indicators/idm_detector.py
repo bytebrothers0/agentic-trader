@@ -16,9 +16,11 @@ IDM (Part 3):
     continuation candle). Bearish IDM = the swing high.
   - A later new extreme does NOT discard the IDM — it confirms the leg the
     IDM belongs to. The newest pullback simply adds the newest IDM (shift).
-  - If price sweeps the IDM (wick crosses it) after confirmation, the prior
-    extreme is confirmed: the IDM is emitted with its full formation->sweep
-    span. Unswept IDMs emit with an open end (fixed short ray on chart).
+  - If price sweeps the IDM (wick crosses it AND the body closes back
+    inside — a wick kiss without close-back is not a sweep) after
+    confirmation, the prior extreme is confirmed: the IDM is emitted
+    with its full formation->sweep span. Unswept IDMs emit with an
+    open end (fixed short ray on chart).
   - Output = every confirmed IDM (swept or still active).
 """
 
@@ -90,6 +92,8 @@ class IDMDetector:
     def _scan_bullish(self):
         h = self.df["high"].values
         l = self.df["low"].values
+        o = self.df["open"].values
+        c = self.df["close"].values
         times = self.df.index
         n = len(self.df)
 
@@ -125,10 +129,10 @@ class IDMDetector:
             seg = l[i + 1:cont + 1]
             f = i + 1 + min(range(len(seg)), key=lambda t: seg[t])
             price = float(l[f])
-            # Phase 3: sweep = first wick cross after confirmation.
+            # Phase 3: sweep = first wick cross with body back inside.
             sweep = None
             for m in range(cont + 1, n):
-                if l[m] < price:
+                if l[m] < price and min(o[m], c[m]) > price:
                     sweep = m
                     break
             self._add(IDMType.IDM_LOW, IDMDirection.BULLISH, price, f,
@@ -141,6 +145,8 @@ class IDMDetector:
     def _scan_bearish(self):
         h = self.df["high"].values
         l = self.df["low"].values
+        o = self.df["open"].values
+        c = self.df["close"].values
         times = self.df.index
         n = len(self.df)
 
@@ -176,10 +182,10 @@ class IDMDetector:
             seg = h[i + 1:cont + 1]
             f = i + 1 + min(range(len(seg)), key=lambda t: -seg[t])
             price = float(h[f])
-            # Phase 3: sweep = first wick cross after confirmation.
+            # Phase 3: sweep = first wick cross with body back inside.
             sweep = None
             for m in range(cont + 1, n):
-                if h[m] > price:
+                if h[m] > price and max(o[m], c[m]) < price:
                     sweep = m
                     break
             self._add(IDMType.IDM_HIGH, IDMDirection.BEARISH, price, f,

@@ -59,19 +59,13 @@ TIMEFRAME_MAP = {
     "H2":  mt5.TIMEFRAME_H2,   # 2-hour
     "H1":  mt5.TIMEFRAME_H1,
     "M15": mt5.TIMEFRAME_M15,  # 15-minute (TTFL refinement for H4-based entries)
+    "M30": mt5.TIMEFRAME_M30,  # 30-minute (native)
+    "M45": "SYNTH_M45",        # 45-minute: MT5 has no M45 — the loader
+                               # resamples 3xM15 (hour-grid :00/:45/:30...).
+                               # Any str value here means "synthesized".
     "M5":  mt5.TIMEFRAME_M5,   # 5-minute
     "M3":  mt5.TIMEFRAME_M3,   # 3-minute
     "M1":  mt5.TIMEFRAME_M1,   # 1-minute (standard MT5 meaning)
-}
-
-# TF hierarchy for FTFL → STFL → TTFL step-down
-TF_STEPDOWN = {
-    "MN1": ("W1", "D1"),   # FTFL=Monthly → STFL=Weekly → TTFL=Daily
-    "MN":  ("W1", "D1"),
-    "W1":  ("D1", "H4"),   # FTFL=Weekly  → STFL=Daily  → TTFL=4H
-    "D1":  ("H4", "H1"),   # FTFL=Daily   → STFL=4H     → TTFL=1H
-    "H4":  ("H1", "M15"),  # FTFL=4H      → STFL=1H     → TTFL=15m
-    "H1":  ("M15", "M1"),  # FTFL=1H      → STFL=15m    → TTFL=1m
 }
 
 # Timeframes where OCL detection is valid (HTF only)
@@ -99,49 +93,41 @@ CANDLE_FETCH_COUNT = {
     "H2":  500,  # ~41 days of 2H
     "H1":  500,  # ~20 days of 1H
     "M15": 500,  # ~5 days of 15m
+    "M30": 600,  # ~12 days of 30m
+    "M45": 500,  # ~15 days of 45m (synthesized from M15)
     "M5":  500,  # ~40 hours of 5m
     "M3":  500,  # ~25 hours of 3m
     "M1":  500,  # ~8 hours of 1m
 }
 
 # =============================================================================
-# STORYLINE ANALYSIS SCHEDULE (Video 10 routine)
-# =============================================================================
-# Monthly analysis: first Saturday of month
-# Weekly analysis: Saturday/Sunday
-# Daily analysis: every day at market open
-ANALYSIS_SCHEDULE = {
-    "monthly": "first_saturday",
-    "weekly": "saturday",
-    "daily": "daily_open",
-}
-
-
-def get_due_analysis_scopes(now=None) -> list:
-    """
-    Video 10 top-down routine: which analysis scopes are due at `now`.
-      - Monthly: first 7 days of the month (covers the first Saturday window).
-      - Weekly: Saturday or Sunday.
-      - Daily: always due (intraday continuation/confirmation scanned daily).
-    Returns e.g. ["monthly", "weekly", "daily"].
-    """
-    import datetime as _dt
-    now = now or _dt.datetime.now()
-    due = ["daily"]
-    if now.weekday() in (5, 6):
-        due.append("weekly")
-    if now.day <= 7:
-        due.append("monthly")
-    return due
-
-# =============================================================================
-# STRATEGY MASTER SWITCH — set True to re-enable your own logic later.
-# When False, server /api/indicators, /api/strategy, /api/signals return
-# empty disabled payloads and the dashboard hides strategy UI.
+# STRATEGY MASTER SWITCH — old entry models removed (fresh start).
+# When False, server /api/indicators returns empty disabled payloads and
+# the dashboard hides strategy UI.
 # Candles / account / positions / orders keep working (infra only).
 # =============================================================================
-STRATEGY_ENABLED = False
 INDICATORS_ENABLED = False
+
+# =============================================================================
+# ALCHEMIST X-FACTOR ENTRY MODULE (web strategy, codified in strategy/).
+# Bias: D1 dealing range + MN1/W1/D1/H4 storyline chains. Trigger: M15
+# trendline x SNR cross with mandatory engulfing. Refinement: M5 IDM/doji.
+# Signal math: 70/30 split at between-closes mid/edge, SL beyond extreme
+# floored at max(0.5 ATR, 3x spread), TP at opposite 30-bar pool, RR floor.
+# =============================================================================
+ALCHEMIST_ENABLED = True
+ALCHEMIST_EXEC_TF = "M15"
+ALCHEMIST_REF_TF = "M5"
+ALCHEMIST_PD_LOOKBACK = 60
+ALCHEMIST_MIN_RR = 1.5
+ALCHEMIST_RISK_PCT = 1.0
+ALCHEMIST_MAX_SIGNALS = 3
+ALCHEMIST_SL_BUF_ATR = 0.3
+ALCHEMIST_SL_MIN_ATR = 0.5
+ALCHEMIST_SL_SPREAD_MULT = 3.0
+ALCHEMIST_SPREAD_POINTS = 35.0
+ALCHEMIST_REQUIRE_REFINEMENT = True
+ALCHEMIST_POINT_VALUE = 0.01
 
 # New custom logic lives behind its own flags so it works while the
 # old MSNR stack stays off.
@@ -182,29 +168,68 @@ IFVG_MIN_OVERLAP_FRAC = 0.5
 
 # OB + Breaker Blocks (LuxAlgo port + Luap status) — enabled.
 # Swing lookback, last N zones per side, body-based zones option.
+# Valid-OB gates (web Alchemist math): origin-candle liquidity sweep OR
+# displacement break; same-side FVG overlap is entry confluence, not a
+# validity gate (OB_REQUIRE_FVG=False). Zones near IDM tagged Decisional.
 OB_ENABLED = True
 OB_SWING_LENGTH = 10
 OB_SHOW_LAST = 3
 OB_USE_BODY = False
+OB_REQUIRE_FVG = False
+OB_REQUIRE_SWEEP = True
+OB_DISPLACEMENT_MULT = 1.5
+OB_MARK_DECISIONAL = True
 
-# MNSR + TS entry model (M15): TS -> break -> QM -> IDM -> QM entry.
-# Fixed 350pt SL / 3000pt TP. TS older than MAX_AGE bars is stale;
-# the break must land within BREAK_MAX_BARS after the TS.
-# MAX_QM_DIST / MAX_IDM_DIST (price units): the TS->QM->IDM stack must stay
-# local — far-away levels chained together are not one setup.
-TS_ENTRY_MAX_AGE = 100
-TS_BREAK_MAX_BARS = 50
-TS_ENTRY_SL_POINTS = 350
-TS_ENTRY_TP_POINTS = 3000
-TS_MAX_QM_DIST = 20.0
-TS_MAX_IDM_DIST = 20.0
-# S/R-shelf break leg: shelf must sit this close to the TS level.
-TS_SR_SHELF_DIST = 25.0
-# TS significance for entries: sweep must be this multiple of ATR(14).
-# The chart indicator stays unfiltered; only entries are gated.
-# 0.25 kills sub-visual dust (median noise is ~0.15) while keeping real
-# sweeps (~0.3+ even in volatile weeks).
-TS_MIN_SWEEP_ATR = 0.25
+# Auto trendlines (LuxAlgo "Trendlines with Breaks" semantics) — enabled.
+# Pivot fractal window, ATR slope multiplier, recent lines kept per side,
+# forward window for break-retest scan.
+TL_ENABLED = True
+TL_PIVOT_LENGTH = 14
+TL_SLOPE_MULT = 1.0
+TL_MAX_LINES = 3
+TL_RETEST_BARS = 30
+# Touch/collinearity tolerance for the point-to-point trendline (fraction
+# of ATR(14)). A 3rd apex or validation touch within this band respects the
+# line; the line itself is drawn through the close-price apexes.
+TL_TOL_ATR = 0.25
+# Channel slope-match tolerance (ATR fraction over 10 bars): two lines whose
+# slopes differ by less than this form a channel pair.
+TL_CHANNEL_PARALLEL_ATR = 0.2
+# Wick penetration past the line (ATR fraction) that counts as a liquidity
+# sweep (stop-hunt) rather than an ordinary touch.
+TL_SWEEP_ATR = 0.5
+# Alchemist MNSR tuning: body pivots anchor at CLOSE fractals (line-chart
+# A/V apexes on the candle bodies — engulfing/engulfed swing points),
+# wick pivots at high/low fractals. A bar that is both yields two anchors.
+# REQUIRE_ENGULFING=False keeps any swing point (engulfing only grades
+# continuation vs standard); True restricts anchors to engulfing/engulfed
+# bars.
+TL_BODY_PIVOTS = True
+TL_REQUIRE_ENGULFING = False
+# Web rule: trendlines never anchor at gap bars (cannot connect GAP SNR).
+# Gap = |open - prev close| beyond TL_GAP_ATR_MULT x local ATR.
+TL_SKIP_GAP_ANCHORS = True
+TL_GAP_ATR_MULT = 0.1
+# X-Factor (trendline x SNR confluence): crossing tolerance 0.1 ATR,
+# TS sweep bonus window 3 bars, SNR legs retire after 2 touches.
+XF_ENABLED = True
+XF_XTOL_ATR = 0.1
+XF_SWEEP_WINDOW = 3
+XF_MAX_USES = 2
+
+# TS indicator display: the swept extreme must be a VISIBLE wick on
+# candle1, not a body edge (a candle closing at its high has no upper
+# wick to sweep). Both gates must pass on the swept side:
+#   wick >= TS_MIN_WICK_BODY_FRAC * body  (protrudes past the body)
+#   wick >= TS_MIN_WICK_RANGE_FRAC * range (visible against whole candle)
+# Body frac 0.10 (was 0.25): a small-but-visible wick on a big impulse
+# body counts (Oct02 10:00: 1.76 wick on 12.42 body = 14%); dust
+# (0.1 on 5.0 = 2%) still fails, range leg backstops tiny bodies.
+# Range frac 0.05 (was 0.10): Oct02 06:30 wick (0.98 of 11.16 range =
+# 8.8%) is visibly a wick, not a body edge. Measured Sep28-Oct02:
+# 0.10 -> 170 TS, 0.05 -> 188, 0.00 -> 192 (dust already dead elsewhere).
+TS_MIN_WICK_BODY_FRAC = 0.10
+TS_MIN_WICK_RANGE_FRAC = 0.05
 
 # =============================================================================
 # LOGGING

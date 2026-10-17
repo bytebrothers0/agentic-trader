@@ -3,13 +3,19 @@ candle_analyzer.py — MSNR Foundation Indicator
 Detects: Support, Resistance, SBR (Support-Becomes-Resistance),
          RBS (Resistance-Becomes-Support).
 
-Rules (from Advanced MSNR, Videos 1–4):
+Rules (web Alchemist MSNR):
   - S/R is defined by the CLOSE of the body, NOT wicks.
-  - Support  = bearish candle immediately followed by a bullish candle.
-  - Resistance = bullish candle immediately followed by a bearish candle.
-  - SBR: a prior support whose BODY is closed BELOW → flips to resistance.
-  - RBS: a prior resistance whose BODY is closed ABOVE → flips to support.
-  - Gap handling: always mark at body close regardless of opening gap.
+  - Support  = bearish candle immediately followed by a bullish candle (V).
+  - Resistance = bullish candle immediately followed by a bearish candle (A).
+  - GAP SNR: opposite pair with a GAP between first close and second open
+    (open[i+1] != close[i]). Gap levels are hidden zones — trendlines must
+    never connect them; they refine into LTF engulfing zones instead.
+  - SBR: a prior support whose BODY closes BELOW → flips to resistance,
+    fresh in the new role. RBS: mirror.
+  - Web flip rule (MALIYA): "once broken with a body" — any body close
+    through flips, no displacement qualifier.
+  - A level may be used at most TWICE (fresh use + unfresh use); track
+    touch_count and retire at 2.
 """
 
 from __future__ import annotations
@@ -50,6 +56,11 @@ class CandleLevel:
     candle_index: int           # iloc of the candle that formed this level
     candle_time: pd.Timestamp
     state: LevelState = LevelState.FRESH
+
+    # Web gap flag: open[i+1] != close[i] -> GAP (hidden) SNR.
+    is_gap: bool = False
+    # Web 2-use rule: wick touches consumed (fresh use + unfresh use max).
+    touch_count: int = 0
 
     # Candles involved in forming this level
     forming_candle_indices: List[int] = field(default_factory=list)
@@ -137,6 +148,9 @@ class CandleAnalyzer:
             c0_bullish = closes[i] > opens[i]   # candle i is bullish
             c1_bearish = closes[i+1] < opens[i+1]
             c1_bullish = closes[i+1] > opens[i+1]
+            # GAP SNR: second candle opens away from first close (hidden
+            # zone — same pair shape, flagged for TL exclusion/refinement).
+            is_gap = bool(abs(opens[i + 1] - closes[i]) > 1e-9)
 
             if c0_bearish and c1_bullish:
                 # Support formed
@@ -145,6 +159,7 @@ class CandleAnalyzer:
                     price=closes[i],
                     candle_index=i,
                     candle_time=times[i],
+                    is_gap=is_gap,
                     forming_candle_indices=[i, i + 1],
                 ))
 
@@ -155,6 +170,7 @@ class CandleAnalyzer:
                     price=closes[i],
                     candle_index=i,
                     candle_time=times[i],
+                    is_gap=is_gap,
                     forming_candle_indices=[i, i + 1],
                 ))
 

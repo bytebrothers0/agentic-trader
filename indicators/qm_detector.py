@@ -273,12 +273,12 @@ class QMDetector:
 
     def _classify_stqm(self):
         """Identify duplicate or 2nd-time QMs on the same price level."""
-        price_counts = {}
+        seen: List[float] = []
         for qm in self._qm_levels:
-            rounded_p = round(qm.price, 2)
-            price_counts[rounded_p] = price_counts.get(rounded_p, 0) + 1
+            repeat = any(self._price_matches(qm.price, p) for p in seen)
+            seen.append(qm.price)
             # Structural lineages (ABQM / IABQM) keep their type on repeats.
-            if price_counts[rounded_p] > 1 and qm.qm_type not in (QMType.ABQM, QMType.IABQM):
+            if repeat and qm.qm_type not in (QMType.ABQM, QMType.IABQM):
                 qm.qm_type = QMType.STQM
 
     def _apply_freshness(self):

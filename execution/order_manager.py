@@ -17,8 +17,7 @@ from typing import Dict, List, Optional
 import logging
 import MetaTrader5 as mt5
 
-from execution.risk_manager import PositionPlan
-from strategy.storyline_engine import BiasDirection
+from execution.risk_manager import PositionPlan, BiasDirection
 from data.mt5_loader import _mt5_lock
 
 logger = logging.getLogger("MSNR_OrderManager")

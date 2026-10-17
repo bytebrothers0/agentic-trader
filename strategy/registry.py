@@ -1,150 +1,85 @@
-"""
-registry.py — Pluggable strategy entry-module registry.
+"""Entry-module registry: metadata + enabled state for the settings tab.
 
-The bot's strategy layer is a library of entry modules. The old MSNR
-storyline engine ships as 5 modules (one per model group); future
-strategies register new modules here with their own engine key.
+Contract with web/app.js:
+  GET  /api/settings/modules -> {"modules": [{id, name, description, engine, enabled}]}
+  POST /api/settings/modules/{id}?enabled=true|false -> {"ok": true, "modules": [...]}
 
-State (enabled on/off per module) persists to config/entry_modules.json so
-dashboard toggles survive restarts.indicator layers are NOT managed here —
-they stay on the dashboard sidebar.
-
-To add a new entry model later:
-  1. Append a dict to DEFAULT_MODULES (id, name, description, engine,
-     models, enabled).
-  2. Wire its engine in server.py (see the `msnr` engine handling).
+State persists to config/modules_state.json (defaults = all enabled).
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List, Set
+from typing import Dict, List
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "config", "entry_modules.json")
+_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "modules_state.json",
+)
 
-
-def _state_file() -> str:
-    """Honors MSNR_MODULES_FILE so tests can isolate state."""
-    return os.environ.get("MSNR_MODULES_FILE", STATE_FILE)
-
-
-DEFAULT_MODULES: List[Dict] = [
+MODULES: List[Dict] = [
     {
-        "id": "msnr_mn",
-        "name": "MSNR Monthly Storyline",
-        "description": "Monthly story → W1/MN entries (MN_STORY cascade).",
-        "engine": "msnr",
-        "models": ["MN_STORY_W1_ENTRY", "MN_STORY_MN_ENTRY"],
-        "enabled": False,
-    },
-    {
-        "id": "msnr_w1",
-        "name": "MSNR Weekly Storyline",
-        "description": "Weekly story → D1/W1 entries (W1_STORY cascade).",
-        "engine": "msnr",
-        "models": ["W1_STORY_D1_ENTRY", "W1_STORY_W1_ENTRY"],
-        "enabled": False,
-    },
-    {
-        "id": "msnr_d1",
-        "name": "MSNR Daily Storyline",
-        "description": "Daily story → H4/D1 entries (D1_STORY cascade).",
-        "engine": "msnr",
-        "models": ["D1_STORY_H4_ENTRY", "D1_STORY_D1_ENTRY"],
-        "enabled": False,
-    },
-    {
-        "id": "msnr_14b",
-        "name": "MSNR Model B (14B)",
-        "description": "1H reject + 1H breakout confirmation entries.",
-        "engine": "msnr",
-        "models": ["MODEL_B_14B"],
-        "enabled": False,
-    },
-    {
-        "id": "msnr_d1w4",
-        "name": "MSNR Model C (D1W4)",
-        "description": "D1/W4 single-candle mitigation retracements.",
-        "engine": "msnr",
-        "models": ["MODEL_C_D1W4"],
-        "enabled": False,
-    },
-    {
-        "id": "ts_m15",
-        "name": "MNSR + TS (M15)",
-        "description": "TS sweep -> BOS/CHoCH break -> QM -> IDM -> limit at QM (350pt SL / 3000pt TP).",
-        "engine": "ts_m15",
-        "models": ["TS_M15_ENTRY"],
-        "enabled": False,
+        "id": "alchemist_x",
+        "name": "Alchemist X-Factor (MSNR)",
+        "description": (
+            "Web Alchemist top-down stack: HTF storyline bias (D1/H4, W1/D1, "
+            "MN1/W1) + M15 trendline x SNR cross (point 3) with mandatory "
+            "engulfing validation, TS sweep bonus, M5 refinement, 2-use "
+            "level cap, RR >= 1.5."
+        ),
+        "engine": "strategy.alchemist:AlchemistEngine",
+        "enabled": True,
     },
 ]
 
 
-def _read_overrides() -> Dict[str, bool]:
+def _load_state() -> Dict[str, bool]:
     try:
-        with open(_state_file(), "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if isinstance(data, dict):
-            return {k: bool(v) for k, v in data.items()}
-    except (OSError, ValueError):
+        if os.path.isfile(_STATE_PATH):
+            with open(_STATE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            return {str(k): bool(v) for k, v in data.items()}
+    except Exception:
         pass
     return {}
 
 
-def _write_overrides(overrides: Dict[str, bool]) -> None:
-    path = _state_file()
+def _save_state(state: Dict[str, bool]) -> None:
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(overrides, fh, indent=2)
-    except OSError:
+        os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
+        with open(_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
         pass
 
 
 def list_modules() -> List[Dict]:
-    """All registered modules with live enabled state."""
-    overrides = _read_overrides()
+    """Registry metadata merged with persisted enabled flags."""
+    state = _load_state()
     out = []
-    for mod in DEFAULT_MODULES:
-        out.append({
-            "id": mod["id"],
-            "name": mod["name"],
-            "description": mod["description"],
-            "engine": mod["engine"],
-            "models": list(mod["models"]),
-            "enabled": overrides.get(mod["id"], mod["enabled"]),
-        })
+    for mod in MODULES:
+        row = dict(mod)
+        if row["id"] in state:
+            row["enabled"] = state[row["id"]]
+        out.append(row)
     return out
+
+
+def set_enabled(module_id: str, enabled: bool) -> List[Dict]:
+    """Persist one module's flag; raises KeyError on unknown id."""
+    if module_id not in {m["id"] for m in MODULES}:
+        raise KeyError(f"unknown entry module '{module_id}'")
+    state = _load_state()
+    for mod in MODULES:
+        state.setdefault(mod["id"], bool(mod.get("enabled", True)))
+    state[module_id] = bool(enabled)
+    _save_state(state)
+    return list_modules()
 
 
 def is_enabled(module_id: str) -> bool:
     for mod in list_modules():
         if mod["id"] == module_id:
-            return mod["enabled"]
+            return bool(mod["enabled"])
     return False
-
-
-def set_enabled(module_id: str, enabled: bool) -> bool:
-    """Persist a module toggle. Returns False for unknown ids."""
-    known = {mod["id"] for mod in DEFAULT_MODULES}
-    if module_id not in known:
-        return False
-    overrides = _read_overrides()
-    overrides[module_id] = bool(enabled)
-    _write_overrides(overrides)
-    return True
-
-
-def enabled_model_values(engine: str = "msnr") -> Set[str]:
-    """Model value strings of all enabled modules for an engine."""
-    values: Set[str] = set()
-    for mod in list_modules():
-        if mod["engine"] == engine and mod["enabled"]:
-            values.update(mod["models"])
-    return values
-
-
-def any_enabled() -> bool:
-    return any(mod["enabled"] for mod in list_modules())

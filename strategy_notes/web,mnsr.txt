@@ -1,0 +1,13 @@
+Full top-down suite (web-sourced, mapped to our detectors)
+TF	Web role	Bot math
+MN	"Big map, where is price in the universe"	Note nearest fresh MN SNR above/below; no trading
+W1	Storyline direction	Storyline starts iff: rejection wick at fresh W SNR plus breakout on D or H4 within N bars. Bias lines from confirmed pivots, forward-extended
+D1	Confirm direction, mark roadblocks	Roadblock rule: storyline TF minus one — W story → D levels are obstacles; check ATR-spaced room to next opposing pivot (steal the TV indicator's roadblock filter)
+H4	Locate the entry zone	Fresh H4 SNR in storyline direction; gold-specific caveat from MR.R: H4 closes differ by broker — so prefer zones over exact lines here
+H1	Confirm entry	H1 OCL + SBR/RBS flip + engulfing zone inside the H4 zone (the LQD_Alchemist refinement chain: Daily level → H4 OCL → H1 SBR)
+M15/M5	Sniper trigger	M15 sweep → break → point-3 wick touch at the X; engulfing at point 3 is mandatory ("no validation, no trade")
+The 2-TF confirmation rule (never trade one TF: W→H4, D→H1, H4→M15/M30) and the drop-two-TFs refinement (Daily setup → H1 confirmation) are directly implementable as gates.
+Entry rules — the codable core
+Seven trendline rules from the web, all checks we can write: connect ≥2 SNRs, body closes not wicks (done — our body pivots), never connect GAP SNR (needs a gap filter: skip anchors where |open[i] − close[i−1]| > 0.3 ATR), no close beyond point 3 (already our break rule), enter only at point 3 on a wick touch + rejection (already our touch rule), never at point 2. Touch validity: first touch must be a wick, never a body; MISS candles (bars that skip past without touching) strengthen the level; sweep at the level = strongest signal. Our touches counter needs these two upgrades: reject body-first-touches, count MISS bars as support.
+Engulfing (4 web types — regular, GAP, hidden = invisible on HTF, appears on LTF refinement, and flipped): the zone is marked between the two closes (top = higher close, bottom = lower close), limit orders live there. This is finer than our current containment flag — worth adopting exactly.
+Scoring the X (weights from the web's emphasis): SNR fresh = base; +TL cross (the X itself); +engulfing at point 3 (mandatory — without it, skip, no exceptions); +sweep present (best tier); +2-TF confirmation; +M15 structure (BOS/MSS agreement). QMX (all of the above on a QML) = max size. SL beyond the zone extreme + buffer (never on the line — "zones, not lines"); minimum 1:2 RR; level usable max twice (fresh→unfresh→dead, body-break flips it to fresh SBR/RBS the other way).

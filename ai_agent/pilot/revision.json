@@ -1,0 +1,33 @@
+{
+  "patterns": [
+    {
+      "name": "Tight stop near entry",
+      "cost_R": 0.0,
+      "rule": "Stops placed <0.2 points (\u22480.05\u202fATR) from entry caused the loss on setup\u202f24; such tight stops are easily hit by normal volatility."
+    },
+    {
+      "name": "Entry inside bar without decisive break",
+      "cost_R": 0.0,
+      "rule": "Entering when the price closes above (for bearish) or below (for bullish) the entry level on the same candle invalidates the bias and increases stop\u2011run risk."
+    },
+    {
+      "name": "Reliance on single confluence (e.g., FVG) without market\u2011structure confirmation",
+      "cost_R": 0.0,
+      "rule": "Many losing or marginal setups used only a Fair\u2011Value Gap as the anchor; without a clear BOS/CHOCH or Quality Market (QM) level the trade lacked a strong directional premise."
+    },
+    {
+      "name": "Missing Quality Market (QM) anchor",
+      "cost_R": 0.0,
+      "rule": "Setups where QM was NaN or absent (e.g., 14, 22) showed weak structural support and resulted in poor risk\u2011reward."
+    }
+  ],
+  "checklist": [
+    "\u2705 Confirm a clear break of structure (BOS/CHOCH) before entry.",
+    "\u2705 Ensure a Quality Market (QM) level is present and respected on the next candle.",
+    "\u2705 Place stop\u2011loss at least 0.5\u202fATR (or \u22650.2\u202fpts on this instrument) away from entry.",
+    "\u2705 Avoid entering inside the candle that generated the signal; wait for a confirming close beyond the entry level.",
+    "\u2705 Require at least two independent confluence factors (e.g., BOS + liquidity sweep, or OB + FVG).",
+    "\u2705 Verify that price does not close on the same bar in the opposite direction of the intended bias."
+  ],
+  "notes": "The only actual loss came from a bullish setup (ID\u202f24) that satisfied many confluence criteria but failed because the stop was extremely tight and the entry was taken inside a bar that immediately moved against the trade. Across the 26 back\u2011tests, the AI flagged similar weaknesses (tight stops, missing QM, entry inside bar) in many setups that still hit TP, indicating these are high\u2011risk patterns that can erode profitability when market conditions tighten. Applying the checklist above should preserve the high\u2011R winners while filtering out the fragile trades that caused the loss."
+}

@@ -1,0 +1,175 @@
+{
+  "judged": 26,
+  "TP_taken": 2,
+  "TP_passed_missed": 12,
+  "SL_taken_mistake": 1,
+  "SL_passed_saved": 11,
+  "approved_R": 86.16,
+  "take_rate": 0.115,
+  "misses": [
+    {
+      "id": 4,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 65,
+      "tags": [
+        "thin-stop",
+        "no-confluence",
+        "late-entry"
+      ]
+    },
+    {
+      "id": 6,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 68,
+      "tags": [
+        "thin-stop",
+        "wrong-side-break",
+        "no-confluence",
+        "stale-qm"
+      ]
+    },
+    {
+      "id": 11,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 30,
+      "tags": [
+        "wrong-side-break",
+        "no-confluence",
+        "thin-stop",
+        "stale-qm"
+      ]
+    },
+    {
+      "id": 12,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 85,
+      "tags": [
+        "wrong-side-break",
+        "no-confluence",
+        "thin-stop",
+        "stale-qm"
+      ]
+    },
+    {
+      "id": 14,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 68,
+      "tags": [
+        "thin-stop",
+        "stale-qm",
+        "wrong-side-break",
+        "no-confluence"
+      ]
+    },
+    {
+      "id": 16,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 78,
+      "tags": [
+        "wrong-side-break",
+        "late-entry",
+        "fresh-sweep"
+      ]
+    },
+    {
+      "id": 17,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 70,
+      "tags": [
+        "thin-stop",
+        "wrong-side-break",
+        "no-confluence",
+        "fresh-sweep"
+      ]
+    },
+    {
+      "id": 18,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 82,
+      "tags": [
+        "no-confluence",
+        "stale-qm",
+        "thin-stop",
+        "late-entry"
+      ]
+    },
+    {
+      "id": 19,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 32,
+      "tags": [
+        "stale-qm",
+        "no-confluence",
+        "thin-stop",
+        "late-entry"
+      ]
+    },
+    {
+      "id": 20,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 78,
+      "tags": [
+        "thin-stop",
+        "stale-qm",
+        "wrong-side-break"
+      ]
+    },
+    {
+      "id": 22,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 32,
+      "tags": [
+        "stale-qm",
+        "wrong-side-break",
+        "no-confluence",
+        "thin-stop"
+      ]
+    },
+    {
+      "id": 23,
+      "take": false,
+      "win": true,
+      "R": 0.0,
+      "conf": 88,
+      "tags": [
+        "wrong-side-break",
+        "stale-qm",
+        "thin-stop"
+      ]
+    },
+    {
+      "id": 24,
+      "take": true,
+      "win": false,
+      "R": -1.0,
+      "conf": 68,
+      "tags": [
+        "fresh-sweep",
+        "clean-legs",
+        "thin-stop"
+      ]
+    }
+  ]
+}

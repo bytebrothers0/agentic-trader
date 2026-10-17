@@ -1,14 +1,12 @@
 """
-fvg_detector.py — Fair Value Gap + Inverse Fair Value Gap.
+fvg_detector.py — Fair Value Gap + Inverse Fair Value Gap (web Alchemist math).
 
-FVG ported from the script's LuxAlgo detectFVG (3-candle gap):
-  Bullish FVG at bar i: low[i] > high[i-2] (the gap) AND the displacement
-    close[i-1] > high[i-2] AND gap size above threshold.
+  Bullish FVG at bar i: low[i] > high[i-2] (pure 3-candle gap, no
+    displacement clause — a gap with the middle close inside it still counts).
     Zone = [high[i-2] .. low[i]] (bottom .. top).
-  Bearish FVG: mirror (high[i] < low[i-2], close[i-1] < low[i-2],
-    zone = [high[i] .. low[i-2]]).
+  Bearish FVG: mirror (high[i] < low[i-2], zone = [high[i] .. low[i-2]]).
   Mitigation: bull FVG dies on first close below its bottom;
-    bear on first close above its top (same as the script).
+    bear on first close above its top. Entries use unmitigated only.
 
 IFVG (user rule): a RECENT FVG broken by a FULL BODY close to the opposite
   side, confirmed by a newer opposite FVG genuinely overlapping it. Genuine
@@ -16,6 +14,10 @@ IFVG (user rule): a RECENT FVG broken by a FULL BODY close to the opposite
   wick tips don't count). Ancient FVGs never invert (recency cap),
   wick-only returns never invert. The drawn zone is the OVERLAP region —
   which equals the full first zone when the second engulfs it.
+
+Display rule: only UNMITIGATED (fresh) zones are shown. An FVG is mitigated
+  on the first close through its far edge; an IFVG (inverted role) is
+  mitigated on the first close back through its far edge (`fresh` property).
 """
 
 from __future__ import annotations
@@ -42,6 +44,11 @@ class FVGLevel:
     mitigated: bool = False
     mitigation_index: Optional[int] = None
     forming_candle_indices: List[int] = field(default_factory=list)
+
+    @property
+    def fresh(self) -> bool:
+        """Unmitigated: no close has traded back through the zone's far edge."""
+        return not self.mitigated
 
     @property
     def mid(self) -> float:
@@ -72,16 +79,24 @@ class IFVGLevel:
     formation_index: int          # iloc of the second (confirming) FVG
     candle_time: pd.Timestamp
     first_formation_index: int = 0
+    mitigated: bool = False
+    mitigation_index: Optional[int] = None
     forming_candle_indices: List[int] = field(default_factory=list)
+
+    @property
+    def fresh(self) -> bool:
+        """Unmitigated: no close has traded back through the far edge."""
+        return not self.mitigated
 
     @property
     def mid(self) -> float:
         return (self.top + self.bottom) / 2.0
 
     def __repr__(self) -> str:
+        state = f"mit@{self.mitigation_index}" if self.mitigated else "active"
         return (
             f"IFVGLevel({self.direction.value} [{self.bottom:.5f}..{self.top:.5f}] "
-            f"[idx={self.formation_index}])"
+            f"[idx={self.formation_index}] {state})"
         )
 
 
@@ -134,8 +149,8 @@ class FVGDetector:
         n = len(self.df)
 
         for i in range(2, n):
-            # Bullish gap: low[i] above high[i-2], displaced middle close.
-            if l[i] > h[i - 2] and c[i - 1] > h[i - 2]:
+            # Bullish gap: low[i] above high[i-2] (pure gap, web-exact).
+            if l[i] > h[i - 2]:
                 if (l[i] - h[i - 2]) / h[i - 2] > self.threshold:
                     if self._tall_enough(float(l[i] - h[i - 2]), i):
                         self._fvgs.append(FVGLevel(
@@ -146,8 +161,8 @@ class FVGDetector:
                             candle_time=times[i],
                             forming_candle_indices=[i - 2, i - 1, i],
                         ))
-            # Bearish gap: mirror.
-            if h[i] < l[i - 2] and c[i - 1] < l[i - 2]:
+            # Bearish gap: mirror (pure gap, web-exact).
+            if h[i] < l[i - 2]:
                 if (l[i - 2] - h[i]) / h[i] > self.threshold:
                     if self._tall_enough(float(l[i - 2] - h[i]), i):
                         self._fvgs.append(FVGLevel(
@@ -217,6 +232,20 @@ class FVGDetector:
                     forming_candle_indices=[older.formation_index,
                                             newer.formation_index],
                 ))
+
+        # Mitigation: first close back through the inversion's far edge.
+        n = len(self.df)
+        for iv in self._ifvgs:
+            for m in range(iv.formation_index + 1, n):
+                if iv.direction == FVGDirection.BEARISH and c[m] > iv.top:
+                    iv.mitigated = True
+                    iv.mitigation_index = m
+                    break
+                if iv.direction == FVGDirection.BULLISH and c[m] < iv.bottom:
+                    iv.mitigated = True
+                    iv.mitigation_index = m
+                    break
+
         self._ifvgs.sort(key=lambda iv: iv.formation_index)
         return self._ifvgs
 

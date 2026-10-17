@@ -1,20 +1,15 @@
 """
-freshness_tracker.py — MSNR Level Freshness State Machine
+freshness_tracker.py — MSNR Level Freshness State Machine (web math).
 
-Rules (from Advanced MSNR, Videos 1, 5–7):
-  FRESH   → A wick touches the level    → UNFRESH
-  UNFRESH → A body closes through it    → BROKEN (triggers role reversal)
+Rules (MALIYA / MALAYSIAN_SNR web spec):
+  FRESH   → A wick touches the level    → UNFRESH (use 1 consumed)
+  UNFRESH → A body closes through it    → BROKEN (role reversal flips it
+            fresh in the new role via CandleAnalyzer)
   FRESH   → A body closes through it    → BROKEN (no wick-touch step needed)
 
-  After a body-close-through, the level is treated as BROKEN and the
-  CandleAnalyzer creates a new SBR/RBS level at the same price (fresh).
-
-  Exception: An UNFRESH level that was touched by a wick but did NOT
-  lead to a subsequent same-TF breakout remains usable as a rejection
-  zone (lower confidence, reduced risk sizing).
-
-  "Apex-unfresh": a level marked as Apex/IAB that was touched once
-  is still usable but with lower confidence.
+  Web 2-use rule: a level may be used at most TWICE. Every wick-touch bar
+  increments touch_count (fresh use + unfresh use); entries must retire
+  the level at touch_count >= 2 even if still UNFRESH.
 """
 
 from __future__ import annotations
@@ -97,9 +92,10 @@ class FreshnessTracker:
                 level.break_candle_index = i
                 return
 
-            # --- Check for wick touch (UNFRESH) ---
-            if level.state == LevelState.FRESH:
-                if self._wick_touches(level, wick_high, wick_low):
+            # --- Check for wick touch (consumes one of max 2 uses) ---
+            if self._wick_touches(level, wick_high, wick_low):
+                level.touch_count += 1
+                if level.state == LevelState.FRESH:
                     level.state = LevelState.UNFRESH
                     level.first_touch_index = i
                     # Do NOT return — keep scanning for a possible body break
@@ -155,3 +151,13 @@ def filter_unfresh(levels: List[CandleLevel]) -> List[CandleLevel]:
 def filter_active(levels: List[CandleLevel]) -> List[CandleLevel]:
     """Return levels that are not yet BROKEN (fresh or unfresh)."""
     return [lv for lv in levels if lv.state != LevelState.BROKEN]
+
+
+def is_usable(level: CandleLevel, max_uses: int = 2) -> bool:
+    """Web 2-use rule: not broken and fewer than max_uses wick touches."""
+    return level.state != LevelState.BROKEN and level.touch_count < max_uses
+
+
+def filter_usable(levels: List[CandleLevel], max_uses: int = 2) -> List[CandleLevel]:
+    """Return levels still tradable under the web 2-use rule."""
+    return [lv for lv in levels if is_usable(lv, max_uses)]

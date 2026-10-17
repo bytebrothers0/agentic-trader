@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
   <title>MSNR Trading Terminal — Malaysian SnR Multi-Storyline Engine</title>
   
   <!-- Google Fonts: Inter & JetBrains Mono -->
@@ -16,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <link rel="stylesheet" href="/static/style.css?v=11" />
 </head>
 <body class="dark-theme">
   
@@ -57,6 +59,8 @@
         <button class="tf-more-btn" id="tfMoreBtn" title="More timeframes">More ▾</button>
         <div class="tf-dropdown-menu" id="tfDropdownMenu">
           <button class="tf-btn" data-tf="H2" title="2 Hours">2H</button>
+          <button class="tf-btn" data-tf="M45" title="45 Minutes">45m</button>
+          <button class="tf-btn" data-tf="M30" title="30 Minutes">30m</button>
           <button class="tf-btn" data-tf="M15" title="15 Minutes">15m</button>
           <button class="tf-btn" data-tf="M5" title="5 Minutes">5m</button>
           <button class="tf-btn" data-tf="M3" title="3 Minutes">3m</button>
@@ -270,6 +274,32 @@
           <p class="card-desc">Origin candle of displacement after a swing break (LuxAlgo port). Body-through flips it to a breaker (BRKR).</p>
         </div>
         
+        <!-- 0g. Auto Trendlines Card — NEW -->
+        <div class="indicator-card active" id="cardTL">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleTL">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">Trendlines (TL)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Pivot-anchored support (red) / resistance (teal) with ATR slope, dashed rays. B = close-through break, RT = retest, CH = channel mid.</p>
+        </div>
+
+        <!-- 0h. X-Factor Card — NEW -->
+        <div class="indicator-card active" id="cardXF">
+          <div class="card-header">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="toggleXF">
+              <span class="checkmark sr-check"></span>
+              <span class="card-title">X-Factor (TL × SNR)</span>
+            </label>
+            <span class="color-indicator sr-color"></span>
+          </div>
+          <p class="card-desc">Trendline crossing a horizontal SNR at point 3. QMX (gold) / A+ (green) / X (blue) need engulfing validation; gray watch = no validation. Dotted box = between-closes limit zone.</p>
+        </div>
+
         <!-- 1. Support & Resistance Card -->
         <div class="indicator-card active" id="cardSR">
           <div class="card-header">
@@ -468,6 +498,6 @@
     </div>
   </aside>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=18"></script>
 </body>
 </html>

@@ -3,15 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
   <title>Backtest Review — Sep 28 / Oct 02 Journal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
-  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <link rel="stylesheet" href="/static/style.css?v=11" />
   <style>
     .bt-layout { display: flex; gap: 10px; padding: 10px; height: calc(100vh - 52px); box-sizing: border-box; }
-    .bt-chart-wrap { flex: 1; position: relative; min-width: 0; }
+    .bt-chart-wrap { flex: 1; position: relative; min-width: 0; overflow: hidden; }
+    .bt-chart-wrap.drawing, .bt-chart-wrap.drawing #btChart { cursor: crosshair; }
     #btChart { position: absolute; inset: 0; }
     .bt-side { width: 380px; max-width: 38vw; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .bt-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -27,6 +30,8 @@
     .out-TP { color: #00e676; font-weight: 700; }
     .out-SL { color: #ff5c6c; font-weight: 700; }
     .out-expired, .out-open { color: #9aa5b5; }
+    .bt-chart-wrap { overflow: hidden; }
+    #btLabelLayer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5; }
   </style>
 </head>
 <body class="dark-theme">
@@ -35,7 +40,7 @@
       <div class="logo-badge"><i data-lucide="flag"></i></div>
       <div class="brand-text">
         <span class="brand-title">BACKTEST REVIEW</span>
-        <span class="brand-subtitle">Journal Sep 28 — Oct 02 · 49 setups</span>
+        <span class="brand-subtitle" id="brandSubtitle">Journal Sep 28 — Oct 02</span>
       </div>
     </div>
     <div class="account-header-metrics">
@@ -50,9 +55,28 @@
   </header>
 
   <main class="bt-layout">
-    <div class="bt-chart-wrap"><div id="btChart"></div></div>
+    <div class="bt-chart-wrap"><div id="btChart"></div><div id="btLabelLayer"></div>
+      <div class="draw-toolbar" id="drawToolbar">
+        <span class="draw-label" title="Draw your own levels, then export them as JSON">DRAW</span>
+        <button class="draw-btn" data-draw="TS" title="Draw Turtle Soup level">TS</button>
+        <button class="draw-btn" data-draw="QM" title="Draw Quasimodo level">QM</button>
+        <button class="draw-btn" data-draw="BOS" title="Draw Break of Structure level">BOS</button>
+        <button class="draw-btn" data-draw="IDM" title="Draw Inducement level">IDM</button>
+        <button class="draw-btn" data-draw="SR" title="Draw Support/Resistance level">S/R</button>
+        <button class="draw-btn wide" id="btnDrawList" title="List / edit my drawings">☰</button>
+        <button class="draw-btn wide" id="btnDrawExport" title="Export my drawings as JSON">⤓</button>
+          <button class="draw-btn wide" id="btnDrawImport" title="Import drawings JSON">⤒</button>
+          <button class="draw-btn wide active" id="btnMagnet" title="Magnet: snap drawings to bars (off = free placement)">🧲</button>
+          <button class="draw-btn wide active" id="btnHideConf" title="Show confluence zones (OB/FVG/IFVG)">◈</button>
+          <button class="draw-btn wide" id="btnHideBot" title="Hide bot drawings (show only mine)">👁</button>
+        <input type="file" id="drawImportFile" accept=".json,application/json" style="display:none;">
+      </div>
+      <div class="draw-list" id="drawList" style="display:none;"></div>
+    </div>
     <aside class="bt-side">
       <div class="bt-toolbar">
+        <select id="journalSel" title="Backtest journal (live book + experiments)"
+                style="max-width:220px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;font-size:11px;padding:4px 6px;"></select>
         <button class="mode-pill active" data-f="all">All</button>
         <button class="mode-pill" data-f="TP">TP</button>
         <button class="mode-pill" data-f="SL">SL</button>
@@ -60,6 +84,7 @@
         <button class="action-btn" id="btnPrev" title="Previous trade">‹</button>
         <span class="badge" id="tradeCounter">0 / 0</span>
         <button class="action-btn" id="btnNext" title="Next trade">›</button>
+        <span class="badge" title="Purple solid = QM entry level">QM ━</span>
       </div>
       <div class="bt-detail" id="tradeDetail"><div class="empty-state">Select a trade.</div></div>
       <div class="bt-table-wrap">
@@ -71,6 +96,6 @@
     </aside>
   </main>
 
-  <script src="/static/backtest.js?v=1"></script>
+  <script src="/static/backtest.js?v=16"></script>
 </body>
 </html>

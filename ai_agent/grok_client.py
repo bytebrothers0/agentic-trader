@@ -57,13 +57,13 @@ def ask_grok(snapshot: Dict[str, Any], news: Dict[str, Any], api_key: str,
 
 def ask_llm(snapshot: Dict[str, Any], news: Dict[str, Any], api_key: str,
             base_url: str, model: str, mock: bool = False,
-            provider: str = "groq") -> Dict[str, Any]:
+            provider: str = "groq", system_prompt: str | None = None) -> Dict[str, Any]:
     if mock or not api_key:
         return _mock_proposal(snapshot)
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": _system_prompt()},
+            {"role": "system", "content": system_prompt or _system_prompt()},
             {"role": "user", "content": json.dumps({"snapshot": snapshot, "news": {
                 "summary": news.get("summary", ""),
                 "risk_hint": news.get("risk_hint", "unknown"),

@@ -23,16 +23,19 @@ def test_bullish_fvg_zone_bounds():
     assert fv[0].bottom == 101 and fv[0].top == 103
     assert fv[0].formation_index == 2
     assert not fv[0].mitigated
+    assert fv[0].fresh
 
 
-def test_middle_close_must_displace():
-    # Gap exists but middle candle closed inside -> no FVG (script filter).
+def test_gap_with_mid_close_inside_is_fvg():
+    # Web-exact: pure 3-candle gap counts even when the middle candle
+    # closed inside the gap (no displacement clause).
     df = _df([
         {"open": 100, "high": 101, "low": 99, "close": 100},
         {"open": 100, "high": 102, "low": 99.5, "close": 100.5},
         {"open": 101.5, "high": 104, "low": 103, "close": 103.5},
     ])
-    assert FVGDetector(df).detect_all() == []
+    fv = FVGDetector(df).detect_all()
+    assert len(fv) == 1 and fv[0].direction == FVGDirection.BULLISH
 
 
 def test_no_gap_no_fvg():
@@ -130,3 +133,39 @@ def test_sliver_gap_filtered():
     assert FVGDetector(df, min_atr_mult=0.1).detect_all() == []
     # Same gap passes with the filter off.
     assert len(FVGDetector(df, min_atr_mult=0.0).detect_all()) == 1
+
+
+def test_fvg_fresh_property_tracks_mitigation():
+    df = _df(GAP_UP + [
+        {"open": 103.5, "high": 103.8, "low": 101, "close": 101.5},
+        {"open": 101.5, "high": 102, "low": 98, "close": 98.5},
+    ])
+    bull = [x for x in FVGDetector(df).detect_all()
+            if x.direction == FVGDirection.BULLISH][0]
+    assert bull.mitigated and not bull.fresh
+
+
+def test_ifvg_unmitigated_is_fresh():
+    df = _df(GAP_UP + [
+        {"open": 103.5, "high": 103.8, "low": 101, "close": 101.5},
+        {"open": 101.5, "high": 102, "low": 98, "close": 98.5},
+    ])
+    det = FVGDetector(df)
+    iv = det.detect_ifvg(det.detect_all())
+    assert len(iv) == 1
+    assert iv[0].fresh and not iv[0].mitigated
+
+
+def test_ifvg_mitigation_on_close_back_through():
+    # Bearish IFVG [102..103] forms at idx 4, then price closes back above
+    # its top -> mitigated (no longer shown).
+    df = _df(GAP_UP + [
+        {"open": 103.5, "high": 103.8, "low": 101, "close": 101.5},
+        {"open": 101.5, "high": 102, "low": 98, "close": 98.5},
+        {"open": 98.5, "high": 103.3, "low": 98.4, "close": 103.2},
+    ])
+    det = FVGDetector(df)
+    iv = det.detect_ifvg(det.detect_all())
+    assert len(iv) == 1 and iv[0].direction == FVGDirection.BEARISH
+    assert iv[0].mitigated and iv[0].mitigation_index == 5
+    assert not iv[0].fresh

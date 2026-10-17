@@ -101,12 +101,12 @@ def test_freshness_tracker_close_through_break():
 
 def test_ocl_detector():
     dates = pd.date_range(start="2026-01-01", periods=10, freq="D")
-    # Video 2 rOCL: Resistance (bullish Day 0 -> bearish Day 1, level at Day 0
-    # close = 2020) then two consecutive BEARISH candles (Day 2-3) right after.
-    opens  = [1980, 2020, 2000, 1980, 1960, 1960, 1960, 1960, 1960, 1960]
-    closes = [2020, 2000, 1980, 1960, 1960, 1960, 1960, 1960, 1960, 1960]
-    highs  = [2025, 2025, 2005, 1985, 1965, 1965, 1965, 1965, 1965, 1965]
-    lows   = [1975, 1995, 1975, 1955, 1955, 1955, 1955, 1955, 1955, 1955]
+    # Video 2 rOCL (web engulf rule): two BULLISH candles (Day 0-1) engulfed
+    # by the BEARISH candle completing a Resistance (Day 2). Level = Day 0 close.
+    opens  = [2000, 2020, 2045, 1990, 1990, 1990, 1990, 1990, 1990, 1990]
+    closes = [2020, 2040, 1990, 1990, 1990, 1990, 1990, 1990, 1990, 1990]
+    highs  = [2025, 2045, 2050, 1995, 1995, 1995, 1995, 1995, 1995, 1995]
+    lows   = [1995, 2015, 1985, 1985, 1985, 1985, 1985, 1985, 1985, 1985]
 
     df = pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes, "volume": [100]*10}, index=dates)
 
@@ -116,18 +116,18 @@ def test_ocl_detector():
     assert len(ocls) >= 1
     rocls = [o for o in ocls if o.ocl_type == OCLType.ROCL]
     assert len(rocls) >= 1
-    # First rOCL pair Day 1-2 (starts right after the Resistance): close Day 1 = 2000
-    assert rocls[0].price == 2000.0
+    # rOCL pair Day 0-1, level at Day 0 close = 2020
+    assert rocls[0].price == 2020.0
 
 
 def test_ocl_socl_detector():
     dates = pd.date_range(start="2026-01-01", periods=10, freq="D")
-    # Video 2 sOCL: Support (bearish Day 0 -> bullish Day 1, level at Day 0
-    # close = 1980) then two consecutive BULLISH candles (Day 2-3) right after.
-    opens  = [2000, 1980, 2000, 2020, 2040, 2040, 2040, 2040, 2040, 2040]
-    closes = [1980, 2000, 2020, 2040, 2040, 2040, 2040, 2040, 2040, 2040]
-    highs  = [2005, 2005, 2025, 2045, 2045, 2045, 2045, 2045, 2045, 2045]
-    lows   = [1975, 1975, 1995, 2015, 2035, 2035, 2035, 2035, 2035, 2035]
+    # Video 2 sOCL (web engulf rule): two BEARISH candles (Day 0-1) engulfed
+    # by the BULLISH candle completing a Support (Day 2). Level = Day 0 close.
+    opens  = [2020, 2000, 1975, 2030, 2030, 2030, 2030, 2030, 2030, 2030]
+    closes = [2000, 1980, 2030, 2030, 2030, 2030, 2030, 2030, 2030, 2030]
+    highs  = [2025, 2005, 2035, 2035, 2035, 2035, 2035, 2035, 2035, 2035]
+    lows   = [1995, 1975, 1970, 2025, 2025, 2025, 2025, 2025, 2025, 2025]
 
     df = pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes, "volume": [100]*10}, index=dates)
 
@@ -136,7 +136,7 @@ def test_ocl_socl_detector():
 
     socls = [o for o in ocls if o.ocl_type == OCLType.SOCL]
     assert len(socls) >= 1
-    # First sOCL pair Day 1-2 (starts right after the Support): close Day 1 = 2000
+    # sOCL pair Day 0-1, level at Day 0 close = 2000
     assert socls[0].price == 2000.0
 
 

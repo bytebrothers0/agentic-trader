@@ -18,6 +18,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const FVG_ENABLED = true;
   const IFVG_ENABLED = true;
   const OB_ENABLED = true;
+  const TL_ENABLED = true;
+  const XF_ENABLED = true;
 
   if (window.lucide) {
     lucide.createIcons();
@@ -44,7 +46,9 @@ document.addEventListener("DOMContentLoaded", () => {
       bos: false,
       fvg: false,
       ifvg: false,
-      ob: false
+      ob: false,
+      tl: false,
+      xf: false
     },
     candles: [],
     levels: [],
@@ -64,7 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const TF_BARS = {
     MN1: 300, MN: 300, W1: 300, D1: 300,
     H4: 500, H2: 500, H1: 500,
-    M15: 800, M5: 1000, M3: 1000, M1: 1000,
+    M15: 800, M30: 800, M45: 800, M5: 1000, M3: 1000, M1: 1000,
   };
   const tfBars = () => TF_BARS[state.timeframe] || 300;
 
@@ -106,6 +110,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const toggleFVG = document.getElementById("toggleFVG");
   const toggleIFVG = document.getElementById("toggleIFVG");
   const toggleOB = document.getElementById("toggleOB");
+  const toggleTL = document.getElementById("toggleTL");
+  const toggleXF = document.getElementById("toggleXF");
   const toggleAllZones = document.getElementById("toggleAllZones");
   
   const overlaySymbol = document.getElementById("overlaySymbol");
@@ -396,10 +402,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const wantFVG = FVG_ENABLED && state.indicators.fvg;
       const wantIFVG = IFVG_ENABLED && state.indicators.ifvg;
       const wantOB = OB_ENABLED && state.indicators.ob;
+      const wantTL = TL_ENABLED && state.indicators.tl;
+      const wantXF = XF_ENABLED && state.indicators.xf;
       const wantOCL = (OCL_ENABLED || INDICATORS_ENABLED) && state.indicators.ocl;
       const wantAPEX = (APEX_ENABLED || INDICATORS_ENABLED) && state.indicators.apex;
       const wantLegacy = wantOCL || wantAPEX;
-      if (!wantTS && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantLegacy) {
+      if (!wantTS && !wantSR && !wantQM && !wantIDM && !wantBOS && !wantFVG && !wantIFVG && !wantOB && !wantTL && !wantLegacy) {
         state.levels = [];
       } else {
       // 5. Fetch Raw Indicators if in inspector mode
@@ -419,6 +427,8 @@ document.addEventListener("DOMContentLoaded", () => {
           show_fvg: FVG_ENABLED && state.indicators.fvg,
           show_ifvg: IFVG_ENABLED && state.indicators.ifvg,
           show_ob: OB_ENABLED && state.indicators.ob,
+          show_tl: TL_ENABLED && state.indicators.tl,
+          show_xf: XF_ENABLED && state.indicators.xf,
         });
 
         const indRes = await fetch(`/api/indicators?${params.toString()}`, { signal: controller.signal });
@@ -526,7 +536,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const tagClass = isBuy ? "zone-tag-bullish" : "zone-tag-bearish";
       
       let label = "Zone";
-      if (sig.model_type.includes("TS_M15")) label = "TS M15";
+      if (sig.model_type.includes("ALCHEMIST")) label = "Alch X";
+      else if (sig.model_type.includes("TS_M15")) label = "TS M15";
       else if (sig.model_type.includes("D1_ENTRY") || sig.model_type.includes("DAILY")) label = "Daily Entry";
       else if (sig.model_type.includes("W1_ENTRY") || sig.model_type.includes("WEEKLY")) label = "Weekly Entry";
       else if (sig.model_type.includes("MN_ENTRY") || sig.model_type.includes("MONTHLY")) label = "Monthly Entry";
@@ -1037,7 +1048,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.category === "fvg") return "FVG";
       if (lvl.category === "ifvg") return "IFVG";
       if (lvl.category === "ts") return (lvl.type || "").includes("HIGH") ? "TS-H" : "TS-L";
+      if (lvl.category === "trendline") return lvl.flipped ? "BRT" : "TL";
       if (lvl.category === "apex") return t.includes("IAB") ? "IAB" : "APX";
+      if (lvl.category === "xfactor") {
+        const tier = (lvl.tier || "").toLowerCase();
+        if (tier === "qmx") return "QMX";
+        if (tier === "a+") return "A+";
+        if (tier === "standard") return "X";
+        return "x";
+      }
       return t.slice(0, 3);
     };
     // Zone levels (FVG/IFVG/OB): top+bottom edges + fill band + mid label.
@@ -1155,12 +1174,133 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.end_kind === "mitigated") return `${tag}·MIT`;
       return tag;
     };
+    // Trendline segment: pivot -> end, sloped. Support (lower) teal / resistance
+    // (upper) red / break-retest (flipped) orange. Broken lines go thin gray.
+    const drawTrendlineLevel = (lvl) => {
+      const role = (lvl.role || "").toLowerCase();
+      const resistance = role === "resistance"
+        || (lvl.type || "").includes("RESISTANCE")
+        || (lvl.type || "").includes("UPPER");
+      const flipped = !!lvl.flipped;
+      const broken = lvl.end_kind === "broken";
+      const retest = lvl.end_kind === "retest";
+      const color = flipped ? "#ff9100"
+        : (broken && !retest) ? "#5a6b7a"
+        : resistance ? "#26a69a" : "#ef5350";
+      const t0 = barAtOrBefore(lvl.time) || lvl.time;
+      const t1 = (lvl.end_time && lvl.end_time > lvl.time)
+        ? (barAtOrBefore(lvl.end_time) || lvl.end_time) : t0;
+      if (t1 <= t0) return;
+      const p1 = (lvl.price_end !== undefined && lvl.price_end !== null)
+        ? lvl.price_end : lvl.price;
+      const ray = chart.addLineSeries({
+        color: color,
+        lineWidth: 1,
+        lineStyle: (broken && !retest)
+          ? LightweightCharts.LineStyle.Dotted
+          : LightweightCharts.LineStyle.Dashed,
+        crosshairMarkerVisible: false,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      ray.setData([
+        { time: t0, value: lvl.price },
+        { time: t1, value: p1 }
+      ]);
+      state.customRaySeries.push(ray);
+      const cls = flipped ? "tag-plain tl-brt"
+        : resistance ? "tag-plain tl-up" : "tag-plain tl-dn";
+      const mid = barAtOrBefore((t0 + t1) / 2) || t0;
+      pushLabel(mid, (lvl.price + p1) / 2, flipped ? "BRT" : "TL", cls, "mid");
+      if (broken) {
+        const bt = lvl.break_time ? (barAtOrBefore(lvl.break_time) || t1) : t1;
+        pushLabel(bt, retest ? p1 : lvl.price, "B", cls, "mid");
+      }
+      if (retest && lvl.retest_time) {
+        const rt = barAtOrBefore(lvl.retest_time) || t1;
+        pushLabel(rt, p1, "RT", cls, "mid");
+      }
+    };
+    // X-Factor: dashed point2 -> point3 ray at the agreed price, tier tag +
+    // marker at point 3, and the between-closes engulf box (limit zone).
+    const drawXFactorLevel = (lvl) => {
+      const tier = (lvl.tier || "no-trade").toLowerCase();
+      const short = (lvl.type || "").includes("SHORT");
+      const color = tier === "qmx" ? "#ffd600"
+        : tier === "a+" ? "#00e676"
+        : tier === "standard" ? "#7aa2ff" : "#5a6b7a";
+      const t1 = barAtOrBefore(lvl.time) || lvl.time;
+      const t0 = (lvl.start_time && lvl.start_time < lvl.time)
+        ? (barAtOrBefore(lvl.start_time) || t1) : t1;
+      if (t1 > t0) {
+        const ray = chart.addLineSeries({
+          color: color,
+          lineWidth: tier === "no-trade" ? 1 : 2,
+          lineStyle: tier === "no-trade"
+            ? LightweightCharts.LineStyle.Dotted
+            : LightweightCharts.LineStyle.Dashed,
+          crosshairMarkerVisible: false,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        ray.setData([
+          { time: t0, value: lvl.price },
+          { time: t1, value: lvl.price }
+        ]);
+        state.customRaySeries.push(ray);
+      }
+      markers.push({
+        time: t1,
+        position: short ? "aboveBar" : "belowBar",
+        color: color,
+        shape: "circle",
+        text: tier === "qmx" ? "QMX" : tier === "a+" ? "A+" : tier === "standard" ? "X" : "x",
+      });
+      if (lvl.ex_box_top !== undefined && lvl.ex_box_top !== null
+          && lvl.ex_box_bottom !== undefined && lvl.ex_box_bottom !== null) {
+        const edge = short ? "#f23645" : "#089981";
+        const fill = short ? "rgba(242,54,69,0.08)" : "rgba(8,153,129,0.08)";
+        const bspan = findCandleIndexAndSpan(lvl.time, 8);
+        [lvl.ex_box_top, lvl.ex_box_bottom].forEach((edgePrice) => {
+          const eray = chart.addLineSeries({
+            color: edge,
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          eray.setData([
+            { time: bspan.startTime, value: edgePrice },
+            { time: bspan.endTime, value: edgePrice }
+          ]);
+          state.customRaySeries.push(eray);
+        });
+        zoneFillBand(lvl.ex_box_top, lvl.ex_box_bottom, bspan, fill);
+      }
+      const cls = tier === "qmx" ? "tag-plain xf-qmx"
+        : tier === "a+" ? "tag-plain xf-aplus"
+        : tier === "standard" ? "tag-plain xf-std" : "tag-plain xf-watch";
+      const tag = tier === "qmx" ? "QMX" : tier === "a+" ? "A+" : tier === "standard" ? "X" : "x";
+      pushLabel(t1, lvl.price, tag, cls, "mid");
+    };
     let count = 0;
     visible.forEach((lvl) => {
       // Gap/order-block zones draw edges + fill instead of a single ray.
       if (isZoneLevel(lvl)) {
         if (lvl.category === "ob") drawOBLevel(lvl);
         else drawZoneLevel(lvl);
+        count++;
+        return;
+      }
+      // Trendlines: sloped pivot -> end segment (LuxAlgo-style dashed).
+      if (lvl.category === "trendline") {
+        drawTrendlineLevel(lvl);
+        count++;
+        return;
+      }
+      // X-Factor: point2 -> point3 dashed ray + tier marker + engulf box.
+      if (lvl.category === "xfactor") {
+        drawXFactorLevel(lvl);
         count++;
         return;
       }
@@ -1274,6 +1414,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderLevelsTable() {
     const anyIndicatorOn = (TS_ENABLED && state.indicators.ts)
+      || (TL_ENABLED && state.indicators.tl)
+      || (XF_ENABLED && state.indicators.xf)
       || (IDM_ENABLED && state.indicators.idm)
       || (BOS_ENABLED && state.indicators.bos)
       || (FVG_ENABLED && state.indicators.fvg)
@@ -1336,6 +1478,7 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (lvl.category === "ob") badgeClass = (lvl.type || "").includes("BREAKER") ? "badge-breaker" : "badge-ob";
       else if (lvl.category === "ts") badgeClass = "badge-ts";
       else if (lvl.category === "apex") badgeClass = "badge-apex";
+      else if (lvl.category === "xfactor") badgeClass = "badge-xf";
       else if (lvl.type.includes("RESISTANCE")) badgeClass = "badge-resistance";
 
       let statusClass = "tag-fresh";
@@ -1567,10 +1710,10 @@ document.addEventListener("DOMContentLoaded", () => {
         fvg:      { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: true, ifvg: false, ob: false },
         ifvg:     { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: true, ob: false },
         ob:       { sr: false, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: true },
-        sr:       { sr: true, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false },
-        qm:       { sr: false, ocl: false, qm: true, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false },
-        ocl:      { sr: false, ocl: true, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false },
-        apex:     { sr: false, ocl: false, qm: false, apex: true, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false },
+        sr:       { sr: true, ocl: false, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
+        qm:       { sr: false, ocl: false, qm: true, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
+        ocl:      { sr: false, ocl: true, qm: false, apex: false, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
+        apex:     { sr: false, ocl: false, qm: false, apex: true, ts: false, idm: false, bos: false, fvg: false, ifvg: false, ob: false, tl: false },
         all: {
           sr: SR_ENABLED || INDICATORS_ENABLED,
           ocl: OCL_ENABLED || INDICATORS_ENABLED,
@@ -1582,6 +1725,7 @@ document.addEventListener("DOMContentLoaded", () => {
           fvg: FVG_ENABLED,
           ifvg: IFVG_ENABLED,
           ob: OB_ENABLED,
+          tl: TL_ENABLED,
         },
       };
       const next = MODES[mode];
@@ -1597,6 +1741,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (toggleFVG) toggleFVG.checked = next.fvg;
       if (toggleIFVG) toggleIFVG.checked = next.ifvg;
       if (toggleOB) toggleOB.checked = next.ob;
+      if (toggleTL) toggleTL.checked = next.tl;
+      if (toggleXF) toggleXF.checked = next.xf;
       if (mode === "apex") btnLine.click();
 
       refreshData();
@@ -1680,6 +1826,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!OB_ENABLED) { e.target.checked = false; return; }
       state.indicators.ob = e.target.checked;
       if (e.target.checked && state.inspectMode === "strategy") state.inspectMode = "ob";
+      refreshData();
+    });
+  }
+  if (toggleTL) {
+    toggleTL.addEventListener("change", (e) => {
+      if (!TL_ENABLED) { e.target.checked = false; return; }
+      state.indicators.tl = e.target.checked;
+      if (e.target.checked && state.inspectMode === "strategy") state.inspectMode = "tl";
+      refreshData();
+    });
+  }
+  if (toggleXF) {
+    toggleXF.addEventListener("change", (e) => {
+      if (!XF_ENABLED) { e.target.checked = false; return; }
+      state.indicators.xf = e.target.checked;
+      if (e.target.checked && state.inspectMode === "strategy") state.inspectMode = "xf";
       refreshData();
     });
   }

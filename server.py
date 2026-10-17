@@ -19,13 +19,20 @@ import pandas as pd
 import numpy as np
 
 from config.settings import (
-    INSTRUMENTS, STRATEGY_ENABLED, INDICATORS_ENABLED, TS_ENABLED,
+    INSTRUMENTS, INDICATORS_ENABLED, TS_ENABLED,
     SR_ENABLED, QM_ENABLED, OCL_ENABLED, APEX_ENABLED, IDM_ENABLED,
     BOS_ENABLED, BOS_SWING_LENGTH,
     BOS_INTERNAL_LENGTH, BOS_SHOW_INTERNAL, FVG_ENABLED, IFVG_ENABLED,
     FVG_MIN_ATR_MULT, IFVG_MAX_GAP_BARS, IFVG_MIN_OVERLAP_FRAC,
     BOS_SWING_TOL_ATR, OB_ENABLED, OB_SWING_LENGTH, OB_SHOW_LAST,
-    OB_USE_BODY,
+    OB_USE_BODY, OB_REQUIRE_FVG, OB_REQUIRE_SWEEP, OB_DISPLACEMENT_MULT,
+    OB_MARK_DECISIONAL,
+    TS_MIN_WICK_BODY_FRAC, TS_MIN_WICK_RANGE_FRAC,
+    TL_ENABLED, TL_PIVOT_LENGTH, TL_SLOPE_MULT, TL_MAX_LINES,
+    TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
+    TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
+    TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
+    XF_ENABLED, XF_XTOL_ATR, XF_SWEEP_WINDOW, XF_MAX_USES,
 )
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
@@ -33,27 +40,13 @@ from indicators.idm_detector import IDMDetector
 from indicators.bos_detector import BOSDetector
 from indicators.fvg_detector import FVGDetector
 from indicators.ob_detector import OBDetector
-# NOTE: MSNR indicator/strategy imports kept for future re-enable, but NOT
-# executed while STRATEGY_ENABLED / INDICATORS_ENABLED are False.
+from indicators.trendline_detector import TLDetector
 from indicators.candle_analyzer import CandleAnalyzer, LevelType, LevelState
 from indicators.freshness_tracker import FreshnessTracker
 from indicators.ocl_detector import OCLDetector
 from indicators.qm_detector import QMDetector
 from indicators.apex_detector import ApexDetector
-
-from strategy.storyline_engine import StorylineEngine, StorylineEvent, BiasDirection
-from strategy.registry import (
-    list_modules as list_strategy_modules,
-    set_enabled as set_strategy_module,
-    enabled_model_values as enabled_strategy_models,
-    any_enabled as any_strategy_enabled,
-)
-from strategy.ftfl_locator import FTFLLocator, FTFLZone
-from strategy.stfl_locator import STFLLocator, STFLZone
-from strategy.ttfl_locator import TTFLLocator, TTFLRefinement
-from strategy.obstacle_scanner import ObstacleScanner, ObstacleTarget
-from strategy.entry_engine import EntryEngine, TradeSignal, EntryModelType
-from execution.risk_manager import RiskManager, PositionPlan, AccountMetrics
+from execution.risk_manager import RiskManager, PositionPlan, AccountMetrics, BiasDirection
 from execution.order_manager import OrderManager, LivePosition
 
 app = FastAPI(title="MSNR TradingView Engine", version="1.0.0")
@@ -156,6 +149,8 @@ def get_indicators(
     show_fvg: bool = Query(True),
     show_ifvg: bool = Query(True),
     show_ob: bool = Query(True),
+    show_tl: bool = Query(True),
+    show_xf: bool = Query(True),
 ):
     """
     Compute MSNR indicators on live MT5 data and return structured levels.
@@ -171,7 +166,9 @@ def get_indicators(
     fvg_on = FVG_ENABLED and show_fvg
     ifvg_on = IFVG_ENABLED and show_ifvg
     ob_on = OB_ENABLED and show_ob
-    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on:
+    tl_on = TL_ENABLED and show_tl
+    xf_on = XF_ENABLED and show_xf
+    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on and not xf_on:
         try:
             loader = get_loader(symbol)
             sym = loader.resolved_symbol
@@ -195,6 +192,12 @@ def get_indicators(
 
         levels_data = []
 
+        # Cross-block detector outputs shared with the X-Factor block (#12).
+        sr_x_levels: list = []
+        tl_x_lines: list = []
+        ts_x_levels: list = []
+        qm_x_levels: list = []
+
         def _end_time(candle_idx: Optional[int]):
             """Map a detector iloc end-index to unix time (None = still active)."""
             if candle_idx is None:
@@ -208,6 +211,7 @@ def get_indicators(
             base_levels = analyzer.detect_all()
             tracker = FreshnessTracker(df)
             base_levels = tracker.update(base_levels)
+            sr_x_levels = list(base_levels)
 
             for lvl in base_levels:
                 # Apply freshness filter
@@ -264,6 +268,7 @@ def get_indicators(
             base_levels = analyzer.detect_all()
             qm_det = QMDetector(df, base_levels)
             qms = qm_det.detect_all()
+            qm_x_levels = list(qms)
             for qm in qms:
                 # Ray starts at formation (origin candle = left shoulder),
                 # not at the later break candle.
@@ -301,8 +306,13 @@ def get_indicators(
 
         # 5. Turtle Soup (TS) — new custom logic, works on every timeframe
         if TS_ENABLED and show_ts:
-            ts_det = TSDetector(df)
-            for ts in ts_det.detect_all():
+            ts_det = TSDetector(
+                df,
+                min_wick_body_frac=TS_MIN_WICK_BODY_FRAC,
+                min_wick_range_frac=TS_MIN_WICK_RANGE_FRAC,
+            )
+            ts_x_levels = list(ts_det.detect_all())
+            for ts in ts_x_levels:
                 t_idx = min(ts.candle_index, len(times_unix) - 1)
                 s_idx = min(ts.sweep_candle_index, len(times_unix) - 1)
                 levels_data.append({
@@ -366,45 +376,38 @@ def get_indicators(
                     "desc": f"{kind}: {bo.direction.value.upper()}"
                 })
 
-        # 8. FVG zones (LuxAlgo port). Mitigated zones draw formation ->
-        # mitigation; active ones are open-ended (fixed short span).
-        # Computed once and shared with the IFVG block below. First-parent
-        # rays extend to the IFVG birth so the lineage stays visible.
+        # 8. FVG zones (LuxAlgo port). Only UNMITIGATED (fresh) zones are
+        # shown; mitigated zones are dropped. Computed once and shared with
+        # the IFVG block below.
         fvg_det = FVGDetector(df, min_atr_mult=FVG_MIN_ATR_MULT,
                               max_gap_bars=IFVG_MAX_GAP_BARS,
                               min_overlap_frac=IFVG_MIN_OVERLAP_FRAC)
         fvg_levels = fvg_det.detect_all() if (fvg_on or ifvg_on) else []
         ifvg_levels = fvg_det.detect_ifvg(fvg_levels) if ifvg_on else []
-        birth_by_first = {}
-        for iv in ifvg_levels:
-            f = iv.first_formation_index
-            birth_by_first[f] = max(birth_by_first.get(f, 0), iv.formation_index)
         if fvg_on:
             for fv in fvg_levels:
+                if not fv.fresh:
+                    continue  # mitigated zones are hidden
                 t_idx = min(fv.formation_index, len(times_unix) - 1)
-                if fv.mitigated and fv.mitigation_index is not None:
-                    end_idx, end_kind = min(fv.mitigation_index, len(times_unix) - 1), "mitigated"
-                else:
-                    end_idx, end_kind = None, "active"
-                ext = birth_by_first.get(fv.formation_index)
-                if ext is not None and (end_idx is None or ext > end_idx):
-                    end_idx = min(ext, len(times_unix) - 1)
                 levels_data.append({
                     "category": "fvg",
                     "type": f"FVG ({fv.direction.value.upper()})",
                     "price": round(fv.mid, 3),
-                    "state": "MITIGATED" if fv.mitigated else "FRESH",
+                    "state": "FRESH",
                     "time": int(times_unix[t_idx]),
-                    "end_time": _end_time(end_idx),
-                    "end_kind": end_kind,
+                    "end_time": None,
+                    "end_kind": "active",
                     "box_top": round(fv.top, 3),
                     "box_bottom": round(fv.bottom, 3),
                     "desc": f"FVG: {fv.direction.value.upper()}"
                 })
 
-        # 9. IFVG (genuine overlap of two opposite FVGs). Fixed short span.
+        # 9. IFVG (genuine overlap of two opposite FVGs). Only UNMITIGATED
+        # (fresh) inversions are shown.
         if ifvg_on:
             for iv in ifvg_levels:
+                if not iv.fresh:
+                    continue  # mitigated inversions are hidden
                 t_idx = min(iv.formation_index, len(times_unix) - 1)
                 levels_data.append({
                     "category": "ifvg",
@@ -424,7 +427,11 @@ def get_indicators(
         # flip, the flip bar carried separately for the two-tone drawing.
         if ob_on:
             ob_det = OBDetector(df, swing_length=OB_SWING_LENGTH,
-                                use_body=OB_USE_BODY, show_last=OB_SHOW_LAST)
+                                use_body=OB_USE_BODY, show_last=OB_SHOW_LAST,
+                                require_fvg=OB_REQUIRE_FVG,
+                                require_sweep=OB_REQUIRE_SWEEP,
+                                displacement_mult=OB_DISPLACEMENT_MULT,
+                                mark_decisional=OB_MARK_DECISIONAL)
             last_idx = len(times_unix) - 1
             for ob in ob_det.detect_all():
                 t_idx = min(ob.formation_index, last_idx)
@@ -438,11 +445,120 @@ def get_indicators(
                     "end_kind": "active",
                     "box_top": round(ob.top, 3),
                     "box_bottom": round(ob.bottom, 3),
-                    "desc": f"{ob.kind}: {ob.direction.value.upper()}"
+                    "desc": (f"{ob.kind}: {ob.direction.value.upper()}"
+                             + (f" [{ob.ob_type}]" if ob.ob_type else ""))
                 }
                 if ob.is_breaker and ob.break_index is not None:
                     payload["break_time"] = int(times_unix[min(ob.break_index, last_idx)])
                 levels_data.append(payload)
+
+        # 11. Auto trendlines (point-to-point close apexes): support /
+        # resistance lines, channel pairs, break-retest role flips and
+        # trendline-liquidity sweeps.
+        if tl_on:
+            tl_det = TLDetector(df, pivot_length=TL_PIVOT_LENGTH,
+                                slope_mult=TL_SLOPE_MULT,
+                                max_lines=TL_MAX_LINES,
+                                retest_bars=TL_RETEST_BARS,
+                                body_pivots=TL_BODY_PIVOTS,
+                                require_engulfing=TL_REQUIRE_ENGULFING,
+                                skip_gap_anchors=TL_SKIP_GAP_ANCHORS,
+                                gap_atr_mult=TL_GAP_ATR_MULT,
+                                tol_atr=TL_TOL_ATR,
+                                channel_parallel_atr=TL_CHANNEL_PARALLEL_ATR,
+                                sweep_atr=TL_SWEEP_ATR)
+            tl_x_lines = list(tl_det.detect_all())
+            last_idx = len(times_unix) - 1
+            for tl in tl_x_lines:
+                s_idx = min(tl.pivot_index, last_idx)
+                e_idx = min(tl.end_index, last_idx)
+                role = tl.role.upper()
+                typ = "TL_BRT" if tl.flipped else f"TL_{role}"
+                payload = {
+                    "category": "trendline",
+                    "type": typ,
+                    "role": tl.role,
+                    "flipped": bool(tl.flipped),
+                    "retest_role": tl.retest_role,
+                    "channel": tl.channel_id,
+                    "liquidity": bool(tl.swept),
+                    "price": round(tl.pivot_price, 3),
+                    "price_end": round(tl.value_at(e_idx), 3),
+                    "state": ("FRESH" if tl.state.value == "active"
+                              else "BROKEN"),
+                    "time": int(times_unix[s_idx]),
+                    "end_time": int(times_unix[e_idx]),
+                    "end_kind": ("retest" if tl.retested else
+                                 ("broken" if tl.state.value == "broken"
+                                  else "active")),
+                    "slope": round(tl.slope, 5),
+                    "touches": int(tl.touches),
+                    "anchor": tl.anchor_kind,
+                    "alchemist": tl.alchemist,
+                    "desc": (f"{'BRT ' if tl.flipped else ''}TL {role} "
+                             f"@{tl.pivot_price:.2f} {tl.state.value}"
+                             f"{' +retest' if tl.retested else ''} "
+                             f"({tl.touches} touches"
+                             f"{', CH' + str(tl.channel_id) if tl.channel_id else ''}"
+                             f"{', sweep' if tl.swept else ''}"
+                             f", {tl.anchor_kind}"
+                             f"{', ' + tl.alchemist if tl.alchemist == 'continuation' else ''}"
+                             f"{', ENG' if tl.anchor_engulfing or tl.anchor_engulfed else ''})"),
+                }
+                if tl.break_index is not None:
+                    payload["break_time"] = int(times_unix[min(tl.break_index,
+                                                               last_idx)])
+                if tl.retest_index is not None:
+                    payload["retest_time"] = int(times_unix[min(tl.retest_index,
+                                                                last_idx)])
+                if tl.sweep_bars:
+                    payload["sweep_times"] = [
+                        int(times_unix[min(b, last_idx)]) for b in tl.sweep_bars]
+                levels_data.append(payload)
+
+
+        # 12. X-Factor (trendline x SNR confluence, web Alchemist math).
+        # Additive payloads only: the chart ignores unknown categories
+        # until the frontend X rendering lands.
+        if xf_on:
+            try:
+                from indicators.xfactor_detector import XDetector as _XD
+                ts_for_x = ts_x_levels
+                if not ts_for_x:
+                    ts_for_x = TSDetector(df).detect_all()
+                x_levels = _XD(
+                    df, sr_x_levels, tl_x_lines, ts_levels=ts_for_x,
+                    qm_levels=qm_x_levels, xtol_atr=XF_XTOL_ATR,
+                    sweep_window=XF_SWEEP_WINDOW,
+                    max_uses=XF_MAX_USES).detect_all()
+                last_idx = len(times_unix) - 1
+                for x in x_levels:
+                    x_idx = min(x.x_index, last_idx)
+                    p2_idx = min(x.point2_index, last_idx)
+                    payload = {
+                        "category": "xfactor",
+                        "type": f"X {x.tier.upper()} ({x.direction.value.upper()})",
+                        "price": round(x.x_price, 3),
+                        "state": ("FRESH" if x.tradable else "WATCH"),
+                        "time": int(times_unix[x_idx]),
+                        "start_time": int(times_unix[p2_idx]),
+                        "end_time": None,
+                        "end_kind": "active",
+                        "score": int(x.score),
+                        "tier": x.tier,
+                        "tradable": bool(x.tradable),
+                        "engulf": bool(x.engulf),
+                        "sweep": bool(x.sweep),
+                        "desc": (f"X {x.tier.upper()} {x.direction.value.upper()} "
+                                 f"@{x.x_price:.2f} (score {x.score}, "
+                                 f"{x.tl_anchor_kind}, {x.tl_alchemist})"),
+                    }
+                    if x.ex_top is not None and x.ex_bottom is not None:
+                        payload["ex_box_top"] = round(x.ex_top, 3)
+                        payload["ex_box_bottom"] = round(x.ex_bottom, 3)
+                    levels_data.append(payload)
+            except Exception:
+                pass
 
         # Sort levels by price descending
         levels_data.sort(key=lambda x: x["price"], reverse=True)
@@ -460,14 +576,37 @@ def get_indicators(
 
 @app.get("/api/strategy")
 def get_strategy_analysis(symbol: str = Query("XAUUSD")):
-    """
-    Computes complete Phase 2 Strategy Core & Multi-Storyline Entry analysis:
-    DISABLED unless entry modules are enabled in Bot Settings.
-    Only signals from enabled modules are returned.
-    """
-    msnr_models = enabled_strategy_models("msnr")
-    ts_models = enabled_strategy_models("ts_m15")
-    if not msnr_models and not ts_models:
+    """Alchemist X-Factor entry module: top-down bias + M15 X signals."""
+    try:
+        from strategy.registry import is_enabled as _mod_on
+        if not _mod_on("alchemist_x"):
+            raise RuntimeError("alchemist_x module off")
+        from strategy.alchemist import AlchemistEngine
+        from config.settings import (
+            ALCHEMIST_EXEC_TF, ALCHEMIST_REF_TF, ALCHEMIST_PD_LOOKBACK,
+            ALCHEMIST_MIN_RR, ALCHEMIST_RISK_PCT, ALCHEMIST_MAX_SIGNALS,
+            ALCHEMIST_SL_BUF_ATR, ALCHEMIST_SL_MIN_ATR,
+            ALCHEMIST_SL_SPREAD_MULT, ALCHEMIST_SPREAD_POINTS,
+            ALCHEMIST_REQUIRE_REFINEMENT, ALCHEMIST_POINT_VALUE,
+        )
+        loader = get_loader(symbol)
+        sym = loader.resolved_symbol
+        engine = AlchemistEngine(
+            loader.fetch_timeframe, symbol=sym,
+            params={"exec_tf": ALCHEMIST_EXEC_TF, "ref_tf": ALCHEMIST_REF_TF,
+                    "pd_lookback": ALCHEMIST_PD_LOOKBACK,
+                    "min_rr": ALCHEMIST_MIN_RR, "risk_pct": ALCHEMIST_RISK_PCT,
+                    "max_signals": ALCHEMIST_MAX_SIGNALS,
+                    "sl_buf_atr": ALCHEMIST_SL_BUF_ATR,
+                    "sl_min_atr": ALCHEMIST_SL_MIN_ATR,
+                    "sl_spread_mult": ALCHEMIST_SL_SPREAD_MULT,
+                    "spread_points": ALCHEMIST_SPREAD_POINTS,
+                    "require_refinement": ALCHEMIST_REQUIRE_REFINEMENT,
+                    "point_value": ALCHEMIST_POINT_VALUE})
+        payload = engine.analyze()
+        payload["symbol"] = sym
+        return payload
+    except Exception as e:
         try:
             sym = get_loader(symbol).resolved_symbol
         except Exception:
@@ -482,272 +621,51 @@ def get_strategy_analysis(symbol: str = Query("XAUUSD")):
             "stfl": None,
             "ttfl": None,
             "obstacles": [],
-            "analysis_schedule": {},
-            "analysis_due": [],
             "disabled": True,
-            "message": "Strategy disabled — enable entry modules in Bot Settings.",
+            "message": f"Alchemist engine idle ({e}).",
         }
-    try:
-        from strategy.ts_entry import TSEntryEngine
-
-        loader = get_loader(symbol)
-        signals = []
-        sl_summary = {}
-
-        # 1-2. MSNR storyline engine (only if its modules are on; this is
-        # the heavy multi-timeframe fetch).
-        if msnr_models:
-            dfs = loader.fetch_all_timeframes()
-            sl_engine = StorylineEngine(dfs)
-            storylines = sl_engine.analyze_all()
-            entry_eng = EntryEngine(dfs, symbol=loader.resolved_symbol)
-            signals = entry_eng.scan_all_models()
-
-            # Format storyline summary
-            for k, v in storylines.items():
-                sl_summary[k] = {
-                    "htf": v.htf,
-                    "ltf": v.ltf,
-                    "bias": v.bias.value,
-                    "rejection_price": float(round(v.rejection_price, 3)),
-                    "rejection_desc": v.rejection_level_desc,
-                    "rejection_time": str(v.rejection_time),
-                    "breakout_time": str(v.breakout_time)
-                }
-
-        # 3. MNSR + TS engine (M15 only, light single-timeframe fetch).
-        if ts_models:
-            df_m15 = loader.fetch_timeframe("M15", count=500)
-            ts_eng = TSEntryEngine(df_m15, symbol=loader.resolved_symbol)
-            ts_signals = [s for s in ts_eng.scan()
-                          if s.model_type.value in ts_models]
-            if signals:
-                max_rank = max(s.priority_rank for s in signals)
-                for s in ts_signals:
-                    s.priority_rank += max_rank
-            signals = signals + ts_signals
-
-        # Build list of all active entry zones from signals
-        entries_list = []
-        for s in signals:
-            p = s.primary_plan
-            entry_item = {
-                "model_type": s.model_type.value,
-                "direction": s.direction.value,
-                "storyline_key": s.storyline_key,
-                "storyline_desc": s.storyline_desc,
-                "storyline_rejection": float(round(s.storyline_rejection, 3)),
-                "ftfl_tf": s.ftfl_tf,
-                "stfl_tf": s.stfl_tf,
-                "ttfl_tf": s.ttfl_tf,
-                "entry_price": float(round(p.buffered_entry, 3)),
-                "raw_entry": float(round(p.raw_entry, 3)),
-                "stop_loss": float(round(p.stop_loss, 3)),
-                "sl_points": float(p.sl_points),
-                "take_profit": float(round(p.take_profit, 3)),
-                "obstacle_tp": float(round(p.obstacle_tp, 3)) if p.obstacle_tp else None,
-                "lot_size": float(p.lot_size),
-                "risk_usd": float(round(p.risk_amount_usd, 2)),
-                "confidence": s.confidence,
-                "rationale": s.rationale,
-                "formation_time": int(s.formation_time),
-                "ftfl_box_top": float(round(s.ftfl_box_top, 3)),
-                "ftfl_box_bottom": float(round(s.ftfl_box_bottom, 3)),
-                "stfl_box_top": float(round(s.stfl_box_top, 3)),
-                "stfl_box_bottom": float(round(s.stfl_box_bottom, 3)),
-                "distance_to_entry": float(round(s.distance_to_entry, 2)),
-                "priority_rank": s.priority_rank
-            }
-            if s.secondary_plan:
-                p2 = s.secondary_plan
-                entry_item["secondary_entry"] = {
-                    "entry_price": float(round(p2.buffered_entry, 3)),
-                    "stop_loss": float(round(p2.stop_loss, 3)),
-                    "lot_size": float(p2.lot_size),
-                    "risk_usd": float(round(p2.risk_amount_usd, 2)),
-                    "model_name": p2.model_name
-                }
-            entries_list.append(entry_item)
-
-        # Only MSNR modules enabled in Bot Settings pass through
-        # (TS signals were pre-filtered at scan time).
-        entries_list = [e for e in entries_list if e["model_type"] in msnr_models or e["model_type"] in ts_models]
-
-        # Primary entry is the closest / highest priority entry
-        primary_entry = entries_list[0] if entries_list else None
-
-        # Backwards-compatible fields for single-entry display
-        ftfl_data = None
-        stfl_data = None
-        ttfl_data = None
-        obstacles_data = []
-
-        if primary_entry:
-            ttfl_data = {
-                "timeframe": primary_entry["ttfl_tf"],
-                "direction": primary_entry["direction"],
-                "entry_price": primary_entry["entry_price"],
-                "sl_reference": primary_entry["stop_loss"],
-                "entry_type": primary_entry["model_type"],
-                "desc": primary_entry["rationale"]
-            }
-            ftfl_box_top = primary_entry["ftfl_box_top"] or (primary_entry["raw_entry"] + 2.0)
-            ftfl_box_bottom = primary_entry["ftfl_box_bottom"] or (primary_entry["raw_entry"] - 2.0)
-            ftfl_data = {
-                "timeframe": primary_entry["ftfl_tf"],
-                "direction": primary_entry["direction"],
-                "price": primary_entry["raw_entry"],
-                "box_top": ftfl_box_top,
-                "box_bottom": ftfl_box_bottom,
-                "equilibrium": round((ftfl_box_top + ftfl_box_bottom) / 2.0, 3),
-                "desc": primary_entry["storyline_desc"],
-                "priority": primary_entry["confidence"]
-            }
-            stfl_box_top = primary_entry["stfl_box_top"] or (primary_entry["raw_entry"] + 1.0)
-            stfl_box_bottom = primary_entry["stfl_box_bottom"] or (primary_entry["raw_entry"] - 1.0)
-            stfl_data = {
-                "timeframe": primary_entry["stfl_tf"],
-                "direction": primary_entry["direction"],
-                "box_top": stfl_box_top,
-                "box_bottom": stfl_box_bottom,
-                "equilibrium": round((stfl_box_top + stfl_box_bottom) / 2.0, 3),
-            }
-            if primary_entry["obstacle_tp"]:
-                obstacles_data.append({
-                    "price": primary_entry["obstacle_tp"],
-                    "type": "OBSTACLE",
-                    "desc": "Intermediate Obstacle",
-                    "is_final_tp": False,
-                    "action": "TAKE_80_PERCENT_PARTIAL"
-                })
-            obstacles_data.append({
-                "price": primary_entry["take_profit"],
-                "type": "DRAW_ON_LIQUIDITY",
-                "desc": "Draw on Liquidity Final TP",
-                "is_final_tp": True,
-                "action": "RUNNER_TARGET"
-            })
-
-        from config.settings import ANALYSIS_SCHEDULE, get_due_analysis_scopes
-        return {
-            "symbol": loader.resolved_symbol,
-            "storylines": sl_summary,
-            "entries": entries_list,
-            "primary_entry": primary_entry,
-            "total_entries": len(entries_list),
-            "ftfl": ftfl_data,
-            "stfl": stfl_data,
-            "ttfl": ttfl_data,
-            "obstacles": obstacles_data,
-            # Video 10 routine: which scopes (monthly/weekly/daily) are due now.
-            "analysis_schedule": ANALYSIS_SCHEDULE,
-            "analysis_due": get_due_analysis_scopes(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/signals")
 def get_trade_signals(symbol: str = Query("XAUUSD")):
-    """
-    Entry signals from all enabled modules (MSNR storylines + TS M15).
-    DISABLED unless entry modules are enabled in Bot Settings.
-    """
-    msnr_models = enabled_strategy_models("msnr")
-    ts_models = enabled_strategy_models("ts_m15")
-    if not msnr_models and not ts_models:
+    """Signals from the Alchemist engine (shares its 20s cache)."""
+    try:
+        from strategy.registry import is_enabled as _mod_on
+        if not _mod_on("alchemist_x"):
+            raise RuntimeError("alchemist_x module off")
+        from strategy.alchemist import AlchemistEngine
+        loader = get_loader(symbol)
+        sym = loader.resolved_symbol
+        engine = AlchemistEngine(loader.fetch_timeframe, symbol=sym)
+        return {"symbol": sym, "signals": engine.signals(),
+                "disabled": False}
+    except Exception as e:
         try:
             sym = get_loader(symbol).resolved_symbol
         except Exception:
             sym = symbol
-        return {
-            "symbol": sym,
-            "signals": [],
-            "disabled": True,
-            "message": "Strategy disabled — enable entry modules in Bot Settings.",
-        }
-    try:
-        from strategy.ts_entry import TSEntryEngine
-
-        loader = get_loader(symbol)
-        signals = []
-        if msnr_models:
-            dfs = loader.fetch_all_timeframes()
-            entry_eng = EntryEngine(dfs, symbol=loader.resolved_symbol)
-            signals = entry_eng.scan_all_models()
-        if ts_models:
-            df_m15 = loader.fetch_timeframe("M15", count=500)
-            ts_eng = TSEntryEngine(df_m15, symbol=loader.resolved_symbol)
-            ts_signals = [s for s in ts_eng.scan()
-                          if s.model_type.value in ts_models]
-            if signals:
-                max_rank = max(s.priority_rank for s in signals)
-                for s in ts_signals:
-                    s.priority_rank += max_rank
-            signals = signals + ts_signals
-
-        result = []
-        for s in signals:
-            p = s.primary_plan
-            sig_dict = {
-                "model_type": s.model_type.value,
-                "symbol": s.symbol,
-                "direction": s.direction.value,
-                "storyline_key": s.storyline_key,
-                "storyline": s.storyline_desc,
-                "ftfl_tf": s.ftfl_tf,
-                "stfl_tf": s.stfl_tf,
-                "ttfl_tf": s.ttfl_tf,
-                "entry_price": float(round(p.buffered_entry, 3)),
-                "raw_entry": float(round(p.raw_entry, 3)),
-                "stop_loss": float(round(p.stop_loss, 3)),
-                "sl_points": float(p.sl_points),
-                "take_profit": float(round(p.take_profit, 3)),
-                "obstacle_tp": float(round(p.obstacle_tp, 3)) if p.obstacle_tp else None,
-                "lot_size": float(p.lot_size),
-                "risk_usd": float(round(p.risk_amount_usd, 2)),
-                "confidence": s.confidence,
-                "rationale": s.rationale,
-                "formation_time": int(s.formation_time),
-                "ftfl_box_top": float(round(s.ftfl_box_top, 3)),
-                "ftfl_box_bottom": float(round(s.ftfl_box_bottom, 3)),
-                "stfl_box_top": float(round(s.stfl_box_top, 3)),
-                "stfl_box_bottom": float(round(s.stfl_box_bottom, 3)),
-                "distance_to_entry": float(round(s.distance_to_entry, 2)),
-                "priority_rank": s.priority_rank
-            }
-            if s.secondary_plan:
-                p2 = s.secondary_plan
-                sig_dict["secondary_entry"] = {
-                    "entry_price": float(round(p2.buffered_entry, 3)),
-                    "stop_loss": float(round(p2.stop_loss, 3)),
-                    "lot_size": float(p2.lot_size),
-                    "risk_usd": float(round(p2.risk_amount_usd, 2)),
-                    "model_name": p2.model_name
-                }
-            result.append(sig_dict)
-
-        # Only modules enabled in Bot Settings pass through
-        # (TS signals were pre-filtered at scan time).
-        result = [r for r in result if r["model_type"] in msnr_models or r["model_type"] in ts_models]
-
-        return {"symbol": loader.resolved_symbol, "signals": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"symbol": sym, "signals": [], "disabled": True,
+                "message": f"Alchemist engine idle ({e})."}
 
 
 @app.get("/api/settings/modules")
 def get_settings_modules():
-    """List all strategy entry modules with live enabled state."""
-    return {"modules": list_strategy_modules()}
+    """Entry-module registry for the settings tab."""
+    try:
+        from strategy.registry import list_modules
+        return {"modules": list_modules()}
+    except Exception:
+        return {"modules": []}
 
 
 @app.post("/api/settings/modules/{module_id}")
-def set_settings_module(module_id: str, enabled: bool = Query(...)):
-    """Enable or disable a strategy entry module (persists across restarts)."""
-    if not set_strategy_module(module_id, enabled):
-        raise HTTPException(status_code=404, detail=f"Unknown module: {module_id}")
-    return {"id": module_id, "enabled": bool(enabled)}
+def toggle_settings_module(module_id: str, enabled: bool = Query(True)):
+    """Enable/disable one entry module (persists to config/)."""
+    try:
+        from strategy.registry import set_enabled
+        return {"ok": True, "modules": set_enabled(module_id, enabled)}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/account")
@@ -902,20 +820,112 @@ def manage_obstacles():
 
 
 @app.get("/api/backtest/trades")
-def get_backtest_trades():
-    """Serve the detection-journal CSV (newest version present) for the viewer."""
+def get_backtest_trades(journal: str = Query("")):
+    """Serve a detection-journal CSV for the viewer.
+
+    journal: relpath under backtest/ (see /api/backtest/journals).
+    Empty = newest journal_Sep28-Oct02*.csv (the live book).
+    """
     import csv as _csv
     import glob as _glob
-    paths = sorted(_glob.glob(os.path.join(os.path.dirname(__file__), "backtest",
-                                           "journal_Sep28-Oct02*.csv")))
-    if not paths:
-        raise HTTPException(status_code=404, detail="Journal CSV not found.")
-    journal = paths[-1]
-    if not os.path.exists(journal):
-        raise HTTPException(status_code=404, detail="Journal CSV not found.")
+    base = os.path.dirname(__file__)
+    bt = os.path.join(base, "backtest")
+    if journal:
+        p = os.path.normpath(os.path.join(bt, journal))
+        if (not p.startswith(bt + os.sep) or not p.endswith(".csv")
+                or not os.path.isfile(p)):
+            raise HTTPException(status_code=404, detail="Journal not found.")
+        journal_path = p
+    else:
+        paths = sorted(_glob.glob(os.path.join(bt, "journal_Sep28-Oct02*.csv")))
+        if not paths:
+            raise HTTPException(status_code=404, detail="Journal CSV not found.")
+        journal_path = paths[-1]
+    trades, stats = _read_journal_csv(journal_path)
+    return {"trades": trades, "stats": stats,
+            "journal": os.path.relpath(journal_path, bt)}
+
+
+@app.get("/api/backtest/journals")
+def list_backtest_journals():
+    """List every loadable journal: live book, archive, experiment scans."""
+    import glob as _glob
+    bt = os.path.join(os.path.dirname(__file__), "backtest")
+    pats = ("journal_*.csv", "archive/journal_*.csv", "qm_scan/*.csv",
+            "sweep_scan/*.csv", "side_scan/*.csv")
+    found = sorted({p for pat in pats
+                    for p in _glob.glob(os.path.join(bt, pat))})
+    journals = []
+    for path in found:
+        try:
+            trades, stats = _read_journal_csv(path)
+        except Exception:
+            continue
+        rel = os.path.relpath(path, bt).replace(os.sep, "/")
+        journals.append({"id": rel, "label": _journal_label(rel),
+                         "total": stats["total"], "tp": stats["tp"],
+                         "losses": stats["losses"],
+                         "total_R": stats["total_R"]})
+    journals.sort(key=lambda j: (not j["id"].startswith("journal_"),
+                                  j["id"]))
+    default = next((j["id"] for j in reversed(journals)
+                    if j["id"].startswith("journal_Sep28")), None)
+    if default is None:
+        default = next((j["id"] for j in journals
+                        if j["id"].startswith("journal_")), None)
+    if default is None and journals:
+        default = journals[0]["id"]
+    return {"journals": journals, "default": default}
+
+
+def _journal_label(rel: str) -> str:
+    name = rel.rsplit("/", 1)[-1]
+    known = {
+        "journal_AI_pilot.csv": "AI pilot: 3 approved setups",
+        "journal_Sep28-Oct02_v7.csv": "v7 · LIVE (B: win8+unique)",
+        "journal_Sep28-Oct02_v6.csv": "v6 · break-side rule",
+        "journal_Sep28-Oct02_v5.csv": "v5 · unique setups",
+        "journal_Sep28-Oct02_v4.csv": "v4 · relaxed wicks",
+        "journal_Sep28-Oct02_v3.csv": "v3 · structural SL",
+        "journal_Sep28-Oct02_v2.csv": "v2 · fixed SL",
+        "journal_Sep28-Oct02.csv": "v1 · first journal",
+        "sweep_005.csv": "sweep 0.05",
+        "sweep_010.csv": "sweep 0.10",
+        "sweep_015.csv": "sweep 0.15",
+        "sweep_020.csv": "sweep 0.20",
+        "side_fixed.csv": "break-side check",
+        "qm_win8.csv": "A · window ±8",
+        "qm_win8_confl.csv": "A+D · window8+confluence",
+        "qm_win8_unique.csv": "B · window8+unique",
+        "qm_recent.csv": "C · most-recent pick",
+        "qm_confluence.csv": "D · confluence pick",
+        "qm_legs2.csv": "E · leg-anchored",
+        "qm_legs2_unique.csv": "E2 · legs+unique",
+        "qm_merge_tie.csv": "F · tie-abstain",
+        "qm_merge_min1.csv": "G · tie+min-score",
+        "qm_win12.csv": "window ±12",
+        "qm_win16.csv": "window ±16",
+        "qm_win20.csv": "window ±20",
+        "qm_win25.csv": "window ±25",
+        "journal_LUAP_Sep28-Oct02_v1.csv": "LUAP v1 · SMC entries",
+    }
+    if name in known:
+        return known[name]
+    stem = name[:-4] if name.endswith(".csv") else name
+    if "/" in rel:
+        return f"{rel.split('/')[0]}: {stem}"
+    return stem
+
+
+def _read_journal_csv(journal: str):
+    import csv as _csv
     trades = []
     with open(journal, "r", encoding="utf-8") as fh:
-        for row in _csv.DictReader(fh):
+        reader = _csv.DictReader(fh)
+        if not reader.fieldnames or "signal_date" not in reader.fieldnames \
+                or "entry" not in reader.fieldnames:
+            raise ValueError("Not a journal CSV.")
+        for row in reader:
             try:
                 trades.append({
                     "signal_date": row.get("signal_date", ""),
@@ -943,10 +953,10 @@ def get_backtest_trades():
     wins = sum(1 for t in trades if t["outcome"] == "TP")
     losses = sum(1 for t in trades if t["outcome"] == "SL")
     expired = sum(1 for t in trades if t["outcome"] == "expired")
-    return {"trades": trades,
-            "stats": {"total": len(trades), "tp": wins, "losses": losses,
-                      "expired": expired,
-                      "total_R": round(sum(t["R"] for t in trades), 2)}}
+    stats = {"total": len(trades), "tp": wins, "losses": losses,
+             "expired": expired,
+             "total_R": round(sum(t["R"] for t in trades), 2)}
+    return trades, stats
 
 
 @app.get("/backtest")

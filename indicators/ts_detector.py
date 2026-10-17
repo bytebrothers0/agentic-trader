@@ -1,24 +1,20 @@
 """
-ts_detector.py — Turtle Soup (TS) indicator.
+ts_detector.py — Turtle Soup (TS) indicator (web Alchemist MSNR math).
 
-TS is formed by TWO ADJACENT candles (colour-independent):
+TS is formed by TWO ADJACENT candles (colour-independent — dojis count):
 
   UPPER TS (bearish sweep of highs):
-    - candle2.high > candle1.high        (candle 1 upper wick is swept)
+    - candle2.high > candle1.high        (candle 1 upper extreme is swept)
     - candle2 body closes BELOW candle1.high:
         max(candle2.open, candle2.close) < candle1.high
-    - candle1 must have a real upper wick:
-        candle1.high > max(candle1.open, candle1.close)
+    - candle1 swept-side wick > 0 (any protrusion past the body counts;
+      the old visible-wick fraction gates now default to 0.0 = off and
+      live only as opt-in display params, not entry math).
 
-  LOWER TS (bullish sweep of lows):
-    - candle2.low < candle1.low          (candle 1 lower wick is swept)
-    - candle2 body closes ABOVE candle1.low:
-        min(candle2.open, candle2.close) > candle1.low
-    - candle1 must have a real lower wick:
-        candle1.low < min(candle1.open, candle1.close)
+  LOWER TS (bullish sweep of lows): mirror.
 
-Dojis (open == close) never qualify — TS needs real bodies.
 Level price = the swept level (candle1.high for UPPER, candle1.low for LOWER).
+This is the "X mark" liquidity sweep: wick past the level, body snaps back.
 """
 
 from __future__ import annotations
@@ -74,17 +70,27 @@ class TSDetector:
         Minimum sweep size as a multiple of local ATR(14). Micro-sweeps
         below this never count (default 0.0 = off, keeps indicator display
         unfiltered; entry engines pass their own gate, e.g. 0.5).
+    min_wick_body_frac : float
+        Opt-in display gate only (default 0.0 = off, web-exact: any
+        wick > 0 past the body counts). The live chart passes its tuned
+        fractions explicitly; entry math leaves these at 0.0.
+    min_wick_range_frac : float
+        Opt-in display gate only (default 0.0 = off). Same as above.
     atr_period : int
         ATR lookback for the sweep gate. Default 14.
     """
 
     def __init__(self, df: pd.DataFrame, sweep_min: float = 0.0,
-                 min_sweep_atr: float = 0.0, atr_period: int = 14):
+                 min_sweep_atr: float = 0.0, atr_period: int = 14,
+                 min_wick_body_frac: float = 0.0,
+                 min_wick_range_frac: float = 0.0):
         self._validate(df)
         self.df = df.copy()
         self.sweep_min = sweep_min
         self.min_sweep_atr = min_sweep_atr
         self.atr_period = atr_period
+        self.min_wick_body_frac = min_wick_body_frac
+        self.min_wick_range_frac = min_wick_range_frac
         self._atr = self._compute_atr() if min_sweep_atr > 0 else None
         self._levels: List[TSLevel] = []
 
@@ -97,11 +103,11 @@ class TSDetector:
         times = self.df.index
 
         for i in range(len(self.df) - 1):
-            if c[i] == o[i] or c[i + 1] == o[i + 1]:
-                continue  # dojis have no body direction; never TS
-
+            # Colour-independent: dojis sweep too (web spec).
             # --- UPPER TS: sweep of highs, body back below ---
-            c1_upper_wick = h[i] > max(o[i], c[i])
+            c1_upper_wick = self._visible_wick(
+                float(h[i]), float(max(o[i], c[i])),
+                float(abs(c[i] - o[i])), float(h[i] - l[i]))
             swept_high = h[i + 1] > h[i] + self.sweep_min
             body_back_below = max(o[i + 1], c[i + 1]) < h[i]
             if (c1_upper_wick and swept_high and body_back_below
@@ -119,7 +125,9 @@ class TSDetector:
                 ))
 
             # --- LOWER TS: sweep of lows, body back above ---
-            c1_lower_wick = l[i] < min(o[i], c[i])
+            c1_lower_wick = self._visible_wick(
+                float(min(o[i], c[i])), float(l[i]),
+                float(abs(c[i] - o[i])), float(h[i] - l[i]))
             swept_low = l[i + 1] < l[i] - self.sweep_min
             body_back_above = min(o[i + 1], c[i + 1]) > l[i]
             if (c1_lower_wick and swept_low and body_back_above
@@ -141,6 +149,18 @@ class TSDetector:
     @property
     def levels(self) -> List[TSLevel]:
         return self._levels
+
+    def _visible_wick(self, extreme: float, body_edge: float,
+                      body: float, crange: float) -> bool:
+        """True if the swept-side wick visibly protrudes past the body."""
+        wick = extreme - body_edge
+        if not (wick > 0):
+            return False
+        if wick < self.min_wick_body_frac * body:
+            return False
+        if crange > 0 and wick < self.min_wick_range_frac * crange:
+            return False
+        return True
 
     def _big_enough(self, sweep: float, idx: int) -> bool:
         if self.min_sweep_atr <= 0 or self._atr is None:

@@ -23,6 +23,7 @@ Rules (from Advanced MSNR, Videos 8, 9, 10, 11):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, Optional, Tuple
 import logging
 import MetaTrader5 as mt5
@@ -36,9 +37,16 @@ from config.settings import (
     SPLIT_ENTRY_SECONDARY,
     INSTRUMENT_SPECS,
 )
-from strategy.storyline_engine import BiasDirection
 
 logger = logging.getLogger("MSNR_RiskManager")
+
+
+class BiasDirection(Enum):
+    """Trade direction. Lives here (not in strategy/) so execution and
+    future entry models share it without importing removed engines."""
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
 
 
 @dataclass

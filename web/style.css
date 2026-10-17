@@ -900,6 +900,126 @@ body {
 .color-ob-bear { background-color: #ff6d00; }
 .color-brkr { background-color: #ff5c6c; }
 
+/* Manual drawing toolbar (human levels) */
+.chart-section {
+  position: relative;
+}
+
+.draw-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  background: rgba(24, 27, 34, 0.9);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 6px;
+  z-index: 20;
+}
+
+.draw-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+  padding: 0 2px;
+}
+
+.draw-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.draw-btn:hover {
+  color: #fff;
+  background-color: var(--bg-hover);
+}
+
+.draw-btn.active {
+  background-color: #e6ebf2;
+  color: #000;
+}
+
+.draw-btn.wide {
+  padding: 3px 6px;
+}
+
+.draw-list {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(24, 27, 34, 0.95);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px;
+  z-index: 20;
+  font-size: 11px;
+}
+
+.draw-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.draw-row:last-child {
+  border-bottom: none;
+}
+
+.draw-row .draw-kind {
+  font-weight: 700;
+  color: #e6ebf2;
+  min-width: 30px;
+}
+
+.draw-row .draw-price {
+  font-family: var(--font-mono);
+  color: #00e5ff;
+}
+
+.draw-row .draw-note {
+  flex: 1;
+  color: #9aa5b5;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draw-row .draw-del {
+  background: transparent;
+  border: none;
+  color: #ff5c6c;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.chart-tag.tag-plain.draw-human {
+  color: #e6ebf2;
+  font-style: italic;
+}
+
+.chart-section.drawing {
+  cursor: crosshair;
+}
+
+.chart-section.drawing .chart-container {
+  cursor: crosshair;
+}
+
 /* Account Metrics in Header */
 .account-header-metrics {
   display: flex;
@@ -1140,6 +1260,14 @@ input:checked + .slider:before { transform: translateX(14px); }
 .chart-tag.tag-plain.ob-bull { color: #2962ff; }
 .chart-tag.tag-plain.ob-bear { color: #ff6d00; }
 .chart-tag.tag-plain.brkr { color: #ff5c6c; }
+.chart-tag.tag-plain.tl-up { color: #26a69a; }
+.chart-tag.tag-plain.tl-dn { color: #ef5350; }
+.chart-tag.tag-plain.tl-ch { color: #9aa7b5; }
+.chart-tag.tag-plain.tl-brt { color: #ff9100; }
+.chart-tag.tag-plain.xf-qmx { color: #ffd600; font-weight: 700; }
+.chart-tag.tag-plain.xf-aplus { color: #00e676; font-weight: 700; }
+.chart-tag.tag-plain.xf-std { color: #7aa2ff; }
+.chart-tag.tag-plain.xf-watch { color: #5a6b7a; }
 /* Position-box tags (LONG/SHORT, TP, SL): plain 10px text, right side. */
 .chart-tag.tag-pos {
   background: transparent;
@@ -1284,6 +1412,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 .badge-ifvg { background-color: rgba(179, 136, 255, 0.15); color: #b388ff; }
 .badge-ob { background-color: rgba(41, 98, 255, 0.15); color: #7aa2ff; }
 .badge-breaker { background-color: rgba(255, 23, 68, 0.15); color: #ff5c6c; }
+.badge-xf { background-color: rgba(255, 214, 0, 0.15); color: #ffd600; }
 
 /* Bot Settings drawer */
 .settings-backdrop {

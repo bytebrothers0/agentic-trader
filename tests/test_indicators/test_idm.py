@@ -39,6 +39,23 @@ def test_bullish_idm_swept():
 
 
 def test_bearish_idm_swept():
+    # Bar 4 wicks above 103 but its body closes back inside -> true sweep.
+    # (A body close AT/above the level would be a break, not a sweep.)
+    df = _df([
+        {"open": 103, "high": 105, "low": 100, "close": 101},
+        {"open": 101, "high": 102, "low": 95, "close": 97},
+        {"open": 97, "high": 103, "low": 96, "close": 102},
+        {"open": 102, "high": 101, "low": 94, "close": 96},
+        {"open": 96, "high": 104, "low": 93, "close": 99},
+    ])
+    lv = _highs(df)
+    swept = [x for x in lv if x.swept]
+    assert len(swept) == 1
+    assert swept[0].price == 103 and swept[0].sweep_index == 4
+
+
+def test_body_through_is_not_a_sweep():
+    # Bar 4 wicks above 103 but closes above it too -> break, no sweep flag.
     df = _df([
         {"open": 103, "high": 105, "low": 100, "close": 101},
         {"open": 101, "high": 102, "low": 95, "close": 97},
@@ -47,9 +64,8 @@ def test_bearish_idm_swept():
         {"open": 96, "high": 104, "low": 93, "close": 103},
     ])
     lv = _highs(df)
-    swept = [x for x in lv if x.swept]
-    assert len(swept) == 1
-    assert swept[0].price == 103 and swept[0].sweep_index == 4
+    assert lv and all(not x.swept for x in lv
+                      if x.price == 103 and x.formation_index == 2)
 
 
 def test_no_continuation_no_bullish_idm():
