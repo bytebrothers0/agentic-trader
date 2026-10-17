@@ -122,21 +122,22 @@ APEX_ENABLED = True
 
 # IDM (inducement, SMC) — enabled. BOS-anchored: the internal pullback (minor
 # fractal swing) inside an impulse leg that broke structure. SWING_LENGTH is
-# the minor fractal window; MAX_PER_SIDE caps rays kept per direction (newest,
-# unswept first) — the noise guard that replaces the old every-bar scan.
+# the minor fractal window; MAX_PER_SIDE caps the swept/broken *history* kept
+# per direction (newest first) — live IDMs are always kept, since an untaken
+# inducement is the only one that is still a target.
 IDM_ENABLED = True
 IDM_SWING_LENGTH = 2
 IDM_SHOW_INTERNAL = True
-IDM_MAX_PER_SIDE = 3
+IDM_MAX_PER_SIDE = 8
 IDM_ATR_PERIOD = 14
 # Luap "True SMC" valid-pullback rule (Part 1 + Part 3): a pullback only counts
 # once a candle takes the liquidity of the candle that ended the impulse. Emits
 # a second IDM family (rule="two_candle") alongside the BOS-anchored one.
 IDM_TWO_CANDLE_RULE = True
 # Luap reference-candle ("candle 1") rule: EVERY candle's range counts, gated by
-# the prevailing structure — upside break -> IDM at the range low, downside
-# break -> IDM at the range high (rule="ref_candle"). REF_MAX_BARS bounds the
-# hunt for the continuation.
+# the leg it belongs to — upside break -> IDM at the range low, downside break
+# -> IDM at the range high (rule="ref_candle"). REF_MAX_BARS bounds the hunt for
+# the continuation.
 IDM_REF_CANDLE_RULE = True
 IDM_REF_MAX_BARS = 500
 

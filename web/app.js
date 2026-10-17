@@ -603,10 +603,20 @@ document.addEventListener("DOMContentLoaded", () => {
     // Full Inspector Modes — zone-to-zone rays: each level draws from its
     // formation candle to its life-cycle end (mitigation touch / break), with
     // a shorthand tag at the RIGHT end of the line. Still-active levels extend
-    // a short open-ended span. Readability cap keeps the 40 most recent.
-    const MAX_INSPECTOR_RAYS = 40;
+    // a short open-ended span. Budget is per CATEGORY so a busy layer can never
+    // starve a small one — a single global recency cap is what used to keep
+    // older IDM levels off the chart entirely.
+    const MAX_RAYS_PER_CATEGORY = 80;
     const ordered = [...state.levels].sort((a, b) => (b.time || 0) - (a.time || 0));
-    const visible = ordered.slice(0, MAX_INSPECTOR_RAYS);
+    const perCat = new Map();
+    const visible = [];
+    ordered.forEach((lvl) => {
+      const cat = lvl.category || "other";
+      const used = perCat.get(cat) || 0;
+      if (used >= MAX_RAYS_PER_CATEGORY) return;
+      perCat.set(cat, used + 1);
+      visible.push(lvl);
+    });
     const hidden = ordered.length - visible.length;
 
     // Short tag for the level kind (right-end label).

@@ -11,7 +11,8 @@ False``) so the Luap families don't pollute the assertions; see
 """
 import pandas as pd
 
-from indicators.idm_detector import IDMDetector, IDMType
+from indicators.idm_detector import (IDMDetector, IDMLevel, IDMDirection,
+                                     IDMType, _cap_per_side)
 
 
 def _df(rows):
@@ -131,7 +132,7 @@ def test_lower_low_is_not_an_inducement():
     assert _lows(_df(rows)) == []
 
 
-def test_cap_keeps_newest_per_side():
+def test_cap_keeps_live_and_newest_history_per_side():
     rows = BULL_ROWS + [
         {"open": 107.5, "high": 108.5, "low": 107.0, "close": 108.0},
         {"open": 108.0, "high": 110.0, "low": 107.5, "close": 109.6},
@@ -142,9 +143,35 @@ def test_cap_keeps_newest_per_side():
         {"open": 111.0, "high": 112.0, "low": 110.5, "close": 111.5},
         {"open": 111.5, "high": 112.5, "low": 111.0, "close": 112.0},
     ]
+    # Live IDMs are never dropped: both stay even with max_per_side=1, because
+    # the cap only budgets swept/broken history.
     lv = _lows(_df(rows), max_per_side=1)
-    assert len(lv) == 1
-    assert lv[0].formation_index == 15      # the newer of the two IDMs
+    assert [x.formation_index for x in lv] == [8, 15]
+    assert all(not x.swept and not x.broken for x in lv)
+
+
+def test_cap_per_side_keeps_all_live_and_newest_history():
+    def lvl(idx, live):
+        return IDMLevel(
+            idm_type=IDMType.IDM_LOW,
+            direction=IDMDirection.BULLISH,
+            price=100.0 + idx,
+            formation_index=idx,
+            candle_time=pd.Timestamp("2024-01-01"),
+            swept=not live,
+            sweep_index=None if live else idx + 1,
+        )
+
+    levels = [lvl(3, True), lvl(4, False), lvl(5, True), lvl(6, False),
+              lvl(7, False)]
+    _cap_per_side(levels, max_per_side=1)
+    # both live ones survive, plus only the newest swept history
+    assert [x.formation_index for x in levels] == [3, 5, 7]
+
+    # a hard ceiling still bounds a pathological live set
+    many = [lvl(i, True) for i in range(40)]
+    _cap_per_side(many, max_per_side=1, max_live_per_side=3)
+    assert [x.formation_index for x in many] == [37, 38, 39]
 
 
 def test_short_frame_returns_empty():

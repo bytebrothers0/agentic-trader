@@ -52,6 +52,11 @@ from typing import List, Optional, Sequence
 from indicators.bos_detector import BOSDetector, BOSDirection
 from indicators.swings import Pivot, find_pivots
 
+# Safety ceiling on how many *live* IDMs one side may keep. Live levels are the
+# actionable ones and are normally kept in full; this only guards pathological
+# stretches so the chart cannot be flooded.
+MAX_LIVE_PER_SIDE = 30
+
 
 class IDMType(Enum):
     IDM_LOW = "idm_low"    # bullish-leg inducement (low to be swept)
@@ -116,7 +121,8 @@ class IDMDetector:
     swing_tol_atr : float
         Same-level tolerance for BOS swings (fraction of ATR). Default 0.05.
     max_per_side : int
-        Keep at most this many IDMs per direction (newest, unswept first).
+        Cap on swept/broken history per direction (newest kept). Live IDMs are
+        always kept.
     atr_period : int
         ATR lookback for the BOS tolerance band. Default 14.
     two_candle_rule : bool
@@ -324,19 +330,28 @@ class IDMDetector:
             raise ValueError("DataFrame is empty.")
 
 
-def _cap_per_side(levels: List[IDMLevel], max_per_side: int) -> None:
-    """Keep the newest ``max_per_side`` levels per direction (in place).
+def _cap_per_side(levels: List[IDMLevel], max_per_side: int,
+                  max_live_per_side: int = MAX_LIVE_PER_SIDE) -> None:
+    """Keep every live IDM; cap swept/broken history per direction (in place).
 
-    Live levels (not swept and not broken) are kept first; among equals the
-    newest (highest ``formation_index``) wins.
+    An IDM is actionable only while it is live (not swept, not broken), so live
+    levels are **never** dropped for space — every untaken inducement stays on
+    the chart. Only history (``swept`` / ``broken``) competes for the budget,
+    capped to the newest ``max_per_side`` per direction. ``max_live_per_side``
+    is a safety ceiling for pathological stretches.
     """
     for d in (IDMDirection.BULLISH, IDMDirection.BEARISH):
         group = [lv for lv in levels if lv.direction == d]
-        if len(group) <= max_per_side:
-            continue
-        group.sort(key=lambda lv: (lv.swept or lv.broken, -lv.formation_index))
-        drop = {id(lv) for lv in group[max_per_side:]}
-        levels[:] = [lv for lv in levels if id(lv) not in drop]
+        live = [lv for lv in group if not lv.swept and not lv.broken]
+        resolved = [lv for lv in group if lv.swept or lv.broken]
+        drop = set()
+        if len(live) > max_live_per_side:
+            live.sort(key=lambda lv: -lv.formation_index)
+            drop |= {id(lv) for lv in live[max_live_per_side:]}
+        resolved.sort(key=lambda lv: -lv.formation_index)
+        drop |= {id(lv) for lv in resolved[max_per_side:]}
+        if drop:
+            levels[:] = [lv for lv in levels if id(lv) not in drop]
 
 
 class LuapIDMDetector:
@@ -369,7 +384,8 @@ class LuapIDMDetector:
     df : pd.DataFrame
         OHLCV dataframe with a DatetimeIndex.
     max_per_side : int
-        Keep at most this many levels per direction (newest, live first).
+        Cap on swept/broken history per direction (newest kept). Live IDMs are
+        always kept.
     ignore_inside_bars : bool
         Skip candles fully inside the previous candle. Default True.
     """
@@ -537,7 +553,8 @@ class RefCandleIDMDetector:
     df : pd.DataFrame
         OHLCV dataframe with a DatetimeIndex.
     max_per_side : int
-        Keep at most this many levels per direction (newest, live first).
+        Cap on swept/broken history per direction (newest kept). Live IDMs are
+        always kept.
     max_bars : int
         Give up looking for candle 1's continuation after this many bars.
     bos_swing_length, bos_internal_length, show_internal, swing_tol_atr,

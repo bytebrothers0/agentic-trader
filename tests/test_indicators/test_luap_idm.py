@@ -126,7 +126,7 @@ def test_idm_shifts_on_new_extreme():
     assert lv[0].swept is False
 
 
-def test_cap_keeps_newest_per_side():
+def test_cap_keeps_live_and_newest_history_per_side():
     rows = BULL + [
         _r(114, 115, 109, 110),   # 10
         _r(110, 111, 104, 105),   # 11 pullback 104 -> new HH below
@@ -136,8 +136,10 @@ def test_cap_keeps_newest_per_side():
         _r(103, 120, 102, 119),   # 15 new HH -> IDM 102 @14
     ]
     lv = LuapIDMDetector(_df(rows), max_per_side=1).detect_all()
-    assert len(lv) == 1
-    assert lv[0].formation_index == 14      # newest
+    # the live IDM is never dropped for space; the swept history keeps its newest
+    assert [x.formation_index for x in lv] == [11, 14]
+    assert lv[0].broken is True
+    assert lv[1].swept is False and lv[1].broken is False
 
 
 # Same pullback marked by both families (origin low @2, HH @6, higher low @8).
