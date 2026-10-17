@@ -4,7 +4,7 @@
 
 ## 1. Purpose
 
-An MT5 (MetaTrader 5) trading bot for **XAUUSD** implementing the **MSNR** (Multi-Story Network Recognition) / Alchemist X-Factor strategy. It ships as a **FastAPI web terminal** (TradingView Lightweight Charts frontend) with rule-based indicator detectors, an "Alchemist" top-down entry engine, live order execution via MT5, a backtest journal viewer, and a propose-only AI agent layer (Grok + Tavily).
+An MT5 (MetaTrader 5) trading bot for **XAUUSD** implementing the **MSNR** (Multi-Story Network Recognition) strategy. It ships as a **FastAPI web terminal** (TradingView Lightweight Charts frontend) with rule-based indicator detectors, live order execution via MT5, a backtest journal viewer, and a propose-only AI agent layer (Grok + Tavily).
 
 Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 
@@ -14,7 +14,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 |------|------|
 | `start_live.py` (L1-91) | Main launcher. Self-heals interpreter (`_ensure_interpreter`, L27), `check_deps` (L54), runs `uvicorn server:app` (L87). |
 | `start_live.bat` | Windows double-click wrapper. |
-| `server.py` (L1-986) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
+| `server.py` (L1-853) | FastAPI app `app`. All REST endpoints + static `web/` mount. **Core API surface.** |
 | `main.py` (L1-97) | Standalone CLI: `--test-indicators` renders an annotated chart (legacy demo, L32-87). |
 | `ai_agent/agent_loop.py` (L35 `run_once`) | CLI entry for one AI scan. |
 | `ai_agent/pilot/run_pilot.py` (L278 `main`) | Offline AI strategy pilot (build/analyze/score/revise phases). |
@@ -24,7 +24,7 @@ Language: Python 3.11 (backend), vanilla JS (frontend). Data: live MT5 OHLCV.
 ### 3.1 Config & Data
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `config/settings.py` | 222 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/BOS/FVG/IFVG/OB/TL/TS/XF). `INDICATORS_ENABLED=False` master switch L109. Alchemist params L118-130. |
+| `config/settings.py` | 218 | All constants: MT5 conn, instrument specs (`INSTRUMENT_SPECS` L19), risk (`RISK_PERCENT` L42), timeframe map (`TIMEFRAME_MAP` L53, incl. synthesized M45), and one enable/param block per indicator (SR/QM/OCL/APEX/IDM/BOS/FVG/IFVG/OB/TL/TS). `INDICATORS_ENABLED=False` master switch L109. |
 | `data/mt5_loader.py` | 154 | `MT5DataLoader` (L29). Symbol resolution (`_resolve_symbol` L64), `fetch_timeframe` (L108, unix `time` column for charts), `_resample` (L142, M45 = 3×M15), `fetch_all_timeframes` (L166). Thread-locked MT5 calls. |
 
 ### 3.2 Indicator Detectors (`indicators/`)
@@ -43,15 +43,13 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 | `fvg_detector.py` | 257 | `FVGDetector` (L103) | FVG zones (LuxAlgo port) + IFVG inversion (`detect_ifvg` L189). A zone is mitigated on the **first wick into it** (MSNR fresh rule) — tracked on both (`FVGLevel.fresh` / `IFVGLevel.fresh`); the API shows **unmitigated (fresh) zones only**. |
 | `ob_detector.py` | 320 | `OBDetector` (L68) | Order Blocks + Breaker Blocks (LuxAlgo port + Luap status). |
 | `trendline_detector.py` | 483 | `TLDetector` (L121), `TLLine` (L53) | **Point-to-point trendlines through 2-3 close-price apexes**, any slope, using **multi-scale apex windows** (`pivot_windows`, default `(5, 14)`, merged). Builds resistance from peak apexes / support from valley apexes (`role`), tags **channel pairs** (`channel_id`), **break-retest role flips** (`flipped`/`retest_role`), and **liquidity sweeps** (`swept`). Break = body close through; retest = far-side wick touch. Tolerances `tol_atr`/`channel_parallel_atr`/`sweep_atr`. |
-| `xfactor_detector.py` | 400 | `XDetector` (L201), `detect_storyline` (L393), `detect_engulfing_zones` (L153), `XLevel` (L71) | **Key strategy piece**: trendline × SNR confluences (X-Factor), engulfing zones, HTF storyline chains. |
 
 ### 3.3 Strategy (`strategy/`)
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `alchemist.py` | 372 | `AlchemistEngine` (L83). Full top-down stack: `_compute` (L125) → `_storylines` (L186, MN1→W1/W1→D1/D1→H4) → `_resolve_bias` (L232, storyline then PD+BOS fallback) → `_trigger` (L266, M15 XDetector tradable) → `_refine` (L298, M5 IDM/doji) → `_signal` (L326, 70/30 split, SL floor, TP pool, RR gate, sizing). 20s cache (L46). `signals()` L121. |
-| `registry.py` | 69 | Entry-module registry for settings tab. `MODULES` (L21, only `alchemist_x`), `list_modules`/`set_enabled`/`is_enabled`. Persists `config/modules_state.json`. |
+| `registry.py` | 72 | Generic entry-module registry for the settings tab. `MODULES` is currently empty (no entry modules registered); `list_modules`/`set_enabled`/`is_enabled`. Persists `config/modules_state.json`. |
 
-`strategy/__init__.py` is empty (namespace pkg).
+`strategy/__init__.py` is a namespace pkg.
 
 ### 3.4 Execution (`execution/`)
 | File | Lines | Responsibility |
@@ -86,13 +84,13 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 ### 3.7 Frontend (`web/`)
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `index.html` | 470 | TradingView terminal shell. |
-| `app.js` | 1734 | Frontend engine: chart, levels, strategy deck, order UI. Mirrors settings switches (L10-22). |
-| `style.css` | 1325 | Styling. |
+| `index.html` | 439 | TradingView terminal shell. |
+| `app.js` | 1308 | Frontend engine: chart, indicator levels overlay, levels table, live positions. Mirrors settings switches (L8-19). |
+| `style.css` | 1247 | Styling. |
 | `backtest.html` / `backtest.js` | 99 / 820 | Backtest journal viewer (reads `/api/backtest/*`). |
 
 ### 3.8 Tests (`tests/`)
-`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_xfactor.py`, `test_indicators_all.py`. `test_strategy/test_alchemist.py`. Run with pytest.
+`test_indicators/`: `test_bos.py`, `test_fvg.py`, `test_idm.py`, `test_ob.py`, `test_trendline.py`, `test_ts.py`, `test_indicators_all.py`. Run with pytest.
 
 ### 3.9 Docs & Reference (non-code)
 - `strategy_notes/` — strategy playbooks (phoenix_mnsr, ems mnsr, apa, abax mnsr, advance mnsr1) as markdown + subtitle transcripts.
@@ -106,11 +104,9 @@ Each exposes a `detect_all()` returning typed dataclass levels. All consume a pa
 Candles/indicators (L79-579):
 - `GET /api/symbols` — broker symbols, priority-sorted.
 - `GET /api/candles` — OHLCV for TradingView.
-- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl/xf).
+- `GET /api/indicators` — computes ALL detectors, returns unified `levels[]` payload. Params gate each category (sr/ocl/qm/apex/ts/idm/bos/fvg/ifvg/ob/tl).
 
-Strategy (L582-654): `GET /api/strategy` (Alchemist payload), `GET /api/signals` (Alchemist entries).
-
-Settings (L656-673): `GET /api/settings/modules`, `POST /api/settings/modules/{id}?enabled=`.
+Settings: `GET /api/settings/modules`, `POST /api/settings/modules/{id}?enabled=`.
 
 Account/trading (L676-824): `GET /api/account`, `GET /api/positions`, `POST /api/orders/place|close|cancel|partial-close|breakeven|manage-obstacles`.
 
@@ -127,8 +123,6 @@ MT5 terminal
   → Detectors detect_all()                      [indicators/*]
   → server /api/indicators aggregates levels[]
   → web/app.js renders → TradingView chart
-AlchemistEngine.analyze()                        [strategy/alchemist.py]
-  → /api/strategy + /api/signals → app.js strategy deck
   → POST /api/orders/place → OrderManager → MT5
 AI layer (propose-only):
   ai_agent/agent_loop.run_once → snapshot + news + LLM → decision_layer.validate → proposal JSON

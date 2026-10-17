@@ -32,7 +32,6 @@ from config.settings import (
     TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
     TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
-    XF_ENABLED, XF_XTOL_ATR, XF_SWEEP_WINDOW, XF_MAX_USES,
 )
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
@@ -150,7 +149,6 @@ def get_indicators(
     show_ifvg: bool = Query(True),
     show_ob: bool = Query(True),
     show_tl: bool = Query(True),
-    show_xf: bool = Query(True),
 ):
     """
     Compute MSNR indicators on live MT5 data and return structured levels.
@@ -167,8 +165,7 @@ def get_indicators(
     ifvg_on = IFVG_ENABLED and show_ifvg
     ob_on = OB_ENABLED and show_ob
     tl_on = TL_ENABLED and show_tl
-    xf_on = XF_ENABLED and show_xf
-    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on and not xf_on:
+    if not (TS_ENABLED and show_ts) and not sr_on and not qm_on and not legacy_on and not idm_on and not bos_on and not fvg_on and not ifvg_on and not ob_on and not tl_on:
         try:
             loader = get_loader(symbol)
             sym = loader.resolved_symbol
@@ -192,12 +189,6 @@ def get_indicators(
 
         levels_data = []
 
-        # Cross-block detector outputs shared with the X-Factor block (#12).
-        sr_x_levels: list = []
-        tl_x_lines: list = []
-        ts_x_levels: list = []
-        qm_x_levels: list = []
-
         def _end_time(candle_idx: Optional[int]):
             """Map a detector iloc end-index to unix time (None = still active)."""
             if candle_idx is None:
@@ -211,7 +202,6 @@ def get_indicators(
             base_levels = analyzer.detect_all()
             tracker = FreshnessTracker(df)
             base_levels = tracker.update(base_levels)
-            sr_x_levels = list(base_levels)
 
             for lvl in base_levels:
                 # Apply freshness filter
@@ -268,7 +258,6 @@ def get_indicators(
             base_levels = analyzer.detect_all()
             qm_det = QMDetector(df, base_levels)
             qms = qm_det.detect_all()
-            qm_x_levels = list(qms)
             for qm in qms:
                 # Ray starts at formation (origin candle = left shoulder),
                 # not at the later break candle.
@@ -311,8 +300,8 @@ def get_indicators(
                 min_wick_body_frac=TS_MIN_WICK_BODY_FRAC,
                 min_wick_range_frac=TS_MIN_WICK_RANGE_FRAC,
             )
-            ts_x_levels = list(ts_det.detect_all())
-            for ts in ts_x_levels:
+            ts_levels = list(ts_det.detect_all())
+            for ts in ts_levels:
                 t_idx = min(ts.candle_index, len(times_unix) - 1)
                 s_idx = min(ts.sweep_candle_index, len(times_unix) - 1)
                 levels_data.append({
@@ -468,9 +457,9 @@ def get_indicators(
                                 tol_atr=TL_TOL_ATR,
                                 channel_parallel_atr=TL_CHANNEL_PARALLEL_ATR,
                                 sweep_atr=TL_SWEEP_ATR)
-            tl_x_lines = list(tl_det.detect_all())
+            tl_lines = list(tl_det.detect_all())
             last_idx = len(times_unix) - 1
-            for tl in tl_x_lines:
+            for tl in tl_lines:
                 s_idx = min(tl.pivot_index, last_idx)
                 e_idx = min(tl.end_index, last_idx)
                 role = tl.role.upper()
@@ -517,50 +506,6 @@ def get_indicators(
                         int(times_unix[min(b, last_idx)]) for b in tl.sweep_bars]
                 levels_data.append(payload)
 
-
-        # 12. X-Factor (trendline x SNR confluence, web Alchemist math).
-        # Additive payloads only: the chart ignores unknown categories
-        # until the frontend X rendering lands.
-        if xf_on:
-            try:
-                from indicators.xfactor_detector import XDetector as _XD
-                ts_for_x = ts_x_levels
-                if not ts_for_x:
-                    ts_for_x = TSDetector(df).detect_all()
-                x_levels = _XD(
-                    df, sr_x_levels, tl_x_lines, ts_levels=ts_for_x,
-                    qm_levels=qm_x_levels, xtol_atr=XF_XTOL_ATR,
-                    sweep_window=XF_SWEEP_WINDOW,
-                    max_uses=XF_MAX_USES).detect_all()
-                last_idx = len(times_unix) - 1
-                for x in x_levels:
-                    x_idx = min(x.x_index, last_idx)
-                    p2_idx = min(x.point2_index, last_idx)
-                    payload = {
-                        "category": "xfactor",
-                        "type": f"X {x.tier.upper()} ({x.direction.value.upper()})",
-                        "price": round(x.x_price, 3),
-                        "state": ("FRESH" if x.tradable else "WATCH"),
-                        "time": int(times_unix[x_idx]),
-                        "start_time": int(times_unix[p2_idx]),
-                        "end_time": None,
-                        "end_kind": "active",
-                        "score": int(x.score),
-                        "tier": x.tier,
-                        "tradable": bool(x.tradable),
-                        "engulf": bool(x.engulf),
-                        "sweep": bool(x.sweep),
-                        "desc": (f"X {x.tier.upper()} {x.direction.value.upper()} "
-                                 f"@{x.x_price:.2f} (score {x.score}, "
-                                 f"{x.tl_anchor_kind}, {x.tl_alchemist})"),
-                    }
-                    if x.ex_top is not None and x.ex_bottom is not None:
-                        payload["ex_box_top"] = round(x.ex_top, 3)
-                        payload["ex_box_bottom"] = round(x.ex_bottom, 3)
-                    levels_data.append(payload)
-            except Exception:
-                pass
-
         # Sort levels by price descending
         levels_data.sort(key=lambda x: x["price"], reverse=True)
 
@@ -573,80 +518,6 @@ def get_indicators(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/strategy")
-def get_strategy_analysis(symbol: str = Query("XAUUSD")):
-    """Alchemist X-Factor entry module: top-down bias + M15 X signals."""
-    try:
-        from strategy.registry import is_enabled as _mod_on
-        if not _mod_on("alchemist_x"):
-            raise RuntimeError("alchemist_x module off")
-        from strategy.alchemist import AlchemistEngine
-        from config.settings import (
-            ALCHEMIST_EXEC_TF, ALCHEMIST_REF_TF, ALCHEMIST_PD_LOOKBACK,
-            ALCHEMIST_MIN_RR, ALCHEMIST_RISK_PCT, ALCHEMIST_MAX_SIGNALS,
-            ALCHEMIST_SL_BUF_ATR, ALCHEMIST_SL_MIN_ATR,
-            ALCHEMIST_SL_SPREAD_MULT, ALCHEMIST_SPREAD_POINTS,
-            ALCHEMIST_REQUIRE_REFINEMENT, ALCHEMIST_POINT_VALUE,
-        )
-        loader = get_loader(symbol)
-        sym = loader.resolved_symbol
-        engine = AlchemistEngine(
-            loader.fetch_timeframe, symbol=sym,
-            params={"exec_tf": ALCHEMIST_EXEC_TF, "ref_tf": ALCHEMIST_REF_TF,
-                    "pd_lookback": ALCHEMIST_PD_LOOKBACK,
-                    "min_rr": ALCHEMIST_MIN_RR, "risk_pct": ALCHEMIST_RISK_PCT,
-                    "max_signals": ALCHEMIST_MAX_SIGNALS,
-                    "sl_buf_atr": ALCHEMIST_SL_BUF_ATR,
-                    "sl_min_atr": ALCHEMIST_SL_MIN_ATR,
-                    "sl_spread_mult": ALCHEMIST_SL_SPREAD_MULT,
-                    "spread_points": ALCHEMIST_SPREAD_POINTS,
-                    "require_refinement": ALCHEMIST_REQUIRE_REFINEMENT,
-                    "point_value": ALCHEMIST_POINT_VALUE})
-        payload = engine.analyze()
-        payload["symbol"] = sym
-        return payload
-    except Exception as e:
-        try:
-            sym = get_loader(symbol).resolved_symbol
-        except Exception:
-            sym = symbol
-        return {
-            "symbol": sym,
-            "storylines": {},
-            "entries": [],
-            "primary_entry": None,
-            "total_entries": 0,
-            "ftfl": None,
-            "stfl": None,
-            "ttfl": None,
-            "obstacles": [],
-            "disabled": True,
-            "message": f"Alchemist engine idle ({e}).",
-        }
-
-
-@app.get("/api/signals")
-def get_trade_signals(symbol: str = Query("XAUUSD")):
-    """Signals from the Alchemist engine (shares its 20s cache)."""
-    try:
-        from strategy.registry import is_enabled as _mod_on
-        if not _mod_on("alchemist_x"):
-            raise RuntimeError("alchemist_x module off")
-        from strategy.alchemist import AlchemistEngine
-        loader = get_loader(symbol)
-        sym = loader.resolved_symbol
-        engine = AlchemistEngine(loader.fetch_timeframe, symbol=sym)
-        return {"symbol": sym, "signals": engine.signals(),
-                "disabled": False}
-    except Exception as e:
-        try:
-            sym = get_loader(symbol).resolved_symbol
-        except Exception:
-            sym = symbol
-        return {"symbol": sym, "signals": [], "disabled": True,
-                "message": f"Alchemist engine idle ({e})."}
 
 
 @app.get("/api/settings/modules")

@@ -108,27 +108,6 @@ CANDLE_FETCH_COUNT = {
 # =============================================================================
 INDICATORS_ENABLED = False
 
-# =============================================================================
-# ALCHEMIST X-FACTOR ENTRY MODULE (web strategy, codified in strategy/).
-# Bias: D1 dealing range + MN1/W1/D1/H4 storyline chains. Trigger: M15
-# trendline x SNR cross with mandatory engulfing. Refinement: M5 IDM/doji.
-# Signal math: 70/30 split at between-closes mid/edge, SL beyond extreme
-# floored at max(0.5 ATR, 3x spread), TP at opposite 30-bar pool, RR floor.
-# =============================================================================
-ALCHEMIST_ENABLED = True
-ALCHEMIST_EXEC_TF = "M15"
-ALCHEMIST_REF_TF = "M5"
-ALCHEMIST_PD_LOOKBACK = 60
-ALCHEMIST_MIN_RR = 1.5
-ALCHEMIST_RISK_PCT = 1.0
-ALCHEMIST_MAX_SIGNALS = 3
-ALCHEMIST_SL_BUF_ATR = 0.3
-ALCHEMIST_SL_MIN_ATR = 0.5
-ALCHEMIST_SL_SPREAD_MULT = 3.0
-ALCHEMIST_SPREAD_POINTS = 35.0
-ALCHEMIST_REQUIRE_REFINEMENT = True
-ALCHEMIST_POINT_VALUE = 0.01
-
 # New custom logic lives behind its own flags so it works while the
 # old MSNR stack stays off.
 TS_ENABLED = True
@@ -204,7 +183,7 @@ TL_CHANNEL_PARALLEL_ATR = 0.2
 # Wick penetration past the line (ATR fraction) that counts as a liquidity
 # sweep (stop-hunt) rather than an ordinary touch.
 TL_SWEEP_ATR = 0.5
-# Alchemist MNSR tuning: body pivots anchor at CLOSE fractals (line-chart
+# Body pivots anchor at CLOSE fractals (line-chart
 # A/V apexes on the candle bodies — engulfing/engulfed swing points),
 # wick pivots at high/low fractals. A bar that is both yields two anchors.
 # REQUIRE_ENGULFING=False keeps any swing point (engulfing only grades
@@ -216,12 +195,6 @@ TL_REQUIRE_ENGULFING = False
 # Gap = |open - prev close| beyond TL_GAP_ATR_MULT x local ATR.
 TL_SKIP_GAP_ANCHORS = True
 TL_GAP_ATR_MULT = 0.1
-# X-Factor (trendline x SNR confluence): crossing tolerance 0.1 ATR,
-# TS sweep bonus window 3 bars, SNR legs retire after 2 touches.
-XF_ENABLED = True
-XF_XTOL_ATR = 0.1
-XF_SWEEP_WINDOW = 3
-XF_MAX_USES = 2
 
 # TS indicator display: the swept extreme must be a VISIBLE wick on
 # candle1, not a body edge (a candle closing at its high has no upper

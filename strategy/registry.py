@@ -18,20 +18,7 @@ _STATE_PATH = os.path.join(
     "config", "modules_state.json",
 )
 
-MODULES: List[Dict] = [
-    {
-        "id": "alchemist_x",
-        "name": "Alchemist X-Factor (MSNR)",
-        "description": (
-            "Web Alchemist top-down stack: HTF storyline bias (D1/H4, W1/D1, "
-            "MN1/W1) + M15 trendline x SNR cross (point 3) with mandatory "
-            "engulfing validation, TS sweep bonus, M5 refinement, 2-use "
-            "level cap, RR >= 1.5."
-        ),
-        "engine": "strategy.alchemist:AlchemistEngine",
-        "enabled": True,
-    },
-]
+MODULES: List[Dict] = []
 
 
 def _load_state() -> Dict[str, bool]:

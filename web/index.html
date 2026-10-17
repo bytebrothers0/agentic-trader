@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
-  <title>MSNR Trading Terminal — Malaysian SnR Multi-Storyline Engine</title>
+  <title>MSNR Trading Terminal</title>
   
   <!-- Google Fonts: Inter & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -30,7 +30,7 @@
       </div>
       <div class="brand-text">
         <span class="brand-title">MSNR TERMINAL</span>
-        <span class="brand-subtitle">Top-Down Multi-Storyline Engine</span>
+        <span class="brand-subtitle">Top-Down Indicator Terminal</span>
       </div>
     </div>
 
@@ -99,7 +99,7 @@
       <button class="action-btn" id="btnResetZoom" title="Reset View Zoom">
         <i data-lucide="maximize-2"></i>
       </button>
-      <button class="action-btn" id="btnSettings" title="Bot Settings (entry modules)">
+      <button class="action-btn" id="btnSettings" title="Bot Settings">
         <i data-lucide="settings"></i>
       </button>
       <a class="action-btn" href="/backtest" title="Backtest review (journal replay)" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
@@ -122,45 +122,10 @@
         <span class="badge" id="storylineCountBadge">TS · S/R · QM · IDM · BOS · FVG · OB</span>
       </div>
 
-      <!-- Active Storylines Live Card -->
-      <div class="storyline-card" id="storylineCard">
-        <div class="storyline-card-header">
-          <span><i data-lucide="layers"></i> MULTI-TF BIAS</span>
-          <span class="bias-badge bias-bearish" id="mainBiasBadge">BEARISH</span>
-        </div>
-        <div class="tf-bias-grid">
-          <div class="tf-bias-item">
-            <span class="tf-label">MN:</span>
-            <span class="tf-val bullish" id="biasMN">BULLISH</span>
-          </div>
-          <div class="tf-bias-item">
-            <span class="tf-label">W1:</span>
-            <span class="tf-val bullish" id="biasW1">BULLISH</span>
-          </div>
-          <div class="tf-bias-item">
-            <span class="tf-label">D1:</span>
-            <span class="tf-val bearish" id="biasD1">BEARISH</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Multi-Storyline Entry Zones List (Per Video 10 Top-Down Guide) -->
-      <div class="entry-zones-section">
-        <div class="section-header-bar">
-          <span class="section-label"><i data-lucide="target"></i> ALL STORYLINE ENTRY ZONES</span>
-          <span class="badge" id="entryCountBadge">0 Zones</span>
-        </div>
-        <p class="section-hint">Market triggers closest zone first. Click row to focus & execute.</p>
-        <div class="entry-zones-list" id="entryZonesList">
-          <div class="empty-state">Computing all storyline entries...</div>
-        </div>
-      </div>
-
       <!-- Quick Mode Switcher -->
       <div class="inspect-mode-section">
         <label class="section-label">INSPECTION VIEW</label>
         <div class="mode-pills">
-          <button class="mode-pill active" data-mode="strategy"><i data-lucide="target"></i> Active Storylines (off)</button>
           <button class="mode-pill" data-mode="all">All Levels</button>
           <button class="mode-pill" data-mode="ts">Only TS</button>
           <button class="mode-pill" data-mode="idm">Only IDM</button>
@@ -173,10 +138,6 @@
           <button class="mode-pill" data-mode="qm">Only QM</button>
           <button class="mode-pill" data-mode="apex">Only Apex</button>
         </div>
-        <label class="zone-toggle" title="Strategy view shows only the selected (primary) entry zone">
-          <input type="checkbox" id="toggleAllZones">
-          <span>Show all entry zones on chart (default: primary only)</span>
-        </label>
         <div class="tag-legend" title="Shorthand tags used on chart lines">
           S/R support/resistance · SBR/RBS role-flip · OCL sOCL/rOCL/1LAP/LS · QM · APX/IAB apex ·
           MIT touched · BRK broken · BOS breakout · 80% partial · BE breakeven
@@ -287,19 +248,6 @@
           <p class="card-desc">Pivot-anchored support (red) / resistance (teal) with ATR slope, dashed rays. B = close-through break, RT = retest, CH = channel mid.</p>
         </div>
 
-        <!-- 0h. X-Factor Card — NEW -->
-        <div class="indicator-card active" id="cardXF">
-          <div class="card-header">
-            <label class="custom-checkbox">
-              <input type="checkbox" id="toggleXF">
-              <span class="checkmark sr-check"></span>
-              <span class="card-title">X-Factor (TL × SNR)</span>
-            </label>
-            <span class="color-indicator sr-color"></span>
-          </div>
-          <p class="card-desc">Trendline crossing a horizontal SNR at point 3. QMX (gold) / A+ (green) / X (blue) need engulfing validation; gray watch = no validation. Dotted box = between-closes limit zone.</p>
-        </div>
-
         <!-- 1. Support & Resistance Card -->
         <div class="indicator-card active" id="cardSR">
           <div class="card-header">
@@ -394,7 +342,7 @@
             <span class="value" id="overlayTF">D1</span>
           </div>
           <div class="overlay-item">
-            <span class="label">ACTIVE ENTRY ZONES:</span>
+            <span class="label">LEVELS DRAWN:</span>
             <span class="value highlight" id="overlayActiveCount">0</span>
           </div>
         </div>
@@ -405,19 +353,7 @@
         <div class="deck-header">
           <div class="deck-title">
             <i data-lucide="zap"></i>
-            <span>LIVE EXECUTION DECK (PHASE 5)</span>
-          </div>
-          <div class="deck-controls">
-            <div class="auto-trade-toggle">
-              <span class="toggle-label">AUTO-TRADE:</span>
-              <label class="switch">
-                <input type="checkbox" id="autoTradeToggle">
-                <span class="slider round"></span>
-              </label>
-            </div>
-            <button class="order-btn" id="btnPlaceOrder">
-              <i data-lucide="send"></i> Place Limit Order (1% Risk)
-            </button>
+            <span>LIVE POSITIONS</span>
           </div>
         </div>
 
@@ -450,7 +386,7 @@
     <!-- Right Drawer: Live Levels / Strategy Target Table -->
     <aside class="inspector-drawer" id="levelDrawer">
       <div class="drawer-header">
-        <h3><i data-lucide="list-tree"></i> Strategy Targets & Obstacles</h3>
+        <h3><i data-lucide="list-tree"></i> Levels & Obstacles</h3>
         <span class="drawer-hint">Click row to focus</span>
       </div>
       
@@ -484,7 +420,7 @@
         <i data-lucide="x"></i>
       </button>
     </div>
-    <p class="section-hint">Entry modules feed the execution deck. Indicator layers stay on the dashboard sidebar.</p>
+    <p class="section-hint">Indicator layers stay on the dashboard sidebar.</p>
     <div class="section-header-bar">
       <span class="section-label"><i data-lucide="puzzle"></i> ENTRY MODULES</span>
       <span class="badge" id="modulesCountBadge">0 on</span>
