@@ -33,3 +33,6 @@ Thumbs.db
 
 # Project runtime / local logs (data/ still committed per user request for full push)
 *.log
+
+# Scratch / embedded repos (kept out to avoid broken submodule gitlinks)
+/temp/

@@ -5,8 +5,9 @@ fvg_detector.py — Fair Value Gap + Inverse Fair Value Gap (web Alchemist math)
     displacement clause — a gap with the middle close inside it still counts).
     Zone = [high[i-2] .. low[i]] (bottom .. top).
   Bearish FVG: mirror (high[i] < low[i-2], zone = [high[i] .. low[i-2]]).
-  Mitigation: bull FVG dies on first close below its bottom;
-    bear on first close above its top. Entries use unmitigated only.
+  Mitigation (MSNR fresh rule): a zone dies on the FIRST WICK into it —
+    any wick-touch counts, even without a close-through. Entries use
+    unmitigated (fresh) zones only.
 
 IFVG (user rule): a RECENT FVG broken by a FULL BODY close to the opposite
   side, confirmed by a newer opposite FVG genuinely overlapping it. Genuine
@@ -15,9 +16,8 @@ IFVG (user rule): a RECENT FVG broken by a FULL BODY close to the opposite
   wick-only returns never invert. The drawn zone is the OVERLAP region —
   which equals the full first zone when the second engulfs it.
 
-Display rule: only UNMITIGATED (fresh) zones are shown. An FVG is mitigated
-  on the first close through its far edge; an IFVG (inverted role) is
-  mitigated on the first close back through its far edge (`fresh` property).
+Display rule: only UNMITIGATED (fresh) zones are shown. A zone is mitigated
+  on the first wick into it — FVG and IFVG alike (`fresh` property).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class FVGLevel:
 
     @property
     def fresh(self) -> bool:
-        """Unmitigated: no close has traded back through the zone's far edge."""
+        """Unmitigated: no wick has yet traded into the zone."""
         return not self.mitigated
 
     @property
@@ -85,7 +85,7 @@ class IFVGLevel:
 
     @property
     def fresh(self) -> bool:
-        """Unmitigated: no close has traded back through the far edge."""
+        """Unmitigated: no wick has yet traded into the inversion zone."""
         return not self.mitigated
 
     @property
@@ -174,14 +174,11 @@ class FVGDetector:
                             forming_candle_indices=[i - 2, i - 1, i],
                         ))
 
-        # Mitigation: first close back through the zone edge.
+        # Mitigation: the first WICK into the zone. Any wick-touch counts
+        # (MSNR fresh rule) — a close-through is not required.
         for fv in self._fvgs:
             for m in range(fv.formation_index + 1, n):
-                if fv.direction == FVGDirection.BULLISH and c[m] < fv.bottom:
-                    fv.mitigated = True
-                    fv.mitigation_index = m
-                    break
-                if fv.direction == FVGDirection.BEARISH and c[m] > fv.top:
+                if h[m] >= fv.bottom and l[m] <= fv.top:
                     fv.mitigated = True
                     fv.mitigation_index = m
                     break
@@ -233,15 +230,14 @@ class FVGDetector:
                                             newer.formation_index],
                 ))
 
-        # Mitigation: first close back through the inversion's far edge.
+        # Mitigation: the first WICK into the inversion zone. Any wick-touch
+        # counts (MSNR fresh rule).
         n = len(self.df)
+        h = self.df["high"].values
+        l = self.df["low"].values
         for iv in self._ifvgs:
             for m in range(iv.formation_index + 1, n):
-                if iv.direction == FVGDirection.BEARISH and c[m] > iv.top:
-                    iv.mitigated = True
-                    iv.mitigation_index = m
-                    break
-                if iv.direction == FVGDirection.BULLISH and c[m] < iv.bottom:
+                if h[m] >= iv.bottom and l[m] <= iv.top:
                     iv.mitigated = True
                     iv.mitigation_index = m
                     break

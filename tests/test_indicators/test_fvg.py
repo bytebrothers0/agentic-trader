@@ -47,15 +47,30 @@ def test_no_gap_no_fvg():
     assert FVGDetector(df).detect_all() == []
 
 
-def test_mitigation_on_close_through():
+def test_mitigation_on_wick_touch():
+    # Bullish FVG [101..103]: the next candle's wick dips into the zone
+    # (low 101.8) but closes back above it — still mitigated, since only a
+    # wick-touch is required.
     df = _df(GAP_UP + [
-        {"open": 103.5, "high": 103.8, "low": 101, "close": 101.5},
-        {"open": 101.5, "high": 102, "low": 98, "close": 98.5},
+        {"open": 103.5, "high": 103.8, "low": 101.8, "close": 103.4},
+        {"open": 103.4, "high": 108, "low": 103.2, "close": 107.5},
     ])
     fv = FVGDetector(df).detect_all()
     bull = [x for x in fv if x.direction == FVGDirection.BULLISH]
     assert len(bull) == 1 and bull[0].mitigated
-    assert bull[0].mitigation_index == 4
+    assert bull[0].mitigation_index == 3
+    assert not bull[0].fresh
+
+
+def test_fvg_stays_fresh_when_untouched():
+    # Price leaves the zone alone: no wick ever enters [101..103].
+    df = _df(GAP_UP + [
+        {"open": 103.5, "high": 106, "low": 103.4, "close": 105.5},
+        {"open": 105.5, "high": 108, "low": 105, "close": 107.5},
+    ])
+    bull = [x for x in FVGDetector(df).detect_all()
+            if x.formation_index == 2][0]
+    assert bull.fresh and not bull.mitigated
 
 
 def test_ifvg_opposite_overlap_inverts():
@@ -156,13 +171,13 @@ def test_ifvg_unmitigated_is_fresh():
     assert iv[0].fresh and not iv[0].mitigated
 
 
-def test_ifvg_mitigation_on_close_back_through():
-    # Bearish IFVG [102..103] forms at idx 4, then price closes back above
-    # its top -> mitigated (no longer shown).
+def test_ifvg_mitigation_on_wick_touch():
+    # Bearish IFVG [102..103] forms at idx 4, then a later candle wicks up
+    # into it (high 102.5) while closing below -> mitigated (no longer shown).
     df = _df(GAP_UP + [
         {"open": 103.5, "high": 103.8, "low": 101, "close": 101.5},
         {"open": 101.5, "high": 102, "low": 98, "close": 98.5},
-        {"open": 98.5, "high": 103.3, "low": 98.4, "close": 103.2},
+        {"open": 98.5, "high": 102.5, "low": 98.4, "close": 98.6},
     ])
     det = FVGDetector(df)
     iv = det.detect_ifvg(det.detect_all())
