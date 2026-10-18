@@ -1,7 +1,7 @@
 # Agentic Chart Agent — Self-Directed Perception, Pins and Watches
 
 Date: 2026-10-17
-Status: Phases 0–6 built and wired 2026-10-17; Phase 7 (execution) deferred. The pure core, the loop, the renderer, the LLM client, the runtime service and the web panel are all in place.
+Status: Phases 0–6 built and wired 2026-10-17; phase 6c (live-mode wiring against the shared Groq provider, 2026-10-18) is in place and confirmed against the live API up to the account tier's token ceiling; Phase 7 (execution) deferred. The pure core, the loop, the renderer, the LLM client, the runtime service and the web panel are all in place.
 Module: `agentic/` (new) — the pure, LLM-free substrate (`models`, `conditions`, `store`, `crt_strategy`, `subscriptions`, `watchdog`, `lookup`, `tools`, `prompts`, `agent_loop`, `_time`, `llm`), the two impure edges (`feed.py`, the single lazy read-only bridge; `renderer.py`, which loads the vision stack inside its functions), and the repo-root runtime `agent_service.py`. `GET /api/agent/*` wires it into the running system.
 
 ## Problem
@@ -556,6 +556,15 @@ client and the wiring followed in phases 3–6.
 
 **Phase 6b** *(web)* — the Agent Panel drawer (`#agentDrawer`) and top-nav button (`#btnAgent`) in `web/`: it reads `/api/agent/panel` (thesis, open subscriptions with server-side `seconds_remaining`, the dedicated `pins` projection, view, proposals, budget, recent turns, last render), exposes the enable toggle and pause/resume, and runs a chat box through `POST /api/agent/run-now?message=`. It polls only while the drawer is open and escapes model-authored text. Cache busters bumped (`style.css?v=16`, `app.js?v=24`).
 
+**Phase 6c** *(live wiring)* — `AGENT_MODE="live"` now works end to end against the **already-integrated** provider, with no new secret and no new dependency. Four changes:
+
+- **Provider inheritance.** `AGENT_MODEL` / `AGENT_API_BASE` / `AGENT_API_KEY_ENV` in `config/settings.py` default to `""`, meaning *inherit the shared provider*. A new pure `ai_agent.config.resolve_provider() -> (provider, base_url, model, key_env)` mirrors the selection `ai_agent/agent_loop.py` and `ai_agent/ts_validator.py` already inline (those two call sites are left byte-identical). `server.get_agent_service()` resolves it **lazily**, inside the function, only when `AGENT_MODE == "live"` (via the pure `server._resolve_agent_connection()`, which merges one field at a time), and logs one line (provider + model + base, never the key). Mock mode resolves nothing and needs no provider key. Note the scope: `server.py` **does** import `ai_agent.api` — and so `ai_agent.config` — at module scope for the `/api/ai` routes; the lazy call is what keeps `get_agent_service()` independent of the provider, not the import graph.
+- **User-Agent (the Cloudflare 1010 fix).** `agent_service.make_transport` now sends an explicit `User-Agent` (`AGENT_HTTP_USER_AGENT`, default `trading-bot-agent/1.0`; `AgentConfig.http_user_agent`). `urllib.request`'s default `Python-urllib/3.x` is rejected at the edge by Cloudflare with `HTTP 403` / error code 1010 **before authentication** — every live turn failed until this was added. Factored into `_request_headers()` so a network-free unit test can prove the header.
+- **Bounded retry on 429/503.** A multi-round vision turn re-sends the whole conversation each round, so on a low per-minute tier a turn legitimately needs the minute to roll over mid-turn; the transport retries up to `TRANSPORT_MAX_RETRIES` (4) honouring `Retry-After` / `x-ratelimit-reset-tokens` / the body hint, capped at `TRANSPORT_RETRY_CAP_S` (75s). A 429 that names a **daily** quota is *not* retried (`_is_daily_quota`) — no short wait clears it.
+- **Pricing + an opt-in live test.** `qwen/qwen3.8-27b` is added to `agentic.llm.PRICES` (Groq's published `$0.80/$4.00` per 1M); the unknown-model fallback stays the default model's non-zero rate so the leash never silently stops counting. `tests/test_agent_live.py` (marker `live`, registered in a new `pytest.ini`) runs exactly one real `boot` turn through `AgentService` — real MT5 feed, real renderer, real vision client, temp state/render dirs, a non-production symbol alias, hard cost cap — and is **skipped unless `AGENT_LIVE_TEST=1`** and a provider key resolves, so `pytest -q` stays offline.
+
+**Phase 6c — what the one real run proved, and the ceiling it hit.** The UA fix and the wiring are confirmed against the live API: with `AGENT_MODE="live"` the real client reaches Groq (HTTP 200), the real 1536×864 chart is legible to `qwen/qwen3.8-27b` (round 1 replies with a coherent `set_view` to D1 and a real tag manifest: e.g. `tag_count 28`, a live `price_range`), and the round is billed. A full boot turn, however, cannot complete on this account's Groq **on-demand** tier: it caps a *request* at **7000 input tokens** (ITPM), and every round re-sends a fixed prefix measured at ~**3839** tokens (system prompt 1177 + 11-tool schema 1478 + image 783 + briefing ~401), leaving ~3161 for tool results — while a single `render` tool result carries the tag manifest at **2314 tokens** (M15/20 bars/crt+bos) to **5936** (M15/crt+bos+fvg). The round that carries the manifest is refused with `HTTP 413` (and, once the daily cap is also spent, `HTTP 429` on TPD). The live test asserts the whole contract and, when the provider refuses a round on a documented quota, records the fact and **skips** — a half-run vision turn (real image in, a real parsed reply out, billed) is proven before the skip. The full-thesis assertion therefore runs only on a tier that fits; the wiring is proven regardless.
+
 **Invariants now enforced by tests**
 
 - **Purity** — `agentic/*` imports only stdlib + `agentic.*`; `feed.py` is the single lazy bridge; `renderer.py` loads `matplotlib`/`PIL` inside functions. `tests/test_agentic/test_standalone.py` pins this with an AST check (`PURE_MODULES`/`BRIDGE_MODULES`).
@@ -565,8 +574,13 @@ client and the wiring followed in phases 3–6.
 - **Per-thread stop event** — each scanning thread owns its own `threading.Event`; a timed-out `stop()` leaves the service *draining* and no second thread can spawn.
 - **Leash pre-check** — `scan_once` checks the leash before scanning; a refusal consumes nothing.
 - **Mock by default** — `AGENT_MODE="mock"` runs the whole loop against a scripted agent with zero spend.
+- **Provider inheritance is pure and lazy** — `ai_agent.config.resolve_provider()` is a pure function; `server.get_agent_service()` merges it in (via the pure `server._resolve_agent_connection()`) only when `AGENT_MODE=="live"`, so a live agent never needs a secret of its own. The three inheritance fields default to `""`. (`server.py` already imports `ai_agent.api` → `ai_agent.config` at module scope for `/api/ai`; it is the in-function call that keeps `get_agent_service()` independent of the provider, not the import graph.)
+- **Live requests carry an explicit User-Agent** — `_request_headers()` always sends a non-blank UA (blank falls back to `DEFAULT_USER_AGENT`), pinned network-free in `tests/test_agent_service.py`; Cloudflare 1010 otherwise blocks the turn before auth.
+- **429/503 are retried, daily quotas are not** — bounded retry honouring `Retry-After`; a `429` naming a per-day quota raises at once (`_is_daily_quota`).
+- **Unknown models are never free** — `estimate_cost` falls back to the default model's non-zero rate, so the leash always counts.
+- **The live test is opt-in and offline by default** — `tests/test_agent_live.py` is skipped unless `AGENT_LIVE_TEST=1` with a resolved key; on a provider quota refusal it skips rather than red-fails.
 
-Baseline: **414 passed, 1 skipped**; `import server` → **38 routes**.
+Baseline: **441 passed, 2 skipped**; `import server` → **38 routes**. (Both shipped skips are opt-in/environment-gated: the pre-existing one and the phase-6c live test.)
 
 ## Deferred / out of scope
 
@@ -596,22 +610,51 @@ Baseline: **414 passed, 1 skipped**; `import server` → **38 routes**.
 | Notes storage | Agent notes are **not** a store field: they persist in `TurnRecord.output["notes"]` and resurface in the briefing. The store root stays exactly 11 fields. |
 | Pins | A pin is a watch (`level_alive`) on level existence; the panel's `pins` are rendered from the shared subscription projection, so pins ≡ watches. |
 | Wake cadence | The daemon is woken by the watchdog only, and its fires are **coalesced** (`COALESCE_WINDOW_S`) into one turn; `scan_once` never force-flushes. |
+| Live provider | Live mode **inherits** the shared `/api/ai` provider (`LLM_PROVIDER` via `ai_agent.config.resolve_provider()`); `AGENT_MODEL`/`AGENT_API_BASE`/`AGENT_API_KEY_ENV` default to `""` = inherit and can pin one field each. No new secret. |
+| Live transport | stdlib `urllib` only, with an explicit `User-Agent` (`AGENT_HTTP_USER_AGENT`) because Cloudflare 1010 blocks urllib's default before auth; bounded retry on `429`/`503` honouring `Retry-After`, but not on a per-day quota. |
+| Live test | `tests/test_agent_live.py` is opt-in (`AGENT_LIVE_TEST=1` + a resolved key) and skips on a provider quota refusal, so `pytest -q` stays offline; `qwen/qwen3.8-27b` priced at Groq's `$0.80/$4.00`. |
 
-## Open questions
+## Open questions (resolved, phase 6c)
 
-1. **Condition vocabulary** — is the table the right *shape* of things to wait for? What
-   would you sit and wait for that it misses? *(Still open — the build implemented the
-   vocabulary as specified.)*
-2. **Timezone** — label the axis in UTC or broker time? Levels carry bar timestamps, so the
-   render must be unambiguous about which. *(Still open.)*
-3. **Image size and style** — the 1536×864 vision-optimised style has not had a real
-   legibility check against the chosen model, because **no real model call has been made** —
-   the default mode is mock. This is the biggest unvalidated assumption. *(Still open.)*
-4. **Boot turn on reconnect** — should a reconnect without a process restart also schedule
-   a catch-up turn? *(Still open; the runtime currently backfills only on an armed `start()`.)*
+1. **Condition vocabulary** — **Decided: keep the implemented fifteen as-is for v1.**
+   `agentic.conditions.ALL_CONDITIONS` is the authoritative list — level formation and
+   lifecycle (`level_forms`/`level_touched`/`level_swept`/`level_broken`/`level_filled`/
+   `level_alive`), structure (`bos_forms`/`choch_forms`/`idm_swept`), price interaction
+   (`price_crosses`/`price_enters_zone`/`range_expands`) and time (`session_opens`/
+   `session_closes`/`time_reached`) — which is the right *shape* of things to sit and
+   wait for. The one live turn did not surface a missing shape, only that the agent
+   reaches for more timeframes. Revisit only after sustained live turns, and then by
+   **adding** conditions to the table, never reshaping it.
+2. **Timezone** — **Decided: UTC only, and nothing on the image to label.** The renderer
+   draws **no x-axis tick labels** (`ax.set_xticks([])`), and every timestamp the agent
+   can cite (manifest `rendered_at`, bar `event_time`, subscription deadlines, the
+   briefing) is **UTC** — `Z`-suffixed in the render manifest (`renderer._iso_z`),
+   `+00:00` in the briefing, subscriptions and turn records (`prompts._iso` /
+   `models._dump`). There is no broker-vs-UTC ambiguity to resolve, so no axis change is
+   needed.
+3. **Image size and style** — **Decided: keep the 1536×864 vision-optimised default; it
+   is legible.** Phase 6c made the first real model calls and the default-size chart read
+   cleanly (round 1 returned a coherent perception and a sensible `set_view`, with a real
+   tag manifest and a live `price_range`). Measured caveat for later: image cost is a
+   flat ~**783 tokens** and is effectively **size-independent** on this provider (783 at
+   320×180 through 896×504), so shrinking the image buys no token headroom. The remaining
+   legibility work is style, not pixels, and is deferred until live turns accumulate.
+4. **Boot turn on reconnect** — **Decided: no catch-up turn on a bare reconnect.** The
+   watchdog re-evaluates every open subscription from its own `last_evaluated_at`
+   (`scan` passes it into `subscriptions.evaluate` and only advances the window for the
+   subscriptions it actually looked at), so an event that occurs during a feed or session
+   outage still fires a **normal** turn on the next successful scan — a reconnect needs no
+   special case. Process downtime is separately covered by `backfill()` on an armed
+   `start()`, which reports those fires as `retroactive=True` and emits no turn. The
+   runtime therefore never spends on its own outside an armed `start()` or a real fire,
+   which keeps spend deliberate and operator-armed.
+5. **Model choice** *(was "settled during the build", now revised)* — **Decided: live mode
+   inherits the shared provider's model.** `ai_agent.config.resolve_provider()` returns the
+   `LLM_PROVIDER` selection (Groq `qwen/qwen3.8-27b` for the local `.env`), so the
+   agent reuses the already-integrated model instead of pinning `gpt-4o-mini`. The pin
+   remains available via a non-empty `AGENT_MODEL`. Hard requirement: the inherited model
+   must be **vision-capable** (a text-only model such as `openai/gpt-oss-120b` cannot see
+   the chart).
 
-Settled during the build:
-
-- **Model choice** — defaulted to `gpt-4o-mini` (vision-capable, tool-calling-capable,
-  cheap) in the mock-default config; the live transport is injected and untested.
-- **Agent Panel placement** — a drawer in the web UI (`#agentDrawer`), not a separate route.
+Also settled during the build (unchanged): the **Agent Panel placement** is a drawer in
+the web UI (`#agentDrawer`), not a separate route.
