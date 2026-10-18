@@ -278,8 +278,24 @@ CRT_ATR_PERIOD = 14
 # begin, the store gate lets it keep watching.
 #
 # AGENT_MODE = "mock" runs the full loop against a scripted agent and spends
-# nothing; "live" calls AGENT_MODEL over the OpenAI-compatible chat API, reading
-# the key from the environment variable named by AGENT_API_KEY_ENV.
+# nothing; "live" calls a vision model over the OpenAI-compatible chat API.
+#
+# AGENT_MODEL / AGENT_API_BASE / AGENT_API_KEY_ENV default to "" — an **empty
+# string means "inherit the shared provider"**. In live mode the server resolves
+# the same provider the /api/ai routes already use (see ai_agent.config's
+# resolve_provider(): LLM_PROVIDER from .env, i.e. Groq for a Groq key, else xAI)
+# and fills in that provider's base URL, model and key-variable name. So the
+# agent reuses the *already-integrated* key/base/model by default and needs no new
+# secret. A non-empty value pins an explicit OpenAI-compatible endpoint and
+# overrides just that field. (Mock mode never resolves the provider — it must stay
+# zero-dependency — and ignores these three.)
+#
+# AGENT_HTTP_USER_AGENT is sent on every live request. Do not remove it: urllib's
+# default "Python-urllib/3.x" is rejected at the edge by Cloudflare with HTTP 403
+# / error code 1010 *before* authentication, so live mode fails for every turn
+# unless the request carries an explicit User-Agent. The literal below must match
+# agent_service.DEFAULT_USER_AGENT (the dataclass default and the fallback for a
+# blank setting); keep the two in step.
 #
 # AGENT_STATE_DIR / AGENT_RENDER_DIR default (empty string) to agentic/state and
 # agentic/renders inside the package; both are gitignored runtime output. Set
@@ -289,16 +305,17 @@ CRT_ATR_PERIOD = 14
 # thread-join budget.
 AGENT_ENABLED = False          # autostart the watchdog+loop at server start
 AGENT_MODE = "mock"            # "mock" (scripted agent, zero spend) | "live" (vision model)
-AGENT_MODEL = "gpt-4o-mini"
+AGENT_MODEL = ""               # "" = inherit the LLM_PROVIDER model (e.g. qwen/qwen3.8-27b)
 AGENT_SYMBOL = "XAUUSDm"
 AGENT_TIMEFRAME = "M15"
 AGENT_BARS = 300
 AGENT_POLL_S = 15.0            # watchdog poll cadence
-AGENT_API_BASE = "https://api.openai.com/v1"
-AGENT_API_KEY_ENV = "OPENAI_API_KEY"
+AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
+AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name
 AGENT_MAX_TOKENS = 1500
 AGENT_TEMPERATURE = 0.0
 AGENT_HTTP_TIMEOUT_S = 120.0   # per-request timeout for the live transport
+AGENT_HTTP_USER_AGENT = "trading-bot-agent/1.0"  # must match agent_service.DEFAULT_USER_AGENT (Cloudflare 1010 blocks urllib's default)
 AGENT_STATE_DIR = ""           # "" -> agentic/state (gitignored default)
 AGENT_RENDER_DIR = ""          # "" -> agentic/renders (gitignored default)
 

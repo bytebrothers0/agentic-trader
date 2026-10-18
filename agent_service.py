@@ -31,10 +31,13 @@ clear message rather than at import time.
 """
 from __future__ import annotations
 
+import email.utils
 import json
 import logging
 import os
+import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -70,6 +73,20 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+#: The default ``User-Agent`` for the live transport.
+#:
+#: **Do not remove.** ``urllib.request`` sends ``Python-urllib/3.x`` unless told
+#: otherwise, and some providers front their chat API with Cloudflare, which
+#: rejects that signature at the edge with ``HTTP 403`` and Cloudflare
+#: ``error code: 1010`` — *before* authentication is ever evaluated. Any explicit
+#: UA gets past it; this is the one we send. Configurable via
+#: ``AGENT_HTTP_USER_AGENT`` (``AgentConfig.http_user_agent``), but never allowed
+#: to fall back to the urllib default. Defined **before** :class:`AgentConfig` so
+#: the dataclass default and :func:`_request_headers` share this one literal; the
+#: ``AGENT_HTTP_USER_AGENT`` constant in :mod:`config.settings` must match it.
+DEFAULT_USER_AGENT = "trading-bot-agent/1.0"
+
+
 @dataclass
 class AgentConfig:
     """Everything the runtime needs, decoupled from ``config.settings``.
@@ -90,6 +107,11 @@ class AgentConfig:
     temperature: float = 0.0
     poll_s: float = 15.0
     http_timeout_s: float = 120.0
+    #: The ``User-Agent`` every live request carries. Never blank in practice:
+    #: :func:`make_transport` falls back to :data:`DEFAULT_USER_AGENT`, because
+    #: urllib's built-in ``Python-urllib/3.x`` is blocked at the edge by
+    #: Cloudflare (HTTP 403 / error code 1010) before authentication.
+    http_user_agent: str = DEFAULT_USER_AGENT
     state_dir: Optional[str] = None
     out_dir: Optional[str] = None
 
@@ -97,6 +119,126 @@ class AgentConfig:
 # --------------------------------------------------------------------------- #
 # Transports and clients
 # --------------------------------------------------------------------------- #
+
+def _request_headers(api_key: str, user_agent: str) -> Dict[str, str]:
+    """The HTTP headers every live request carries.
+
+    Factored out of :func:`make_transport` so a test can prove the built request
+    carries a non-default ``User-Agent`` **without any network call**. An empty
+    or whitespace ``user_agent`` falls back to :data:`DEFAULT_USER_AGENT`; the
+    urllib default is blocked by Cloudflare 1010, so blank must never win.
+    """
+    ua = str(user_agent or "").strip() or DEFAULT_USER_AGENT
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": ua,
+    }
+
+
+#: HTTP statuses that mean "slow down" and are worth a bounded retry.
+_RETRYABLE_STATUS = frozenset({429, 503})
+
+#: How many times a live request is retried when the provider asks us to slow down.
+#:
+#: A multi-round vision turn re-sends the whole conversation on every round, so on
+#: a low per-minute token tier (Groq's on-demand ``qwen/qwen3.8-27b`` allows 7000
+#: input tokens/minute) a turn legitimately needs the minute to roll over between
+#: rounds. Without a retry the turn fails *mid-way* with HTTP 429 even though the
+#: request itself is small enough — the wave of the previous rounds is what tipped
+#: the window. Bounded so a persistent failure still surfaces.
+TRANSPORT_MAX_RETRIES = 4
+
+#: Hard ceiling on a single retry wait, so a malformed ``Retry-After`` cannot stall a turn.
+TRANSPORT_RETRY_CAP_S = 75.0
+
+#: Regex for a ``429`` body that *reports* a daily quota.
+#:
+#: A per-minute window rolls over in seconds, so retrying is right. A per-day
+#: quota (Groq writes ``... on tokens per day (TPD): Limit ...`` / ``... on
+#: requests per day (RPD): Limit ...``) does not: retrying just stalls the turn
+#: for minutes and then fails anyway. We match the provider's own rate-limit
+#: *category token* — ``(TPD)``/``(RPD)`` **immediately followed by its limit
+#: separator** (the ``:`` Groq puts before ``Limit``).
+#:
+#: Deliberately anchored to that reported form: the bare phrases ``"tokens per
+#: day"``/``"requests per day"`` and a *prose* mention of ``"(TPD)"`` (e.g. an
+#: upsell sentence inside a per-**minute** 429) must **not** be read as a daily
+#: quota. Misreading a retryable per-minute 429 as terminal is the dangerous
+#: direction; the reverse merely retries (and then still fails safely).
+_DAILY_QUOTA_RE = re.compile(r"\((?:tpd|rpd)\)\s*:", re.I)
+
+
+def _is_daily_quota(detail: str) -> bool:
+    """Whether a ``429`` body *reports* a daily quota (so retrying cannot help)."""
+    return bool(_DAILY_QUOTA_RE.search(str(detail or "")))
+
+
+def _parse_seconds(value: Any) -> Optional[float]:
+    """Parse a delay into seconds, or ``None``.
+
+    Handles a bare number (``"35"``), Groq's suffixed form (``"28.148s"``) and an
+    RFC-7231 HTTP-date ``Retry-After`` (``"Wed, 21 Oct 2015 07:28:00 GMT"``), which
+    a Cloudflare-fronted ``503`` returns: the date becomes the seconds until that
+    instant. A missing/unparseable value returns ``None``.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    numeric = text.rstrip("s").strip()
+    try:
+        return float(numeric)
+    except ValueError:
+        pass
+    try:
+        parsed = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (parsed - datetime.now(timezone.utc)).total_seconds()
+
+
+def _header_value(headers: Any, name: str) -> Any:
+    """A case-insensitive header read that works for a dict and a Message alike."""
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(name)
+        if value is not None:
+            return value
+    target = str(name).lower()
+    try:
+        items = headers.items()
+    except AttributeError:
+        return None
+    for key, value in items:
+        if str(key).lower() == target:
+            return value
+    return None
+
+
+def _retry_after_seconds(headers: Any, detail: str = "") -> float:
+    """How long the provider asked us to wait after a 429/503.
+
+    Prefers ``Retry-After`` (seconds or an HTTP-date), then Groq's
+    ``x-ratelimit-reset-tokens`` (e.g. ``"28.148s"``), then the ``... try again in
+    35.7s`` hint in the body; defaults to 5s. Header lookup is case-insensitive.
+    Capped at :data:`TRANSPORT_RETRY_CAP_S`, and floored at a small positive value
+    so a ``Retry-After: 0`` cannot tight-loop the retry.
+    """
+    wait = _parse_seconds(_header_value(headers, "Retry-After"))
+    if wait is None:
+        wait = _parse_seconds(_header_value(headers, "x-ratelimit-reset-tokens"))
+    if wait is None and detail:
+        match = re.search(r"try again in ([\d.]+)\s*s", detail, re.I)
+        if match:
+            wait = float(match.group(1))
+    if wait is None:
+        wait = 5.0
+    return max(0.25, min(float(wait), TRANSPORT_RETRY_CAP_S))
+
 
 def make_transport(config: AgentConfig) -> Transport:
     """A stdlib-only OpenAI-compatible chat transport for ``config.api_base``.
@@ -106,6 +248,11 @@ def make_transport(config: AgentConfig) -> Transport:
     is reported before any bytes go on the wire. Deliberately stdlib-only
     (``urllib.request``): the live path is the one impure edge and it must not pull
     a third-party HTTP client into the import graph. Only call this in live mode.
+
+    A ``429``/``503`` is retried (bounded, honouring ``Retry-After``): see
+    :data:`TRANSPORT_MAX_RETRIES` for why a multi-round vision turn needs the token
+    window to roll over between rounds. A ``429`` that names a **daily** quota
+    (:func:`_is_daily_quota`) is *not* retried — no short wait clears it.
     """
     import urllib.error
     import urllib.request
@@ -114,10 +261,14 @@ def make_transport(config: AgentConfig) -> Transport:
     url = f"{base}/chat/completions"
     key_env = str(config.api_key_env or "OPENAI_API_KEY")
     timeout_s = float(config.http_timeout_s or 120.0)
+    # The UA is normalised in exactly one place (_request_headers): a blank or
+    # whitespace setting falls back to DEFAULT_USER_AGENT there, so a test can
+    # prove it via the built request without any network call.
+    user_agent = str(getattr(config, "http_user_agent", "") or "")
 
     def _key() -> str:
         key = os.environ.get(key_env)
-        if not key:
+        if not key or not key.strip():
             raise RuntimeError(
                 f"agent live mode needs the {key_env} environment variable set "
                 f"(AGENT_API_KEY_ENV); refusing to POST {url} without a key"
@@ -133,24 +284,38 @@ def make_transport(config: AgentConfig) -> Transport:
             url,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
+            headers=_request_headers(api_key, user_agent),
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:  # pragma: no cover — live only
-            detail = ""
+        attempts = 0
+        while True:
             try:
-                detail = exc.read().decode("utf-8", "replace")
-            except Exception:
-                pass
-            raise RuntimeError(f"agent transport HTTP {exc.code}: {detail[:400]}") from exc
-        except urllib.error.URLError as exc:  # pragma: no cover — live only
-            raise RuntimeError(f"agent transport failed: {exc.reason}") from exc
-        return json.loads(raw)
+                with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                    raw = response.read().decode("utf-8")
+                return json.loads(raw)
+            except urllib.error.HTTPError as exc:
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8", "replace")
+                except (OSError, AttributeError, ValueError):
+                    pass
+                if (
+                    exc.code in _RETRYABLE_STATUS
+                    and attempts < TRANSPORT_MAX_RETRIES
+                    and not _is_daily_quota(detail)
+                ):
+                    attempts += 1
+                    wait = _retry_after_seconds(exc.headers, detail)
+                    logger.info(
+                        "agent transport HTTP %s; retry %d/%d in %.1fs",
+                        exc.code, attempts, TRANSPORT_MAX_RETRIES, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise RuntimeError(
+                    f"agent transport HTTP {exc.code}: {detail[:400]}"
+                ) from exc
+            except urllib.error.URLError as exc:  # pragma: no cover — live only
+                raise RuntimeError(f"agent transport failed: {exc.reason}") from exc
 
     return _transport
 
@@ -437,8 +602,17 @@ class AgentService:
                 self._draining = True
 
     def _join_budget(self) -> float:
-        """How long ``stop`` waits for a thread: a full turn plus a poll margin."""
-        per_call = max(1.0, float(self.config.http_timeout_s))
+        """How long ``stop`` waits for a thread: a worst-case turn plus a poll margin.
+
+        One model call can block for ``http_timeout_s`` *and*, on a throttled turn,
+        sleep up to ``TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S`` between
+        retries (the transport retries a 429/503 in-place). The budget must cover
+        that ceiling, or a ``stop()``/``disable()`` during a throttled turn gives up
+        too early and leaves the service *draining*.
+        """
+        per_call = max(1.0, float(self.config.http_timeout_s)) + (
+            TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S
+        )
         return per_call * (MAX_TOOL_ROUNDS + 1) + max(1.0, float(self.config.poll_s))
 
     def pause(self) -> None:

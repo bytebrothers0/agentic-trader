@@ -296,8 +296,22 @@ def test_estimate_cost_known_and_unknown_models():
     in_price, out_price = PRICES[DEFAULT_MODEL]
     assert estimate_cost(DEFAULT_MODEL, 1_000, 0) == approx(in_price / 1000.0)
 
-    # An unknown model falls back to the default model's price (documented).
+    # An unknown model falls back to the default model's price (documented) — a
+    # non-zero stand-in, so the spend leash keeps counting instead of silently
+    # freezing at zero.
     assert estimate_cost("mystery-model", 1_000_000, 1_000_000) == approx(0.75)
+    assert estimate_cost("mystery-model", 1_000_000, 0) > 0
+
+
+def test_estimate_cost_prices_the_inherited_vision_model():
+    """The live mode's inherited model (Groq qwen) must be priced, not fall back."""
+    model = "qwen/qwen3.8-27b"
+    assert model in PRICES
+    in_price, out_price = PRICES[model]
+    assert in_price > 0 and out_price > 0
+    assert estimate_cost(model, 1_000_000, 1_000_000) == approx(in_price + out_price)
+    # Priced above the fallback, so inheriting it cannot under-count spend.
+    assert estimate_cost(model, 1_000_000, 1_000_000) > estimate_cost(DEFAULT_MODEL, 1_000_000, 1_000_000)
 
 
 # --------------------------------------------------------------------------- #

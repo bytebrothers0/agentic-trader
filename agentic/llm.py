@@ -54,16 +54,28 @@ DEFAULT_MODEL = "gpt-4o-mini"
 #: ``model -> (usd per 1M input tokens, usd per 1M output tokens)``.
 #:
 #: Configurable estimates; kept in one place so a price change is a one-line edit.
-#: They exist for leash accounting, not invoicing.
+#: They exist for leash accounting, not invoicing — verify against the provider
+#: before trusting a spend cap to be exact.
+#:
+#: ``qwen/qwen3.8-27b`` is the model the agentic layer inherits from the shared
+#: ``/api/ai`` provider (Groq) by default; its published Groq price is $0.80/$4.00
+#: per 1M tokens.
 PRICES: Dict[str, Tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
+    "qwen/qwen3.8-27b": (0.80, 4.00),
 }
 
-#: What an unknown model is billed at: the default model's price, a conservative
-#: stand-in that keeps the leash counting rather than silently free.
+#: What an unknown model is billed at: the default model's price.
+#:
+#: An unknown model is **never** priced at zero — that would silently disable the
+#: spend leash, which is the one thing it must not do. It is instead billed at
+#: :data:`DEFAULT_MODEL`'s (non-zero) rate, so the leash always keeps counting.
+#: The caveat is direction: the default's price is a cheap stand-in, so a *pricier*
+#: unknown model under-counts. The remedy is to add the model to :data:`PRICES`
+#: (one line), which is why the table exists.
 _FALLBACK_PRICE: Tuple[float, float] = PRICES[DEFAULT_MODEL]
 
 #: Cap on a single completion. A vision turn's output is a handful of tool calls

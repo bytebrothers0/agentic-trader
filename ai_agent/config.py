@@ -29,6 +29,29 @@ MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "55"))
 MAX_RISK_PERCENT = float(os.getenv("AI_MAX_RISK_PERCENT", "1.0"))
 SYMBOL_DEFAULT = os.getenv("AI_SYMBOL", "XAUUSD")
 
+
+def resolve_provider() -> tuple[str, str, str, str]:
+    """The shared LLM endpoint the ``/api/ai`` layer already uses.
+
+    Returns ``(provider, base_url, model, key_env)``. This is a **pure addition**:
+    it mirrors the provider selection that ``agent_loop._llm_creds`` and
+    ``ts_validator._creds`` inline, but those two call sites are deliberately left
+    untouched so the legacy path stays byte-identical. New consumers (the agentic
+    layer's live mode, via ``server.get_agent_service``) call this instead of
+    copying the rule a third time.
+
+    Selection: Groq wins when ``LLM_PROVIDER == "groq"`` or when a Groq key is
+    present and no xAI key is; xAI wins when ``LLM_PROVIDER == "xai"`` or an xAI
+    key is set; otherwise Groq is the default. ``key_env`` is the *name* of the
+    environment variable holding the key — never the key itself.
+    """
+    if LLM_PROVIDER == "groq" or (GROQ_API_KEY and not XAI_API_KEY):
+        return "groq", GROQ_BASE_URL, GROQ_MODEL, "GROQ_API_KEY"
+    if LLM_PROVIDER == "xai" or XAI_API_KEY:
+        return "xai", XAI_BASE_URL, GROK_MODEL, "XAI_API_KEY"
+    return "groq", GROQ_BASE_URL, GROQ_MODEL, "GROQ_API_KEY"
+
+
 STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 REGISTRY_PATH = os.path.join(STATE_DIR, "indicator_registry.json")
 PROPOSAL_PATH = os.path.join(STATE_DIR, "ai_proposal.json")

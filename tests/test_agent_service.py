@@ -7,10 +7,13 @@ MT5 or ``config.settings`` — so this file is a real check of that contract too
 """
 from __future__ import annotations
 
+import email.utils
+import io
 import os
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -27,12 +30,14 @@ from _fixtures import (  # noqa: E402
 )
 
 from agent_service import (  # noqa: E402
+    TRANSPORT_MAX_RETRIES,
+    TRANSPORT_RETRY_CAP_S,
     AgentConfig,
     AgentService,
     build_client,
     make_transport,
 )
-from agentic.agent_loop import AgentLoop  # noqa: E402
+from agentic.agent_loop import MAX_TOOL_ROUNDS, AgentLoop  # noqa: E402
 from agentic.models import SubscriptionKind, SubscriptionState, Trigger  # noqa: E402
 from agentic.store import ContextStore  # noqa: E402
 
@@ -555,3 +560,339 @@ def test_make_transport_requires_the_key(monkeypatch):
         make_transport(AgentConfig(api_key_env="AGENT_TEST_KEY"))
     assert "AGENT_TEST_KEY" in str(excinfo.value)
     assert "key" in str(excinfo.value).lower()
+
+
+# --------------------------------------------------------------------------- #
+# Live transport: an explicit User-Agent, or Cloudflare blocks the request
+# --------------------------------------------------------------------------- #
+
+class _FakeResponse:
+    """A minimal ``urlopen`` context manager returning a canned JSON body."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):  # pragma: no cover — trivial
+        return False
+
+    def read(self):
+        return b'{"ok": true}'
+
+
+def _install_urlopen(monkeypatch, captured):
+    """Replace ``urllib.request.urlopen`` with a request recorder (no network)."""
+    import urllib.request
+
+    def fake_urlopen(request, timeout=None):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+
+def _headers_of(captured):
+    return {key.lower(): value for key, value in captured["request"].headers.items()}
+
+
+def test_make_transport_sends_an_explicit_user_agent(monkeypatch):
+    """The request must carry a real UA — urllib's default is Cloudflare-1010 blocked."""
+    captured = {}
+    _install_urlopen(monkeypatch, captured)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+
+    headers = _headers_of(captured)
+    user_agent = headers.get("user-agent", "")
+    assert user_agent, "the live request carried no User-Agent at all"
+    assert "urllib" not in user_agent.lower(), f"urllib's default UA leaked: {user_agent!r}"
+    assert user_agent == "trading-bot-agent/1.0"
+    # Auth and content type are unchanged.
+    assert headers.get("authorization") == "Bearer test-key"
+    assert headers.get("content-type") == "application/json"
+
+
+def test_make_transport_honours_a_custom_user_agent(monkeypatch):
+    captured = {}
+    _install_urlopen(monkeypatch, captured)
+    transport = make_transport(
+        AgentConfig(api_key_env="AGENT_UA_KEY", http_user_agent="my-agent/2.0")
+    )
+    transport({"model": "m", "messages": []})
+    assert _headers_of(captured).get("user-agent") == "my-agent/2.0"
+
+
+def test_make_transport_blank_user_agent_falls_back_to_the_default(monkeypatch):
+    """A blank setting must fall back to the explicit default, not to urllib's."""
+    captured = {}
+    _install_urlopen(monkeypatch, captured)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY", http_user_agent="   "))
+    transport({"model": "m", "messages": []})
+    assert _headers_of(captured).get("user-agent") == "trading-bot-agent/1.0"
+
+
+def _http_error(code, *, retry_after=None, headers=None, body=b'{"error": {"message": "slow down"}}'):
+    import urllib.error
+
+    merged = dict(headers or {})
+    if retry_after is not None:
+        merged["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://example.test/chat/completions", code, "err", merged, io.BytesIO(body)
+    )
+
+
+def test_make_transport_retries_a_rate_limit_then_succeeds(monkeypatch):
+    """A 429 is retried after ``Retry-After``; a multi-round turn needs this."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(429, retry_after="3")
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert calls["n"] == 2
+    assert slept == [3.0]
+
+
+def test_make_transport_gives_up_after_the_retry_budget(monkeypatch):
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    calls = {"n": 0}
+
+    def always_429(request, timeout=None):
+        calls["n"] += 1
+        raise _http_error(429, retry_after="1")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_429)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        transport({"model": "m", "messages": []})
+    assert "HTTP 429" in str(excinfo.value)
+    assert calls["n"] == TRANSPORT_MAX_RETRIES + 1
+
+
+def test_make_transport_does_not_retry_a_daily_quota(monkeypatch):
+    """A 429 naming a *daily* quota is surfaced at once: no short wait clears it."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def daily_quota(request, timeout=None):
+        calls["n"] += 1
+        raise _http_error(
+            429,
+            retry_after="1",
+            body=(
+                b'{"error": {"message": "Rate limit reached for model on tokens '
+                b'per day (TPD): Limit 200000, Used 200000, Requested 9000."}}'
+            ),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", daily_quota)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        transport({"model": "m", "messages": []})
+    assert "HTTP 429" in str(excinfo.value)
+    assert calls["n"] == 1, "a daily quota must not be retried"
+    assert slept == []
+
+
+def test_make_transport_does_not_retry_a_client_error(monkeypatch):
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def bad_request(request, timeout=None):
+        calls["n"] += 1
+        raise _http_error(400, retry_after="30")
+
+    monkeypatch.setattr(urllib.request, "urlopen", bad_request)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        transport({"model": "m", "messages": []})
+    assert "HTTP 400" in str(excinfo.value)
+    assert calls["n"] == 1
+    assert slept == []
+
+
+def test_make_transport_retries_a_503(monkeypatch):
+    """503 (Cloudflare not-ready) is retryable exactly like 429."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(503, retry_after="2")
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert calls["n"] == 2
+    assert slept == [2.0]
+
+
+def test_make_transport_honours_x_ratelimit_reset_tokens(monkeypatch):
+    """Groq's ``x-ratelimit-reset-tokens: "6.3s"`` is used when Retry-After is absent."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(429, headers={"x-ratelimit-reset-tokens": "6.3s"})
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert calls["n"] == 2
+    assert slept == [6.3]
+
+
+def test_make_transport_parses_an_http_date_retry_after(monkeypatch):
+    """An RFC-7231 date ``Retry-After`` (Cloudflare 503) becomes seconds until it."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    when = datetime.now(timezone.utc) + timedelta(seconds=10)
+    http_date = email.utils.format_datetime(when, usegmt=True)
+    assert http_date.endswith("GMT")  # the RFC-7231 form Cloudflare sends
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(503, retry_after=http_date)
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert calls["n"] == 2
+    # ~10s out; allow scheduling slop but prove it did not fall back to the 5s default.
+    assert len(slept) == 1
+    assert 8.0 <= slept[0] <= 11.0
+
+
+def test_make_transport_retries_a_per_minute_429_that_mentions_a_daily_prose(monkeypatch):
+    """A per-minute 429 that merely *mentions* the daily category is still retried.
+
+    Regression for C1: the bare phrases "tokens per day" / "requests per day" (and a
+    prose ``(TPD)`` in an upsell) must not be read as a daily quota — that turned a
+    retryable per-minute 429 into a terminal failure, the dangerous direction.
+    """
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def tpm_body(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(
+                429,
+                retry_after="3",
+                body=(
+                    b'{"error": {"message": "Rate limit reached for model on tokens per '
+                    b'minute (TPM): Limit 7000, Used 7050, Requested 9000. Please try '
+                    b'again in 28.1s. Need a higher tokens per day (TPD) allowance? '
+                    b'Upgrade your plan at https://example.test/billing."}}'
+                ),
+            )
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", tpm_body)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert calls["n"] == 2, "a per-minute 429 must be retried, not treated as terminal"
+    assert slept == [3.0]
+
+
+def test_make_transport_floors_a_zero_retry_after(monkeypatch):
+    """``Retry-After: 0`` must not tight-loop: the wait is floored at a small positive."""
+    import urllib.request
+
+    monkeypatch.setenv("AGENT_UA_KEY", "test-key")
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(429, retry_after="0")
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+    assert slept and slept[0] > 0
+
+
+def test_join_budget_covers_a_worst_case_retried_turn(tmp_path):
+    """C4: ``stop``'s join budget must include the transport's retry sleeps.
+
+    One call can block for ``http_timeout_s`` *and* sleep up to
+    ``TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S`` between retries, so the old
+    timeout-only budget could expire mid-turn and leave the service draining.
+    """
+    clock = FakeClock(at(6, 0))
+    service = _service(tmp_path, clock, http_timeout_s=120.0, poll_s=15.0)
+
+    worst_case_call = 120.0 + TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S
+    worst_case_turn = worst_case_call * (MAX_TOOL_ROUNDS + 1) + 15.0
+    assert service._join_budget() >= worst_case_turn
+

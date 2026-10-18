@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
+from typing import Callable, Optional, Tuple
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -44,9 +44,10 @@ from config.settings import (
     AGENT_ENABLED, AGENT_MODE, AGENT_MODEL, AGENT_SYMBOL, AGENT_TIMEFRAME,
     AGENT_BARS, AGENT_POLL_S, AGENT_API_BASE, AGENT_API_KEY_ENV,
     AGENT_MAX_TOKENS, AGENT_TEMPERATURE, AGENT_HTTP_TIMEOUT_S,
-    AGENT_STATE_DIR, AGENT_RENDER_DIR,
+    AGENT_HTTP_USER_AGENT, AGENT_STATE_DIR, AGENT_RENDER_DIR,
 )
 from agent_service import AgentConfig, AgentService
+from agentic.llm import DEFAULT_MODEL as AGENT_DEFAULT_MODEL
 from data.mt5_loader import MT5DataLoader
 from indicators.ts_detector import TSDetector
 from indicators.crt_detector import CRTDetector
@@ -99,28 +100,115 @@ _agent_service = None
 _agent_service_lock = threading.Lock()
 
 
+def _resolve_agent_connection(
+    mode: str,
+    model: str,
+    api_base: str,
+    api_key_env: str,
+    *,
+    resolver: Optional[Callable[[], Tuple[str, str, str, str]]] = None,
+) -> Tuple[str, str, str, str]:
+    """Merge the agent's connection settings with the shared provider (phase 6c).
+
+    Pure and side-effect free. Returns ``(provider, model, api_base,
+    api_key_env)``, where ``provider`` is ``""`` in mock mode and the resolved
+    provider name otherwise (for one log line, never a key).
+
+    In **mock** mode this is a passthrough: the three placeholders are returned
+    unchanged and the shared provider is never imported or consulted. In **live**
+    mode each *empty* setting inherits its value from ``resolver()`` (by default
+    ``ai_agent.config.resolve_provider`` — the ``LLM_PROVIDER`` selection the
+    ``/api/ai`` routes already use), while each *non-empty* setting pins just that
+    field, independently of the others.
+
+    A resolution failure is a hard error in live mode. The old best-effort
+    ``except`` left the connection half-built, so the transport later failed with
+    a misleading relative-URL or missing-``OPENAI_API_KEY`` message that hid the
+    real cause; raising a clear ``RuntimeError`` here names it instead.
+    """
+    if str(mode or "").strip().lower() != "live":
+        return "", model, api_base, api_key_env
+    resolve = resolver
+    if resolve is None:
+        # Lazy: only live mode needs the shared provider, and import time must not.
+        from ai_agent.config import resolve_provider as resolve
+    try:
+        provider, base, mdl, key_env = resolve()
+    except Exception as exc:  # noqa: BLE001 — re-raised with the real cause
+        raise RuntimeError(
+            "agent live mode could not resolve the shared LLM provider "
+            f"(ai_agent.config.resolve_provider): {type(exc).__name__}: {exc}"
+        ) from exc
+    model = model or mdl
+    api_base = api_base or base
+    api_key_env = api_key_env or key_env
+    missing = [
+        name
+        for name, value in (
+            ("AGENT_MODEL", model),
+            ("AGENT_API_BASE", api_base),
+            ("AGENT_API_KEY_ENV", api_key_env),
+        )
+        if not str(value or "").strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            "agent live mode has an incomplete connection after provider "
+            f"resolution: {', '.join(missing)} empty (pin it, or fix the shared "
+            "LLM_PROVIDER configuration)"
+        )
+    return provider, model, api_base, api_key_env
+
+
 def get_agent_service() -> AgentService:
     """The process-wide agent service, built once.
 
     Guarded by a module lock: two concurrent first requests must not each build
     a service (which would spawn two watchdog threads over two stores).
+
+    In **live** mode the connection settings default to empty strings, which mean
+    "inherit the shared provider" — the same ``LLM_PROVIDER`` selection the
+    ``/api/ai`` routes already use (Groq/xAI from the local ``.env``), so the agent
+    needs no secret of its own. The provider is resolved lazily by
+    :func:`_resolve_agent_connection`, which imports ``ai_agent.config`` inside
+    that call: ``server`` imports ``ai_agent.api`` (and so ``ai_agent.config``) at
+    module scope for the ``/api/ai`` routes, but this path stays off it until a
+    live agent is actually built. A non-empty setting pins just that field.
+
+    In **mock** mode nothing is resolved and the (empty) placeholders pass
+    straight through; ``model`` still falls back to the default vision model so the
+    panel and status never display a blank model name.
     """
     global _agent_service
     if _agent_service is None:
         with _agent_service_lock:
             if _agent_service is None:
+                model, api_base, api_key_env = AGENT_MODEL, AGENT_API_BASE, AGENT_API_KEY_ENV
+                if str(AGENT_MODE or "").strip().lower() == "live":
+                    provider, model, api_base, api_key_env = _resolve_agent_connection(
+                        AGENT_MODE, model, api_base, api_key_env
+                    )
+                    # One line; never the key.
+                    print(
+                        f"[agent] live mode: provider={provider} "
+                        f"model={model} base={api_base}"
+                    )
+                # Mock mode resolves nothing, leaving model empty; the panel and
+                # status show this, so fall back to the default for display.
+                model = model or AGENT_DEFAULT_MODEL
                 config = AgentConfig(
                     symbol=AGENT_SYMBOL,
                     timeframe=AGENT_TIMEFRAME,
                     bars=int(AGENT_BARS),
                     mode=AGENT_MODE,
-                    model=AGENT_MODEL,
-                    api_base=AGENT_API_BASE,
-                    api_key_env=AGENT_API_KEY_ENV,
+                    model=model,
+                    api_base=api_base,
+                    api_key_env=api_key_env,
                     max_tokens=int(AGENT_MAX_TOKENS),
                     temperature=float(AGENT_TEMPERATURE),
                     poll_s=float(AGENT_POLL_S),
                     http_timeout_s=float(AGENT_HTTP_TIMEOUT_S),
+                    http_user_agent=AGENT_HTTP_USER_AGENT,
                     state_dir=(AGENT_STATE_DIR or None),
                     out_dir=(AGENT_RENDER_DIR or None),
                 )
