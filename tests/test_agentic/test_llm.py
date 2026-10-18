@@ -314,6 +314,18 @@ def test_estimate_cost_prices_the_inherited_vision_model():
     assert estimate_cost(model, 1_000_000, 1_000_000) > estimate_cost(DEFAULT_MODEL, 1_000_000, 1_000_000)
 
 
+def test_estimate_cost_prices_the_keyless_local_model():
+    """The local keyless endpoint's model is a *known* free model, priced zero.
+
+    Zero is deliberate here (the local provider is free); an *unknown* model still
+    falls back to a non-zero rate, so this is the one exception, not a loophole.
+    """
+    model = "deepseek-v4.1-flash-free"
+    assert model in PRICES
+    assert PRICES[model] == (0.0, 0.0)
+    assert estimate_cost(model, 1_000_000, 1_000_000) == approx(0.0)
+
+
 # --------------------------------------------------------------------------- #
 # build_messages
 # --------------------------------------------------------------------------- #

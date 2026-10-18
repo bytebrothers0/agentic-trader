@@ -279,16 +279,21 @@ CRT_ATR_PERIOD = 14
 #
 # AGENT_MODE = "mock" runs the full loop against a scripted agent and spends
 # nothing; "live" calls a vision model over the OpenAI-compatible chat API.
+# The shipped default is **live**, targeting the shared LLM_PROVIDER — with the
+# local `.env` (LLM_PROVIDER=local) that is the keyless endpoint below, i.e. the
+# agent talks to a local model with no secret. Flip to "mock" for a zero-spend,
+# provider-free run.
 #
 # AGENT_MODEL / AGENT_API_BASE / AGENT_API_KEY_ENV default to "" — an **empty
 # string means "inherit the shared provider"**. In live mode the server resolves
 # the same provider the /api/ai routes already use (see ai_agent.config's
-# resolve_provider(): LLM_PROVIDER from .env, i.e. Groq for a Groq key, else xAI)
-# and fills in that provider's base URL, model and key-variable name. So the
-# agent reuses the *already-integrated* key/base/model by default and needs no new
-# secret. A non-empty value pins an explicit OpenAI-compatible endpoint and
-# overrides just that field. (Mock mode never resolves the provider — it must stay
-# zero-dependency — and ignores these three.)
+# resolve_provider(): LLM_PROVIDER from .env — Groq/xAI for a key, or "local" for
+# the keyless localhost endpoint) and fills in that provider's base URL, model and
+# key-variable name. So the agent reuses the *already-integrated* base/model by
+# default and needs no new secret; for LLM_PROVIDER=local the inherited key name
+# is "" and the transport sends no Authorization header. A non-empty value pins an
+# explicit OpenAI-compatible endpoint and overrides just that field. (Mock mode
+# never resolves the provider — it must stay zero-dependency — and ignores these.)
 #
 # AGENT_HTTP_USER_AGENT is sent on every live request. Do not remove it: urllib's
 # default "Python-urllib/3.x" is rejected at the edge by Cloudflare with HTTP 403
@@ -304,7 +309,7 @@ CRT_ATR_PERIOD = 14
 # timeout for the live transport, and the ceiling the runtime uses to size its
 # thread-join budget.
 AGENT_ENABLED = False          # autostart the watchdog+loop at server start
-AGENT_MODE = "mock"            # "mock" (scripted agent, zero spend) | "live" (vision model)
+AGENT_MODE = "live"            # "mock" (scripted agent, zero spend) | "live" (vision model)
 AGENT_MODEL = ""               # "" = inherit the LLM_PROVIDER model (e.g. qwen/qwen3.8-27b)
 AGENT_SYMBOL = "XAUUSDm"
 AGENT_TIMEFRAME = "M15"

@@ -94,13 +94,19 @@ PROVIDER_LIMIT_MARKERS = (
 
 
 def _key_ready() -> bool:
-    """Whether a provider key resolves. Does not import the provider when not live."""
+    """Whether the provider is usable. Does not import the provider when not live.
+
+    A keyless provider (``LLM_PROVIDER=local``, ``key_env == ""``) is ready as soon
+    as it names a base URL — no key is needed for it.
+    """
     if not LIVE_ENABLED:
         return False  # keep a normal suite run free of the provider config
     try:
         from ai_agent import config as cfg
 
-        _provider, _base, _model, key_env = cfg.resolve_provider()
+        _provider, base, _model, key_env = cfg.resolve_provider()
+        if not key_env:
+            return bool(base)  # keyless endpoint: nothing to resolve
         return bool(os.environ.get(key_env))
     except Exception:
         return False
@@ -133,11 +139,14 @@ def test_live_boot_turn_reads_the_real_chart(tmp_path):
     from agentic.tools import TOOL_NAMES, ToolCall, ToolRegistry
 
     provider, base, model, key_env = cfg.resolve_provider()
-    assert key_env and os.environ.get(key_env), "no provider key resolved"
+    # A keyless provider (LLM_PROVIDER=local) has no key variable by design.
+    assert (not key_env) or os.environ.get(key_env), "no provider key resolved"
 
     # --- the hard cost cap: one turn's worst-case spend is under the leash -----
+    # Zero is valid (the local keyless provider is free); the leash still has to
+    # permit the turn and refuse a second at the same instant.
     worst_case = estimate_cost(model, 20_000, MAX_OUTPUT_TOKENS)
-    assert 0 < worst_case < MAX_SPEND_PER_DAY_USD
+    assert 0 <= worst_case < MAX_SPEND_PER_DAY_USD
 
     state_dir = tmp_path / "state"
     render_dir = tmp_path / "renders"

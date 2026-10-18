@@ -28,6 +28,8 @@ def provider_env(monkeypatch):
         monkeypatch.setattr(cfg, "GROQ_MODEL", "qwen/qwen3.8-27b")
         monkeypatch.setattr(cfg, "XAI_BASE_URL", "https://api.x.ai/v1")
         monkeypatch.setattr(cfg, "GROK_MODEL", "grok-4")
+        monkeypatch.setattr(cfg, "LOCAL_BASE_URL", "http://localhost:8080/v1")
+        monkeypatch.setattr(cfg, "LOCAL_MODEL", "deepseek-v4.1-flash-free")
 
     return _set
 
@@ -63,13 +65,35 @@ def test_groq_is_the_fallback_when_nothing_is_configured(provider_env):
     assert base and model and key_env == "GROQ_API_KEY"
 
 
-def test_the_real_environment_resolves_to_a_keyed_provider():
-    """The local ``.env`` selection must name a key variable, not carry a key."""
+def test_local_is_selected_and_keyless(provider_env):
+    """LLM_PROVIDER=local returns the local base/model with NO key variable."""
+    provider_env(llm_provider="local", groq_key="g", xai_key="x")
+    assert cfg.resolve_provider() == (
+        "local", "http://localhost:8080/v1", "deepseek-v4.1-flash-free", "",
+    )
+
+
+def test_local_wins_even_when_a_hosted_key_is_present(provider_env):
+    """A pinned local provider must not be shadowed by the key heuristics."""
+    provider_env(llm_provider="local", groq_key="g", xai_key="x")
+    assert cfg.resolve_provider()[0] == "local"
+
+
+def test_the_real_environment_resolves_to_a_usable_provider():
+    """The local ``.env`` selection must resolve to a sane endpoint.
+
+    Either a **keyed** hosted provider (the ``*_API_KEY`` variable *name*, never
+    the key) or the **keyless** local provider (an empty name, meaning "send no
+    Authorization header").
+    """
     provider, base, model, key_env = cfg.resolve_provider()
-    assert provider in {"groq", "xai"}
+    assert provider in {"groq", "xai", "local"}
     assert base.startswith("http")
     assert model
-    assert key_env.endswith("_API_KEY")
+    if provider == "local":
+        assert key_env == ""  # keyless by design
+    else:
+        assert key_env.endswith("_API_KEY")
 
 
 # --------------------------------------------------------------------------- #
@@ -155,13 +179,24 @@ def test_live_mode_raises_a_clear_error_when_resolution_fails():
 
 
 def test_live_mode_rejects_an_incomplete_connection():
-    """A resolver that returns blanks is a hard error, naming the empty fields."""
+    """A resolver that returns blanks is a hard error, naming the empty fields.
+
+    ``api_key_env`` may legitimately be blank (a keyless endpoint), so it is not
+    part of the completeness check — but a blank ``model`` or ``base`` is.
+    """
     with pytest.raises(RuntimeError) as excinfo:
         _merger()("live", "", "", "", resolver=lambda: ("groq", "", "", ""))
     message = str(excinfo.value)
     assert "AGENT_MODEL" in message
     assert "AGENT_API_BASE" in message
-    assert "AGENT_API_KEY_ENV" in message
+
+
+def test_live_mode_accepts_a_keyless_provider():
+    """A blank key variable means a keyless endpoint, not an incomplete one."""
+    assert _merger()(
+        "live", "", "", "",
+        resolver=lambda: ("local", "http://localhost:8080/v1", "m", ""),
+    ) == ("local", "m", "http://localhost:8080/v1", "")
 
 
 def test_mock_mode_service_displays_a_non_blank_model(monkeypatch, tmp_path):

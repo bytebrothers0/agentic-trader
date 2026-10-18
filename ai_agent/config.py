@@ -21,6 +21,12 @@ GROK_MODEL = os.getenv("GROK_MODEL", "grok-4")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Local OpenAI-compatible endpoint with NO client key (e.g. an opencode-proxy on
+# localhost that injects its own upstream key). Selected with LLM_PROVIDER=local.
+# BASE_URL is the *base* — the client appends "/chat/completions"; a full
+# ".../v1/chat/completions" value is tolerated (the client strips the tail).
+LOCAL_BASE_URL = os.getenv("LOCAL_BASE_URL", "http://localhost:8080/v1")
+LOCAL_MODEL = os.getenv("LOCAL_MODEL", "deepseek-v4.1-flash-free")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq" if os.getenv("GROQ_API_KEY") else "xai").lower()
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 AI_MODE = os.getenv("AI_MODE", "propose").lower()  # propose only for now
@@ -40,11 +46,17 @@ def resolve_provider() -> tuple[str, str, str, str]:
     layer's live mode, via ``server.get_agent_service``) call this instead of
     copying the rule a third time.
 
-    Selection: Groq wins when ``LLM_PROVIDER == "groq"`` or when a Groq key is
-    present and no xAI key is; xAI wins when ``LLM_PROVIDER == "xai"`` or an xAI
-    key is set; otherwise Groq is the default. ``key_env`` is the *name* of the
-    environment variable holding the key — never the key itself.
+    Selection: ``LLM_PROVIDER == "local"`` wins outright and returns a **keyless**
+    endpoint (``key_env == ""`` — an empty name means "send no ``Authorization``
+    header"; see ``LOCAL_*``). Otherwise Groq wins when ``LLM_PROVIDER == "groq"``
+    or when a Groq key is present and no xAI key is; xAI wins when
+    ``LLM_PROVIDER == "xai"`` or an xAI key is set; otherwise Groq is the default.
+    For the keyed providers ``key_env`` is the *name* of the environment variable
+    holding the key — never the key itself.
     """
+    if LLM_PROVIDER == "local":
+        # Keyless by design: the endpoint injects its own upstream credential.
+        return "local", LOCAL_BASE_URL, LOCAL_MODEL, ""
     if LLM_PROVIDER == "groq" or (GROQ_API_KEY and not XAI_API_KEY):
         return "groq", GROQ_BASE_URL, GROQ_MODEL, "GROQ_API_KEY"
     if LLM_PROVIDER == "xai" or XAI_API_KEY:

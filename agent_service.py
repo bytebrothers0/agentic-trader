@@ -102,6 +102,9 @@ class AgentConfig:
     mode: str = "mock"
     model: str = "gpt-4o-mini"
     api_base: str = "https://api.openai.com/v1"
+    #: Name of the environment variable holding the key. A **blank** value means a
+    #: keyless endpoint (e.g. ``LLM_PROVIDER=local``): no key is read, none is
+    #: required, and no ``Authorization`` header is sent.
     api_key_env: str = "OPENAI_API_KEY"
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = 0.0
@@ -127,13 +130,17 @@ def _request_headers(api_key: str, user_agent: str) -> Dict[str, str]:
     carries a non-default ``User-Agent`` **without any network call**. An empty
     or whitespace ``user_agent`` falls back to :data:`DEFAULT_USER_AGENT`; the
     urllib default is blocked by Cloudflare 1010, so blank must never win.
+
+    A blank ``api_key`` means a **keyless** endpoint (e.g. a local proxy that
+    injects its own upstream credential): the ``Authorization`` header is omitted
+    entirely rather than sent as a bare ``"Bearer "``.
     """
     ua = str(user_agent or "").strip() or DEFAULT_USER_AGENT
-    return {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        "User-Agent": ua,
-    }
+    headers = {"Content-Type": "application/json", "User-Agent": ua}
+    key = str(api_key or "").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
 #: HTTP statuses that mean "slow down" and are worth a bounded retry.
@@ -240,12 +247,28 @@ def _retry_after_seconds(headers: Any, detail: str = "") -> float:
     return max(0.25, min(float(wait), TRANSPORT_RETRY_CAP_S))
 
 
+def _chat_completions_url(api_base: str) -> str:
+    """The chat-completions endpoint for ``api_base``.
+
+    ``api_base`` is normally a *base* (``.../v1``) and the path is appended. A
+    caller that pastes the full endpoint (``.../v1/chat/completions``) is
+    tolerated: the tail is stripped first so the path is never doubled.
+    """
+    base = str(api_base or "").strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")]
+    return f"{base}/chat/completions"
+
+
 def make_transport(config: AgentConfig) -> Transport:
     """A stdlib-only OpenAI-compatible chat transport for ``config.api_base``.
 
     Reads the API key from ``os.environ[config.api_key_env]`` and raises a clear
     :class:`RuntimeError` when it is absent *and* on every call, so a missing key
-    is reported before any bytes go on the wire. Deliberately stdlib-only
+    is reported before any bytes go on the wire. A **blank** ``api_key_env`` means
+    a *keyless* endpoint (a local proxy that injects its own credential, e.g.
+    ``LLM_PROVIDER=local``): no key is read, none is required, and no
+    ``Authorization`` header is sent. Deliberately stdlib-only
     (``urllib.request``): the live path is the one impure edge and it must not pull
     a third-party HTTP client into the import graph. Only call this in live mode.
 
@@ -257,9 +280,8 @@ def make_transport(config: AgentConfig) -> Transport:
     import urllib.error
     import urllib.request
 
-    base = str(config.api_base or "").rstrip("/")
-    url = f"{base}/chat/completions"
-    key_env = str(config.api_key_env or "OPENAI_API_KEY")
+    url = _chat_completions_url(config.api_base)
+    key_env = str(config.api_key_env or "").strip()
     timeout_s = float(config.http_timeout_s or 120.0)
     # The UA is normalised in exactly one place (_request_headers): a blank or
     # whitespace setting falls back to DEFAULT_USER_AGENT there, so a test can
@@ -267,11 +289,14 @@ def make_transport(config: AgentConfig) -> Transport:
     user_agent = str(getattr(config, "http_user_agent", "") or "")
 
     def _key() -> str:
+        if not key_env:
+            return ""  # keyless endpoint: no Authorization header
         key = os.environ.get(key_env)
         if not key or not key.strip():
             raise RuntimeError(
                 f"agent live mode needs the {key_env} environment variable set "
-                f"(AGENT_API_KEY_ENV); refusing to POST {url} without a key"
+                f"(AGENT_API_KEY_ENV); refusing to POST {url} without a key. "
+                f"For a keyless endpoint, blank AGENT_API_KEY_ENV / api_key_env."
             )
         return key
 

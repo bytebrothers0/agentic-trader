@@ -60,12 +60,20 @@ DEFAULT_MODEL = "gpt-4o-mini"
 #: ``qwen/qwen3.8-27b`` is the model the agentic layer inherits from the shared
 #: ``/api/ai`` provider (Groq) by default; its published Groq price is $0.80/$4.00
 #: per 1M tokens.
+#:
+#: ``deepseek-v4.1-flash-free`` is the model of the **local, keyless**
+#: OpenAI-compatible endpoint (``LLM_PROVIDER=local``), which is free — so it is
+#: priced at zero deliberately. This is the one *known* model that is free; the
+#: "an unknown model is never free" rule below is unchanged, so if that endpoint
+#: is ever pointed at a paid model, change this line (a free entry here would
+#: under-count spend, the one direction the leash must not fail in).
 PRICES: Dict[str, Tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1": (2.00, 8.00),
     "qwen/qwen3.8-27b": (0.80, 4.00),
+    "deepseek-v4.1-flash-free": (0.0, 0.0),
 }
 
 #: What an unknown model is billed at: the default model's price.

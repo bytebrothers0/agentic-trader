@@ -126,6 +126,10 @@ def _resolve_agent_connection(
     ``except`` left the connection half-built, so the transport later failed with
     a misleading relative-URL or missing-``OPENAI_API_KEY`` message that hid the
     real cause; raising a clear ``RuntimeError`` here names it instead.
+
+    A blank ``api_key_env`` after the merge is **valid** — it means a keyless
+    endpoint (``LLM_PROVIDER=local`` resolves to ``key_env=""``), so only
+    ``model`` and ``api_base`` are required to be non-empty.
     """
     if str(mode or "").strip().lower() != "live":
         return "", model, api_base, api_key_env
@@ -143,12 +147,16 @@ def _resolve_agent_connection(
     model = model or mdl
     api_base = api_base or base
     api_key_env = api_key_env or key_env
+    # ``model`` and ``api_base`` are always required; ``api_key_env`` may stay
+    # blank, which means a **keyless** endpoint (``resolve_provider`` returns
+    # ``""`` for ``LLM_PROVIDER=local``, and the transport then sends no
+    # ``Authorization`` header). A blank key variable is therefore a valid
+    # configuration, not an incomplete one.
     missing = [
         name
         for name, value in (
             ("AGENT_MODEL", model),
             ("AGENT_API_BASE", api_base),
-            ("AGENT_API_KEY_ENV", api_key_env),
         )
         if not str(value or "").strip()
     ]

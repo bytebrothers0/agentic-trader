@@ -34,6 +34,8 @@ from agent_service import (  # noqa: E402
     TRANSPORT_RETRY_CAP_S,
     AgentConfig,
     AgentService,
+    _chat_completions_url,
+    _request_headers,
     build_client,
     make_transport,
 )
@@ -560,6 +562,47 @@ def test_make_transport_requires_the_key(monkeypatch):
         make_transport(AgentConfig(api_key_env="AGENT_TEST_KEY"))
     assert "AGENT_TEST_KEY" in str(excinfo.value)
     assert "key" in str(excinfo.value).lower()
+
+
+# --------------------------------------------------------------------------- #
+# Live transport: a keyless endpoint (LLM_PROVIDER=local) sends no auth header
+# --------------------------------------------------------------------------- #
+
+def test_request_headers_omit_authorization_when_keyless():
+    """A blank key means keyless: no Authorization header at all (not "Bearer ")."""
+    headers = _request_headers("", "ua/1.0")
+    assert "Authorization" not in headers
+    assert headers["Content-Type"] == "application/json"
+    assert headers["User-Agent"] == "ua/1.0"
+
+
+def test_chat_completions_url_does_not_double_a_full_endpoint():
+    assert _chat_completions_url("http://localhost:8080/v1") == (
+        "http://localhost:8080/v1/chat/completions"
+    )
+    # A pasted full endpoint is tolerated, not appended to.
+    assert _chat_completions_url("http://localhost:8080/v1/chat/completions") == (
+        "http://localhost:8080/v1/chat/completions"
+    )
+    assert _chat_completions_url("http://localhost:8080/v1/") == (
+        "http://localhost:8080/v1/chat/completions"
+    )
+
+
+def test_make_transport_is_keyless_without_a_key(monkeypatch):
+    """``api_key_env=""`` needs no key and POSTs to the local base with no auth."""
+    captured = {}
+    _install_urlopen(monkeypatch, captured)
+    transport = make_transport(
+        AgentConfig(api_key_env="", api_base="http://localhost:8080/v1")
+    )
+
+    assert transport({"model": "m", "messages": []}) == {"ok": True}
+
+    headers = _headers_of(captured)
+    assert "authorization" not in headers
+    assert headers.get("user-agent") == "trading-bot-agent/1.0"
+    assert captured["request"].full_url == "http://localhost:8080/v1/chat/completions"
 
 
 # --------------------------------------------------------------------------- #
