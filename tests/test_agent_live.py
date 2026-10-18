@@ -16,8 +16,13 @@ Run it explicitly::
 
     AGENT_LIVE_TEST=1 python -m pytest tests/test_agent_live.py -q -s
 
-The provider's per-request ceiling
-----------------------------------
+The provider's per-request ceiling (hosted tier only)
+-----------------------------------------------------
+This section describes the **hosted Groq** tier. The keyless local provider
+(``LLM_PROVIDER=local``, e.g. an opencode-proxy) has no such per-request cap, so
+when it is configured the full-thesis contract at the end of the test runs
+instead of skipping — which is exactly why the local provider exists.
+
 The inherited vision provider (Groq, ``qwen/qwen3.8-27b`` on the ``on_demand``
 service tier) allows only **7000 input tokens per request** (ITPM). That is a
 *hard* per-request cap: a request larger than it is answered with ``HTTP 413``
@@ -132,7 +137,7 @@ pytestmark = [
 def test_live_boot_turn_reads_the_real_chart(tmp_path):
     from ai_agent import config as cfg
     from agent_service import AgentConfig, AgentService
-    from agentic.llm import estimate_cost
+    from agentic.llm import PRICES, estimate_cost
     from agentic.models import VALID_BIAS, Trigger
     from agentic.renderer import Renderer
     from agentic.store import MAX_SPEND_PER_DAY_USD, LeashExceeded
@@ -211,9 +216,13 @@ def test_live_boot_turn_reads_the_real_chart(tmp_path):
         record = store.data.turns[0]
         assert record.trigger is Trigger.BOOT
         assert int(record.tokens or 0) > 0, "no tokens billed"
-        assert store.data.budget.spend_usd_today > 0, "a real round must cost money"
+        # A real round is billed; the *cost* is only non-zero for a priced model.
+        # The local keyless provider's free model legitimately costs nothing, so in
+        # that case assert the accounting is exact rather than positive.
         assert store.data.budget.spend_usd_today < 0.25, "spend exceeded the hard cap"
         assert store.data.budget.spend_usd_today == pytest.approx(record.cost_usd)
+        if PRICES.get(model, (0.0, 0.0)) != (0.0, 0.0):
+            assert store.data.budget.spend_usd_today > 0, "a priced round must cost money"
 
         # --- propose-only: no order tool exists, and one would be refused -------
         assert not any(
