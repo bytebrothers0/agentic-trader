@@ -19,13 +19,15 @@ from pytest import approx
 
 from _fixtures import (
     FakeClock,
+    day,
     level as _level,
     render_scene,
     series as _series,
     snapshot as _snapshot,
+    ts,
 )
-from agentic.feed import KNOWN_FAMILIES
-from agentic.renderer import FAMILY_INITIALS, RenderResult, Renderer, TagEntry
+from agentic.feed import KNOWN_FAMILIES, Bars
+from agentic.renderer import FAMILY_INITIALS, Pane, RenderResult, Renderer, TagEntry
 
 
 # --------------------------------------------------------------------------- #
@@ -324,7 +326,7 @@ def test_empty_scene_renders_a_sane_manifest(tmp_path):
 
     assert result.tags == {}
     assert result.manifest["tags"] == {}
-    assert result.manifest["window"] == {"from": None, "to": None, "bars": 0}
+    assert result.manifest["window"] == {"from": None, "to": None, "bars": 0, "offset": 0}
     assert result.manifest["price_range"] == [0.0, 0.0]
     assert os.path.isfile(result.image_path)
 
@@ -358,3 +360,241 @@ def test_manifest_tag_order_is_canonical(tmp_path):
     assert list(a.manifest["tags"]) == sorted(a.manifest["tags"])
     assert list(a.manifest["tags"]) == list(b.manifest["tags"])
     assert a.image_sha256 == b.image_sha256
+
+
+# --------------------------------------------------------------------------- #
+# Offset (phase 6d)
+# --------------------------------------------------------------------------- #
+
+def test_offset_shifts_the_window_but_not_the_pixels(tmp_path):
+    renderer = _renderer(tmp_path, "o", FakeClock())
+
+    # A longer series so a shifted window overlaps but has different from/to.
+    rows = [
+        (ts(day(16, 0)) + i * 900, 4150.0 + i, 4151.0 + i, 4149.0 + i, 4150.5 + i)
+        for i in range(50)
+    ]
+    all_bars = _series(rows)
+    empty_snap = _snapshot([], price=4155.0, atr=5.0)
+
+    def _slice(lo, hi):
+        return Bars(
+            symbol=all_bars.symbol,
+            timeframe=all_bars.timeframe,
+            times=all_bars.times[lo:hi],
+            open=all_bars.open[lo:hi],
+            high=all_bars.high[lo:hi],
+            low=all_bars.low[lo:hi],
+            close=all_bars.close[lo:hi],
+        )
+
+    full = renderer.render(empty_snap, _slice(10, 50))
+    assert full.manifest["window"]["offset"] == 0
+
+    # A *shifted* window reports its own offset and its own from/to.
+    off = renderer.render(empty_snap, _slice(7, 47), offset=3)
+    assert off.manifest["window"]["offset"] == 3
+    assert off.manifest["window"]["bars"] == 40
+    assert off.manifest["window"]["to"] != full.manifest["window"]["to"]
+    assert off.manifest["window"]["from"] != full.manifest["window"]["from"]
+
+    # But offset is *metadata*: the caller (the loop) does the slicing, so the
+    # same bars rendered at a different offset must give the same pixels. This is
+    # the regression guard that the old test's "different offset -> different
+    # hash" claim was tautological (it was really the different slice).
+    same = renderer.render(empty_snap, _slice(10, 50), offset=3)
+    assert same.manifest["window"]["offset"] == 3
+    assert same.manifest["window"]["to"] == full.manifest["window"]["to"]
+    assert same.image_sha256 == full.image_sha256
+    assert same.render_id == full.render_id
+
+
+def test_single_render_has_no_panes_and_layout_single_is_unchanged(tmp_path):
+    snap, bars, pins, _ = render_scene()
+    default = _renderer(tmp_path, "a", FakeClock()).render(snap, bars, pins=pins)
+    explicit = _renderer(tmp_path, "b", FakeClock()).render(
+        snap, bars, pins=pins, layout="single", offset=0
+    )
+    assert "panes" not in default.manifest
+    assert default.image_sha256 == explicit.image_sha256
+    assert default.render_id == explicit.render_id
+
+
+def test_single_layout_ignores_panes(tmp_path):
+    # A stray `panes` alongside layout="single" must not silently split the
+    # figure: single rendering is byte-identical with or without the panes.
+    htf, ltf = _split_scene()
+    plain = _renderer(tmp_path, "a", FakeClock()).render(htf.snapshot, htf.bars)
+    stray = _renderer(tmp_path, "b", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="single"
+    )
+    assert "panes" not in stray.manifest
+    assert stray.image_sha256 == plain.image_sha256
+    assert stray.render_id == plain.render_id
+
+
+# --------------------------------------------------------------------------- #
+# Split layout (phase 6d)
+# --------------------------------------------------------------------------- #
+
+def _pane(timeframe, levels, *, price=4150.0, atr=5.0, count=30, step_s=900):
+    start = ts(day(16, 12))
+    rows = []
+    current = float(price)
+    for i in range(count):
+        o = current
+        c = current + (1.5 if i % 3 else -1.0)
+        rows.append((start + i * step_s, o, max(o, c) + 0.5, min(o, c) - 0.5, c))
+        current = c
+    return Pane(
+        _snapshot(levels, timeframe=timeframe, price=price, atr=atr),
+        _series(rows, timeframe=timeframe),
+        [],
+    )
+
+
+def _split_scene():
+    htf = _pane(
+        "H2",
+        [
+            _level("crt", type="BEARISH (CLASSIC)", price=4185.0, time=ts(day(16, 8)),
+                   end_kind="active", range_high=4190.0, range_low=4180.0),
+        ],
+        price=4150.0,
+        count=20,
+        step_s=7200,
+    )
+    ltf = _pane(
+        "M15",
+        [
+            _level("fvg", type="FVG (BULLISH)", price=4155.0, time=ts(day(16, 12)),
+                   end_kind="active", box_top=4158.0, box_bottom=4152.0),
+        ],
+        price=4150.0,
+        count=40,
+    )
+    return htf, ltf
+
+
+def test_split_render_has_two_panes_and_globally_unique_tags(tmp_path):
+    htf, ltf = _split_scene()
+    result = _renderer(tmp_path, "split", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="split"
+    )
+    manifest = result.manifest
+
+    # top-level keys describe the *primary* pane (back-compat)
+    assert manifest["timeframe"] == "H2"
+    assert manifest["price_range"] == manifest["panes"][0]["price_range"]
+    # the panes array describes each pane, top -> bottom
+    assert [p["timeframe"] for p in manifest["panes"]] == ["H2", "M15"]
+    assert manifest["panes"][0]["window"]["bars"] == len(htf.bars.times)
+    assert manifest["panes"][1]["window"]["bars"] == len(ltf.bars.times)
+    # tags are globally unique: the primary pane keeps the raw tags, pane 2 is prefixed
+    tags = list(manifest["tags"])
+    assert len(tags) == len(set(tags))
+    assert not any(tag.startswith("P1:") for tag in tags)
+    assert "C1" in tags and "P2:F1" in tags
+    assert set(tags) == set(result.tags)
+    # every pane's tags resolve through result.tags
+    assert result.tags["P2:F1"].timeframe == "M15"
+    assert result.tags["C1"].timeframe == "H2"
+
+
+def test_split_pane_manifest_records_each_panes_price_basis(tmp_path):
+    htf, ltf = _split_scene()
+    htf.snapshot.price_basis = "window_end"
+    ltf.snapshot.price_basis = "live"
+    result = _renderer(tmp_path, "s", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="split"
+    )
+    first, second = result.manifest["panes"]
+    assert first["current_price"] == htf.snapshot.current_price
+    assert first["atr"] == htf.snapshot.atr
+    assert first["price_basis"] == "window_end"
+    assert second["current_price"] == ltf.snapshot.current_price
+    assert second["atr"] == ltf.snapshot.atr
+    assert second["price_basis"] == "live"
+
+
+def test_split_merges_top_level_pins_into_the_primary_pane(tmp_path):
+    htf, ltf = _split_scene()
+    already_drawn = htf.snapshot.levels[0]
+    extra = _snapshot(
+        [_level("bos", type="BOS (BULLISH)", price=4175.0,
+                time=ts(day(16, 9)), end_kind="active")],
+        timeframe="H2", price=4150.0,
+    ).levels[0]
+    result = _renderer(tmp_path, "s", FakeClock()).render(
+        htf.snapshot, htf.bars, pins=[extra, already_drawn], panes=[htf, ltf], layout="split"
+    )
+
+    # both pins are merged into pane 1, kept unprefixed (pane 2's tags are P2:...)
+    pinned = {tag for tag, entry in result.tags.items() if entry.origin == "pinned"}
+    assert pinned == {"B1*", "C1*"}
+    assert not any(tag.startswith("P2:") for tag in pinned)
+    assert "P2:F1" in result.tags  # pane 2 is still prefixed
+    # the pin that pane 1 already drew is deduped, not drawn a second time
+    assert len(result.tags) == len(htf.snapshot.levels) + len(ltf.snapshot.levels) + 1
+    drawn_crt = [e for e in result.tags.values() if e.level_key == already_drawn.level_key]
+    assert len(drawn_crt) == 1 and drawn_crt[0].origin == "pinned"
+
+
+def test_split_panes_have_independent_price_ranges(tmp_path):
+    low = _pane("M15", [_level("fvg", type="FVG (BULLISH)", price=101.0,
+                               time=ts(day(16, 12)), end_kind="active")], price=100.0)
+    high = _pane("H2", [_level("crt", type="BEARISH (CLASSIC)", price=200.0,
+                               time=ts(day(16, 8)), end_kind="active")], price=200.0)
+    result = _renderer(tmp_path, "s", FakeClock()).render(
+        low.snapshot, low.bars, panes=[low, high], layout="split"
+    )
+    p0 = result.manifest["panes"][0]["price_range"]
+    p1 = result.manifest["panes"][1]["price_range"]
+    assert p0 != p1
+    assert result.manifest["price_range"] == p0
+
+
+def test_split_render_is_deterministic(tmp_path):
+    htf, ltf = _split_scene()
+    a = _renderer(tmp_path, "a", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="split"
+    )
+    b = _renderer(tmp_path, "b", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="split"
+    )
+    assert a.image_sha256 == b.image_sha256
+    assert a.render_id == b.render_id
+    with open(a.image_path, "rb") as fa, open(b.image_path, "rb") as fb:
+        assert fa.read() == fb.read()
+
+
+def test_split_render_draws_into_each_pane_band(tmp_path):
+    from PIL import Image
+
+    htf, ltf = _split_scene()
+    result = _renderer(tmp_path, "s", FakeClock()).render(
+        htf.snapshot, htf.bars, panes=[htf, ltf], layout="split"
+    )
+    with Image.open(result.image_path) as img:
+        assert img.size == (SMALL_WIDTH, SMALL_HEIGHT)
+        rgb = img.convert("RGB")
+        width, height = rgb.size
+        pixels = rgb.load()
+        mid = height // 2
+
+        def coloured_ink(lo, hi):
+            # Candles are the only saturated ink (green/red); the background and
+            # the axes' spines/text are white/grey. So a band with saturation is a
+            # band the renderer actually drew candles into.
+            return sum(
+                1
+                for y in range(lo, hi)
+                for x in range(width)
+                if max(pixels[x, y]) - min(pixels[x, y]) > 40
+            )
+
+        top = coloured_ink(0, mid)
+        bottom = coloured_ink(mid, height)
+
+    assert top > 0, "the top (HTF) pane drew no candles"
+    assert bottom > 0, "the bottom (LTF) pane drew no candles"

@@ -53,7 +53,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from agentic._time import as_aware
 from agentic.feed import FeedSnapshot, LevelRecord
@@ -101,6 +101,10 @@ class LookupResult(Serde):
     query: Dict[str, Any] = field(default_factory=dict)
     current_price: float = 0.0
     atr: float = 0.0
+    #: ``live`` or ``window_end`` — whether the header price is the live price or
+    #: the last close of a past (offset) window. In split mode it is the basis of
+    #: the pane the query resolved to.
+    price_basis: str = "live"
     matches: List[LookupRecord] = field(default_factory=list)
 
 
@@ -206,6 +210,18 @@ def _manifest_record(
     return LookupRecord.from_dict(view)
 
 
+def _pane_index_for_tag(tag: str) -> int:
+    """The 0-based pane a tag belongs to: ``P2:F1`` → 1, a raw ``F1`` → 0.
+
+    The renderer prefixes every pane after the first with its 1-based index, so a
+    ``P{n}:`` prefix is the map back to the pane (and thus its price basis).
+    """
+    head, sep, _rest = str(tag).partition(":")
+    if sep and len(head) >= 2 and head[0] == "P" and head[1:].isdigit():
+        return max(0, int(head[1:]) - 1)
+    return 0
+
+
 def level_lookup(
     snapshot: FeedSnapshot,
     query: Optional[Dict[str, Any]] = None,
@@ -214,6 +230,8 @@ def level_lookup(
     thesis_level_keys: Iterable[str] = (),
     price: Optional[float] = None,
     atr: Optional[float] = None,
+    snapshots: Optional[Iterable[FeedSnapshot]] = None,
+    panes: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> LookupResult:
     """Resolve a level query against the feed — the ground truth for the agent.
 
@@ -221,78 +239,135 @@ def level_lookup(
     ``level_key`` and ``origin``). ``thesis_level_keys`` marks which matches are
     the agent's stated levels of interest. ``price``/``atr`` override the
     snapshot's header when the caller has a fresher number.
+
+    In **split** mode the caller passes ``snapshots`` (one per pane, primary
+    first) so ``family``/``near_price``/``level_key`` search *every* pane, not just
+    the primary. ``panes`` is the manifest's pane array; its recorded
+    ``current_price``/``atr`` give each pane's own price basis, so a pane-2 match
+    is measured against pane 2's price (not the primary's). Every match is
+    measured against the price basis of the pane it was found on; the header is
+    the primary pane's basis, or the tag's pane when resolving by tag.
     """
     query = dict(query or {})
-    current_price = float(snapshot.current_price if price is None else price)
-    atr_value = float(snapshot.atr if atr is None else atr)
+    pools: List[FeedSnapshot] = [snapshot]
+    for extra in (snapshots or ()):
+        if extra is not snapshot and extra not in pools:
+            pools.append(extra)
+    pane_meta: List[Mapping[str, Any]] = [p for p in (panes or ()) if isinstance(p, Mapping)]
+
+    primary_price = float(snapshot.current_price if price is None else price)
+    primary_atr = float(snapshot.atr if atr is None else atr)
     thesis: Set[str] = {str(k) for k in (thesis_level_keys or ())}
     tag_map: Dict[str, Any] = dict(tags or {})
 
-    def emit(level: LevelRecord, tag: str = "", origin: str = "live") -> LookupRecord:
+    def basis_for(snap: FeedSnapshot) -> Tuple[float, float, str]:
+        """``(price, atr, basis)`` for a snapshot; the primary honours overrides."""
+        if snap is snapshot:
+            return primary_price, primary_atr, str(snapshot.price_basis or "live")
+        return float(snap.current_price), float(snap.atr), str(snap.price_basis or "live")
+
+    def pane_basis(index: int) -> Tuple[float, float, str]:
+        """``(price, atr, basis)`` for pane ``index`` — the manifest's values when held."""
+        snap = pools[index] if 0 <= index < len(pools) else snapshot
+        price_value, atr_value, basis = basis_for(snap)
+        if 0 <= index < len(pane_meta):
+            pane = pane_meta[index]
+            if pane.get("current_price") is not None:
+                price_value = float(pane["current_price"])
+            if pane.get("atr") is not None:
+                atr_value = float(pane["atr"])
+            basis = str(pane.get("price_basis", basis) or basis)
+        return price_value, atr_value, basis
+
+    def emit(level: LevelRecord, snap: FeedSnapshot, tag: str = "", origin: str = "live") -> LookupRecord:
+        cp, at, _basis = basis_for(snap)
         view = level_view(
             level,
             tag=tag,
             origin=origin,
-            current_price=current_price,
-            atr=atr_value,
+            current_price=cp,
+            atr=at,
             is_thesis_level=level.level_key in thesis,
         )
         return LookupRecord.from_dict(view)
+
+    def find(level_key: str) -> Tuple[Optional[LevelRecord], Optional[FeedSnapshot]]:
+        for snap in pools:
+            level = snap.by_key(level_key)
+            if level is not None:
+                return level, snap
+        return None, None
+
+    matches: List[LookupRecord] = []
+    header_price = primary_price
+    header_atr = primary_atr
+    header_basis = str(snapshot.price_basis or "live")
 
     tag_query = query.get("tag")
     key_query = query.get("level_key")
     family_query = query.get("family")
     near_query = query.get("near_price")
 
-    matches: List[LookupRecord] = []
-
     if tag_query is not None:
         tag = str(tag_query)
+        index = _pane_index_for_tag(tag)
+        header_price, header_atr, header_basis = pane_basis(index)
         entry = tag_map.get(tag)
         if entry is None:
             matches.append(_not_found("", tag=tag))
         else:
             view = entry.to_dict() if isinstance(entry, Serde) else dict(entry)
-            level = snapshot.by_key(str(view.get("level_key", "") or ""))
-            if level is not None:
-                matches.append(emit(level, tag, str(view.get("origin", "live") or "live")))
+            level, snap = find(str(view.get("level_key", "") or ""))
+            if level is not None and snap is not None:
+                matches.append(emit(level, snap, tag, str(view.get("origin", "live") or "live")))
             else:
                 matches.append(
                     _manifest_record(
                         view,
                         tag=tag,
-                        current_price=current_price,
-                        atr=atr_value,
+                        current_price=header_price,
+                        atr=header_atr,
                         thesis=thesis,
                     )
                 )
 
     elif key_query is not None:
-        level = snapshot.by_key(str(key_query))
-        matches.append(emit(level) if level is not None else _not_found(str(key_query), tag=""))
+        level, snap = find(str(key_query))
+        matches.append(
+            emit(level, snap) if level is not None and snap is not None
+            else _not_found(str(key_query), tag="")
+        )
 
     elif family_query is not None:
         family = str(family_query)
         timeframe = query.get("timeframe")
-        pool = [
-            level
-            for level in snapshot.levels
+        found = [
+            (level, snap)
+            for snap in pools
+            for level in snap.levels
             if level.family == family
             and (timeframe is None or level.timeframe == str(timeframe))
         ]
         # Deterministic: price descending, then level_key.
-        pool.sort(key=lambda level: (-float(level.price), level.level_key))
-        matches = [emit(level) for level in pool]
+        found.sort(key=lambda pair: (-float(pair[0].price), pair[0].level_key))
+        matches = [emit(level, snap) for level, snap in found]
 
     elif near_query is not None:
         radius = float(query.get("radius", 0) or 0.0)
-        matches = [emit(level) for level in snapshot.near_price(float(near_query), radius)]
+        found = [
+            (level, snap)
+            for snap in pools
+            for level in snap.near_price(float(near_query), radius)
+        ]
+        found.sort(key=lambda pair: abs(float(pair[0].price) - float(near_query)))
+        matches = [emit(level, snap) for level, snap in found]
 
     # No resolution key: the query is just the market header.
 
     return LookupResult(
         query=query,
-        current_price=current_price,
-        atr=atr_value,
+        current_price=header_price,
+        atr=header_atr,
+        price_basis=header_basis,
         matches=matches,
     )

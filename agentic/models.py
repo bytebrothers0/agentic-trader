@@ -207,6 +207,12 @@ class View(Serde):
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_FAMILIES))
     bars: int = 300
+    #: How many bars to skip back from the newest one, **per timeframe**. The
+    #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the
+    #: default) is the live/latest window, so ``offset`` alone re-renders a *past*
+    #: window. The endpoint computes indicators on the fetched window, so an
+    #: offset render shows the detectors *within that past window*.
+    offset: int = 0
     layout: Layout = Layout.SINGLE
     panes: List[str] = field(default_factory=list)
     show_tags: bool = True

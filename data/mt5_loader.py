@@ -26,6 +26,18 @@ logger = logging.getLogger("MSNR_MT5Loader")
 _mt5_lock = threading.Lock()
 
 
+class InsufficientHistory(ValueError):
+    """The feed does not hold the window that was requested.
+
+    Raised when an **explicit** ``count`` was asked for (an offset past the
+    available history, or a broker that holds fewer bars than requested) and the
+    feed could not fill it. It is a ``ValueError`` subclass so the pure layers can
+    translate it without importing MT5, and it is distinct from a genuine feed
+    failure (``RuntimeError``) so a caller can tell "reduce your offset" from
+    "the server broke".
+    """
+
+
 class MT5DataLoader:
     """
     Connects to MT5 and fetches multi-timeframe OHLCV data.
@@ -105,28 +117,51 @@ class MT5DataLoader:
             self._connected = False
             logger.info("MT5 connection closed.")
 
-    def fetch_timeframe(self, tf_key: str, count: Optional[int] = None) -> pd.DataFrame:
+    def fetch_timeframe(self, tf_key: str, count: Optional[int] = None, start: int = 0) -> pd.DataFrame:
         """
         Fetch OHLCV dataframe for a specific timeframe.
+
+        ``start`` is MT5's ``start_pos``: the number of bars to skip back from the
+        newest bar before the window begins. ``start=0`` (the default) is the
+        latest window, so every existing caller is unchanged; ``start=n`` returns
+        the ``count`` bars ending ``n`` bars before the newest one, in ascending
+        order — the same "offset" semantic the agent's ``view.offset`` uses.
         """
         if not self._connected:
             if not self.connect():
                 raise ConnectionError("Unable to connect to MT5 terminal.")
 
+        start = int(start or 0)
         mt5_tf = TIMEFRAME_MAP.get(tf_key.upper())
         if mt5_tf is None:
             raise ValueError(f"Unknown timeframe '{tf_key}'. Valid options: {list(TIMEFRAME_MAP.keys())}")
         if isinstance(mt5_tf, str):
             # Synthesized timeframe (e.g. M45 = 3xM15, no native MT5 TF).
-            return self._resample(tf_key.upper(), count)
+            return self._resample(tf_key.upper(), count, start)
 
         bars_count = count or CANDLE_FETCH_COUNT.get(tf_key.upper(), 500)
         with _mt5_lock:
-            rates = mt5.copy_rates_from_pos(self.resolved_symbol, mt5_tf, 0, bars_count)
+            rates = mt5.copy_rates_from_pos(self.resolved_symbol, mt5_tf, start, bars_count)
 
         if rates is None or len(rates) == 0:
+            if count is not None:
+                # An explicit window that yields nothing means the offset (or the
+                # request) is past the feed's history — a fixable client error.
+                raise InsufficientHistory(
+                    f"requested {count} {tf_key.upper()} bar(s) at start={start}; "
+                    f"the feed returned none"
+                )
             err = mt5.last_error()
             raise RuntimeError(f"Failed to copy rates for {self.resolved_symbol} [{tf_key}]: {err}")
+
+        if count is not None and len(rates) < int(count):
+            # ``copy_rates_from_pos`` silently returns a short window when the
+            # request reaches past the oldest bar; surface it instead of letting
+            # the caller reason over the wrong window.
+            raise InsufficientHistory(
+                f"requested {count} {tf_key.upper()} bar(s) at start={start}; "
+                f"only {len(rates)} available"
+            )
 
         df = pd.DataFrame(rates)
         # MT5 rates are already timestamped in seconds, but we still normalize
@@ -139,19 +174,41 @@ class MT5DataLoader:
         df.rename(columns={"tick_volume": "volume"}, inplace=True)
         return df[["time", "open", "high", "low", "close", "volume"]]
 
-    def _resample(self, tf_key: str, count: Optional[int] = None) -> pd.DataFrame:
-        """Build a non-native timeframe from M15 (currently only M45)."""
+    def _resample(self, tf_key: str, count: Optional[int] = None, start: int = 0) -> pd.DataFrame:
+        """Build a non-native timeframe from M15 (currently only M45).
+
+        ``start`` shifts the synthesized window back by that many M45 bars: enough
+        M15 is fetched to cover ``start + count`` M45 bars, the series is
+        resampled, then the newest ``start`` M45 bars are sliced off. If the feed
+        does not hold that much history the window cannot be honoured, so this
+        raises rather than silently returning the wrong window.
+        """
         if tf_key != "M45":
             raise ValueError(f"No synthesis rule for '{tf_key}'.")
         per = 3  # 3 x M15 = M45
         want = count or CANDLE_FETCH_COUNT.get("M45", 500)
-        m15 = self.fetch_timeframe("M15", count=want * per + per)
+        start = int(start or 0)
+        m15 = self.fetch_timeframe("M15", count=(want + start) * per + per)
         m15 = m15.set_index(pd.to_datetime(m15["time"], unit="s", utc=True))
         agg = {"open": "first", "high": "max", "low": "min",
                "close": "last", "volume": "sum"}
         # Midnight-anchored 45-min grid (:00/:45/1:30/2:15/3:00...),
         # same grid TradingView uses. Bin label = bar OPEN time.
         bars = m15.resample("45min", origin="start_day").agg(agg).dropna()
+        if start:
+            if len(bars) <= start:
+                raise InsufficientHistory(
+                    f"not enough M15 history to synthesize {tf_key} at start={start}: "
+                    f"only {len(bars)} M45 bar(s) available"
+                )
+            bars = bars.iloc[: len(bars) - start]
+        if count is not None and len(bars) < want:
+            # An explicit window that cannot be filled (at start=0 *or* after the
+            # offset) is a fixable refusal, not a silent short series.
+            raise InsufficientHistory(
+                f"not enough M15 history to synthesize {want} {tf_key} bar(s) at "
+                f"start={start}: only {len(bars)} available after the offset"
+            )
         bars = bars.tail(want)
         out = pd.DataFrame({
             "time": (bars.index.astype("int64") // 10**9).astype(int),

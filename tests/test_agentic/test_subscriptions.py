@@ -646,7 +646,7 @@ def test_feed_bars_uses_its_own_provider_and_leaves_snapshot_alone():
 
     feed = Feed(provider=levels_provider, candles_provider=candles_provider)
     bars = feed.bars("XAUUSDm", "M15", bars=120)
-    assert calls == [{"symbol": "XAUUSDm", "timeframe": "M15", "bars": 120}]
+    assert calls == [{"symbol": "XAUUSDm", "timeframe": "M15", "bars": 120, "offset": 0}]
     assert len(bars) == 1
     assert feed.snapshot("XAUUSDm", "M15").levels == []
 

@@ -48,7 +48,8 @@ from config.settings import (
 )
 from agent_service import AgentConfig, AgentService
 from agentic.llm import DEFAULT_MODEL as AGENT_DEFAULT_MODEL
-from data.mt5_loader import MT5DataLoader
+from agentic.store import MAX_BARS, MAX_OFFSET, MIN_BARS
+from data.mt5_loader import InsufficientHistory, MT5DataLoader
 from indicators.ts_detector import TSDetector
 from indicators.crt_detector import CRTDetector
 from indicators.idm_detector import IDMDetector
@@ -256,15 +257,20 @@ def get_symbols():
 def get_candles(
     symbol: str = Query("XAUUSD"),
     timeframe: str = Query("D1"),
-    bars: int = Query(300, ge=30, le=1500)
+    bars: int = Query(300, ge=MIN_BARS, le=MAX_BARS),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ):
     """
     Fetch OHLCV candles formatted for TradingView Lightweight Charts:
     [{time: 1787529600, open: ..., high: ..., low: ..., close: ..., volume: ...}]
+
+    ``offset`` (bars) skips back from the newest bar before the window begins —
+    the same offset the agent's ``view.offset`` uses to render a past window.
+    ``offset=0`` is the latest window and is unchanged from before.
     """
     try:
         loader = get_loader(symbol)
-        df = loader.fetch_timeframe(timeframe.upper(), count=bars)
+        df = loader.fetch_timeframe(timeframe.upper(), count=bars, start=offset)
         
         candles = []
         for idx, row in df.iterrows():
@@ -281,8 +287,13 @@ def get_candles(
             "symbol": loader.resolved_symbol,
             "timeframe": timeframe.upper(),
             "count": len(candles),
+            "offset": offset,
             "candles": candles
         }
+    except InsufficientHistory as e:
+        # A window the feed does not hold is the client's request to fix, not a
+        # server bug: 422, not the blanket 500.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -291,7 +302,8 @@ def get_candles(
 def get_indicators(
     symbol: str = Query("XAUUSD"),
     timeframe: str = Query("D1"),
-    bars: int = Query(300, ge=30, le=1500),
+    bars: int = Query(300, ge=MIN_BARS, le=MAX_BARS),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     show_sr: bool = Query(True),
     freshness_filter: str = Query("all"),  # 'all', 'fresh_only', 'unfresh_only'
     show_ocl: bool = Query(True),
@@ -335,7 +347,9 @@ def get_indicators(
         return {
             "symbol": sym,
             "timeframe": timeframe.upper(),
+            "offset": offset,
             "current_price": 0.0,
+            "price_basis": "live" if offset == 0 else "window_end",
             "total_levels": 0,
             "levels": [],
             "disabled": True,
@@ -343,7 +357,7 @@ def get_indicators(
         }
     try:
         loader = get_loader(symbol)
-        df = loader.fetch_timeframe(timeframe.upper(), count=bars)
+        df = loader.fetch_timeframe(timeframe.upper(), count=bars, start=offset)
         
         current_price = float(df["close"].iloc[-1])
         times_unix = df["time"].values
@@ -797,11 +811,17 @@ def get_indicators(
         return {
             "symbol": loader.resolved_symbol,
             "timeframe": timeframe.upper(),
+            "offset": offset,
             "current_price": current_price,
             "atr": round(atr14, 3),
+            "price_basis": "live" if offset == 0 else "window_end",
             "total_levels": len(levels_data),
             "levels": levels_data
         }
+    except InsufficientHistory as e:
+        # A window the feed does not hold (offset past the oldest bar) is a
+        # fixable client error: 422, not the blanket 500.
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

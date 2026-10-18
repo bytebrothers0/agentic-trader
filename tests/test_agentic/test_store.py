@@ -324,6 +324,78 @@ def test_view_accepts_a_derived_timeframe_and_coerces_enums(tmp_path):
     assert view.panes == ["H2", "M15"]
 
 
+def test_view_offset_is_accepted_and_validated(tmp_path):
+    store = _store(tmp_path)
+    assert store.set_view(offset=25).offset == 25
+    assert store.set_view(offset=0).offset == 0
+    with pytest.raises(StoreError) as exc:
+        store.set_view(offset=-1)
+    assert exc.value.reason == "invalid_offset"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(offset="later")
+    assert exc.value.reason == "invalid_offset"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(offset=store_mod.MAX_OFFSET + 1)
+    assert exc.value.reason == "invalid_offset"
+
+
+def test_split_requires_exactly_two_panes(tmp_path):
+    store = _store(tmp_path)
+    with pytest.raises(StoreError) as exc:
+        store.set_view(layout="split")
+    assert exc.value.reason == "invalid_split"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(layout="split", panes=["H2"])
+    assert exc.value.reason == "invalid_split"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(layout="split", panes=["H2", "M15", "M5"])
+    assert exc.value.reason == "invalid_split"
+    # and a rejected split leaves the view untouched
+    assert store.data.view.layout.value == "single"
+
+    view = store.set_view(layout="split", panes=["H2", "M15"])
+    assert view.layout.value == "split"
+    assert view.panes == ["H2", "M15"]
+
+
+def test_view_syncs_timeframe_to_the_primary_pane(tmp_path):
+    store = _store(tmp_path)
+    # a bare panes change adopts panes[0] as the primary timeframe...
+    view = store.set_view(panes=["H1", "M5"])
+    assert view.timeframe == "H1"
+    # ...but an explicitly supplied timeframe that disagrees with panes[0] is
+    # refused, so the primary timeframe cannot silently diverge from the pane
+    # it names.
+    with pytest.raises(StoreError) as exc:
+        store.set_view(timeframe="D1", panes=["M15", "M5"])
+    assert exc.value.reason == "invalid_split"
+    assert store.data.view.timeframe == "H1"  # refused: the view is untouched
+
+
+def test_split_refuses_duplicate_timeframes(tmp_path):
+    store = _store(tmp_path)
+    with pytest.raises(StoreError) as exc:
+        store.set_view(layout="split", panes=["H2", "H2"])
+    assert exc.value.reason == "invalid_split"
+    assert "distinct" in str(exc.value)
+    assert store.data.view.layout.value == "single"
+
+
+def test_split_reasserts_the_primary_timeframe_on_every_mutation(tmp_path):
+    """A bare dial change must not desync ``timeframe`` from ``panes[0]``."""
+    store = _store(tmp_path)
+    store.set_view(layout="split", panes=["H2", "M15"])
+    assert store.data.view.timeframe == "H2"
+
+    # a bare timeframe change is overridden by the primary pane...
+    view = store.set_view(timeframe="M5")
+    assert view.timeframe == "H2"
+    assert view.panes == ["H2", "M15"]
+
+    # ...and an unrelated dial keeps the sync too.
+    assert store.set_view(bars=120).timeframe == "H2"
+
+
 def test_view_symbol_defaults_to_the_store_symbol(tmp_path):
     assert _store(tmp_path).data.view.symbol == "XAUUSDm"
 

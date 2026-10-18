@@ -76,6 +76,19 @@ FAMILY_QUERY: Dict[str, str] = {
     APEX: "show_apex",
 }
 
+
+class InsufficientHistory(ValueError):
+    """The provider does not hold the window that was requested.
+
+    The default (live) providers translate the indicator/candles endpoint's
+    HTTP ``422`` into this — the pure-core twin of
+    :class:`data.mt5_loader.InsufficientHistory`. It is a ``ValueError`` so the
+    tool layer can turn it into a fixable refusal (``reduce offset``) rather than
+    an ``internal_error``. Defined here — not imported — so :mod:`agentic.feed`
+    stays importable without ``server`` or MT5.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Status mapping
 # --------------------------------------------------------------------------- #
@@ -262,6 +275,11 @@ class FeedSnapshot(Serde):
     timeframe: str = ""
     current_price: float = 0.0
     atr: float = 0.0
+    #: Whether ``current_price`` is the live price or the last close of a past
+    #: window (``"live"`` / ``"window_end"``). Set from the payload's
+    #: ``price_basis``; the lookup echoes it so a historical price can never be
+    #: mistaken for live.
+    price_basis: str = "live"
     levels: List[LevelRecord] = field(default_factory=list)
 
     # -- queries -------------------------------------------------------------
@@ -418,6 +436,7 @@ def parse_payload(
         timeframe=tf,
         current_price=float(payload.get("current_price", 0.0) or 0.0),
         atr=float(payload.get("atr", 0.0) or 0.0),
+        price_basis=str(payload.get("price_basis", "live") or "live"),
         levels=levels,
     )
 
@@ -485,6 +504,7 @@ class Feed:
         *,
         families: Optional[Sequence[str]] = None,
         bars: int = 300,
+        offset: int = 0,
         **provider_kwargs: Any,
     ) -> FeedSnapshot:
         tf = validate_timeframe(str(timeframe))
@@ -493,6 +513,7 @@ class Feed:
             timeframe=tf,
             families=list(families) if families is not None else None,
             bars=int(bars),
+            offset=int(offset),
             **provider_kwargs,
         )
         if not isinstance(payload, Mapping):
@@ -506,13 +527,14 @@ class Feed:
         *,
         families: Optional[Sequence[str]] = None,
         bars: int = 300,
+        offset: int = 0,
         **provider_kwargs: Any,
     ) -> Dict[str, FeedSnapshot]:
         """One snapshot per timeframe, keyed by the validated timeframe."""
         out: Dict[str, FeedSnapshot] = {}
         for tf in timeframes:
             out[validate_timeframe(str(tf))] = self.snapshot(
-                symbol, tf, families=families, bars=bars, **provider_kwargs
+                symbol, tf, families=families, bars=bars, offset=offset, **provider_kwargs
             )
         return out
 
@@ -526,6 +548,7 @@ class Feed:
         timeframe: str,
         *,
         bars: int = 300,
+        offset: int = 0,
         **provider_kwargs: Any,
     ) -> Bars:
         """OHLC bars for ``(symbol, timeframe)`` — the evaluator's clock."""
@@ -534,6 +557,7 @@ class Feed:
             symbol=symbol,
             timeframe=tf,
             bars=int(bars),
+            offset=int(offset),
             **provider_kwargs,
         )
         if not isinstance(payload, Mapping):
@@ -566,16 +590,25 @@ def default_provider() -> Provider:
         timeframe: str,
         families: Optional[Sequence[str]] = None,
         bars: int = 300,
+        offset: int = 0,
         **_: Any,
     ) -> Mapping[str, Any]:
         from server import get_indicators  # lazy, deliberate (see module docstring)
 
-        return get_indicators(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            **_show_flags(families),
-        )
+        try:
+            return get_indicators(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars,
+                offset=offset,
+                **_show_flags(families),
+            )
+        except Exception as exc:  # noqa: BLE001 — translate the endpoint's 422 only
+            if getattr(exc, "status_code", None) == 422:
+                raise InsufficientHistory(
+                    getattr(exc, "detail", None) or "insufficient history"
+                ) from exc
+            raise
 
     return _provider
 
@@ -593,10 +626,18 @@ def default_candles_provider() -> Provider:
         symbol: str,
         timeframe: str,
         bars: int = 300,
+        offset: int = 0,
         **_: Any,
     ) -> Mapping[str, Any]:
         from server import get_candles  # lazy, deliberate (see module docstring)
 
-        return get_candles(symbol=symbol, timeframe=timeframe, bars=bars)
+        try:
+            return get_candles(symbol=symbol, timeframe=timeframe, bars=bars, offset=offset)
+        except Exception as exc:  # noqa: BLE001 — translate the endpoint's 422 only
+            if getattr(exc, "status_code", None) == 422:
+                raise InsufficientHistory(
+                    getattr(exc, "detail", None) or "insufficient history"
+                ) from exc
+            raise
 
     return _provider

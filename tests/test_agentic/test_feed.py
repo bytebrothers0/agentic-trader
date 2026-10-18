@@ -123,6 +123,15 @@ def test_parse_payload_reads_header_and_levels():
     assert len(snap.family("liquidity")) == 1
 
 
+def test_parse_payload_reads_the_price_basis():
+    live = _payload([], price=4190.0)
+    assert parse_payload(live).price_basis == "live"  # absent -> live
+    historical = _payload([], price=4185.0)
+    historical["price_basis"] = "window_end"
+    assert parse_payload(historical).price_basis == "window_end"
+    assert parse_payload(historical).to_dict()["price_basis"] == "window_end"
+
+
 def test_snapshot_round_trips_through_json():
     snap = parse_payload(_payload([CRT_LEVEL]))
     again = FeedSnapshot.from_dict(snap.to_dict())
@@ -174,7 +183,9 @@ def test_feed_calls_the_provider_with_the_wanted_arguments():
 
     feed = Feed(provider=provider)
     feed.snapshot("XAUUSDm", "H1", families=["crt", "bos"], bars=200)
-    assert calls == [{"symbol": "XAUUSDm", "timeframe": "H1", "families": ["crt", "bos"], "bars": 200}]
+    assert calls == [
+        {"symbol": "XAUUSDm", "timeframe": "H1", "families": ["crt", "bos"], "bars": 200, "offset": 0}
+    ]
 
 
 def test_feed_snapshots_returns_one_per_timeframe():
@@ -185,6 +196,30 @@ def test_feed_snapshots_returns_one_per_timeframe():
     snaps = feed.snapshots("XAUUSDm", ["D1", "W1", "MN1"])
     assert set(snaps) == {"D1", "W1", "MN1"}
     assert snaps["W1"].timeframe == "W1"
+
+
+def test_feed_forwards_offset_to_both_providers():
+    snap_calls, bar_calls = [], []
+
+    def provider(**kwargs):
+        snap_calls.append(kwargs)
+        return _payload([])
+
+    def candles_provider(**kwargs):
+        bar_calls.append(kwargs)
+        return {"symbol": kwargs["symbol"], "timeframe": kwargs["timeframe"], "candles": []}
+
+    feed = Feed(provider=provider, candles_provider=candles_provider)
+    feed.snapshot("XAUUSDm", "H1", bars=200, offset=42)
+    feed.bars("XAUUSDm", "H1", bars=200, offset=42)
+    feed.snapshots("XAUUSDm", ["H1"], bars=50, offset=7)
+
+    assert snap_calls[0]["offset"] == 42
+    assert bar_calls[0]["offset"] == 42
+    assert snap_calls[1]["offset"] == 7
+    # the default is still the live window
+    feed.snapshot("XAUUSDm", "H1")
+    assert snap_calls[2]["offset"] == 0
 
 
 def test_feed_rejects_a_non_mapping_provider_result():

@@ -43,13 +43,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import ConditionError
-from agentic.feed import Feed, FeedSnapshot, LevelRecord
+from agentic.feed import Feed, FeedSnapshot, InsufficientHistory, LevelRecord
 from agentic.lookup import level_lookup
-from agentic.models import Serde, Subscription, SubscriptionKind
+from agentic.models import Layout, Serde, Subscription, SubscriptionKind
 from agentic.prompts import subscription_summary
-from agentic.renderer import RenderResult, Renderer
+from agentic.renderer import Pane, RenderResult, Renderer
 from agentic.store import (
+    MAX_BARS,
+    MAX_OFFSET,
     MAX_RENDERS_PER_TURN,
+    MIN_BARS,
     ContextStore,
     StoreError,
 )
@@ -74,7 +77,9 @@ TOOL_NAMES: Tuple[str, ...] = (
 
 TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
-                "layout/panes, tags, annotations. Unknown dials are refused.",
+                "offset (re-render a past window), layout/panes (set layout=split with "
+                "exactly 2 panes for two stacked timeframes), tags, annotations. Unknown "
+                "dials are refused.",
     "render": "Re-render the store's view + pins after a change; returns image_path, "
               "render_id and manifest.",
     "level_lookup": "Exact numbers for a tag you saw, a level_key from a previous turn, a "
@@ -107,7 +112,8 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "timeframe": {"type": "string", "description": "e.g. M15, H2, D1"},
             "chart_type": {"type": "string", "enum": ["candles", "line"]},
             "families": {"type": "array", "items": {"type": "string"}},
-            "bars": {"type": "integer", "minimum": 20, "maximum": 5000},
+            "bars": {"type": "integer", "minimum": MIN_BARS, "maximum": MAX_BARS},
+            "offset": {"type": "integer", "minimum": 0, "maximum": MAX_OFFSET},
             "layout": {"type": "string", "enum": ["single", "split"]},
             "panes": {"type": "array", "items": {"type": "string"}},
             "show_tags": {"type": "boolean"},
@@ -284,30 +290,47 @@ def _resolve_pin(snapshot: FeedSnapshot, sub: Subscription) -> Optional[LevelRec
     return min(candidates, key=lambda level: abs(level.price - float(price)))
 
 
+def _cache_key(timeframe: str, bars: int, offset: int) -> Tuple[str, int, int]:
+    """The per-turn snapshot cache key.
+
+    Keyed by ``(timeframe, bars, offset)`` so a changed dial — a new timeframe, a
+    different lookback, or a shifted window — can never serve a stale snapshot.
+    """
+    return (str(timeframe), int(bars), int(offset))
+
+
 def resolve_pins(
     store: ContextStore,
     feed: Feed,
     snapshot: FeedSnapshot,
     *,
-    cache: Optional[Dict[str, FeedSnapshot]] = None,
+    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]] = None,
 ) -> List[LevelRecord]:
     """Every open pin resolved to a :class:`LevelRecord` for the render.
 
-    A pin from another timeframe is fetched from the feed (once per timeframe,
-    via ``cache``) and passed to the renderer as a pin, which is what makes the
-    2H level survive the drop to M15.
+    A pin from another timeframe is fetched from the feed (once per timeframe at
+    the view's ``bars``/``offset``, via ``cache``) and passed to the renderer as a
+    pin, which is what makes the 2H level survive the drop to M15.
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
+    families = list(view.families) or None
+    bars_count = int(view.bars)
+    offset = int(view.offset or 0)
     cache = cache if cache is not None else {}
     resolved: List[LevelRecord] = []
     for sub in store.open_subscriptions(SubscriptionKind.PIN):
         timeframe = str((sub.params or {}).get("timeframe") or view.timeframe)
-        if timeframe not in cache:
-            cache[timeframe] = feed.snapshot(
-                symbol, timeframe, families=list(view.families) or None, bars=int(view.bars)
+        key = _cache_key(timeframe, bars_count, offset)
+        if key not in cache:
+            cache[key] = feed.snapshot(
+                symbol,
+                timeframe,
+                families=families,
+                bars=bars_count,
+                offset=offset,
             )
-        level = _resolve_pin(cache[timeframe], sub)
+        level = _resolve_pin(cache[key], sub)
         if level is not None:
             resolved.append(level)
     return resolved
@@ -318,16 +341,22 @@ def render_current(
     feed: Feed,
     renderer: Renderer,
     *,
-    cache: Optional[Dict[str, FeedSnapshot]] = None,
+    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]] = None,
 ) -> RenderResult:
     """Render the store's view + pins to an image and its tag manifest.
 
-    Fetches the snapshot and bars for the view's ``(symbol, timeframe)``, resolves
-    every open pin to a :class:`LevelRecord` (its ``params['timeframe']`` else the
-    view's timeframe) and passes them as ``pins``; the thesis's
-    ``levels_of_interest`` are passed as ``thesis_level_keys`` so the manifest can
-    flag them. The view's ``families`` are requested from the feed so the image
-    shows exactly what was asked for.
+    Fetches the snapshot and bars for the view's ``(symbol, timeframe)`` at the
+    view's ``bars``/``offset``, resolves every open pin to a :class:`LevelRecord`
+    (its ``params['timeframe']`` else the view's timeframe) and passes them as
+    ``pins``; the thesis's ``levels_of_interest`` are passed as
+    ``thesis_level_keys`` so the manifest can flag them. The view's ``families``
+    are requested from the feed so the image shows exactly what was asked for.
+
+    In **split** mode (``layout="split"`` with a two-timeframe ``panes``) a
+    ``(snapshot, bars)`` pair is fetched for *each* pane timeframe at the same
+    ``bars``/``offset`` and handed to the renderer's pane path; pins are resolved
+    onto the pane whose timeframe they name (a pin whose timeframe is not a pane
+    is resolved against its own timeframe and attached to the primary pane).
 
     ``cache`` (the registry's per-turn snapshot store) is **seeded** with the view
     snapshot this render fetched and shared with :func:`resolve_pins`, so one
@@ -336,19 +365,106 @@ def render_current(
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
-    timeframe = view.timeframe
     families = list(view.families) or None
     bars_count = int(view.bars)
-    snapshot = feed.snapshot(symbol, timeframe, families=families, bars=bars_count)
-    bars = feed.bars(symbol, timeframe, bars=bars_count)
+    offset = int(view.offset or 0)
+    thesis = store.data.thesis.levels_of_interest
+    pane_timeframes = [str(tf) for tf in (view.panes or [])]
+    if view.layout is Layout.SPLIT and len(pane_timeframes) > 1:
+        return _render_split(
+            store,
+            feed,
+            renderer,
+            symbol=symbol,
+            families=families,
+            bars=bars_count,
+            offset=offset,
+            pane_timeframes=pane_timeframes,
+            thesis=thesis,
+            cache=cache,
+        )
+
+    timeframe = view.timeframe
+    snapshot = feed.snapshot(symbol, timeframe, families=families, bars=bars_count, offset=offset)
+    bars = feed.bars(symbol, timeframe, bars=bars_count, offset=offset)
     if cache is not None:
-        cache[timeframe] = snapshot
+        cache[_cache_key(timeframe, bars_count, offset)] = snapshot
     pins = resolve_pins(store, feed, snapshot, cache=cache)
     return renderer.render(
         snapshot,
         bars,
         pins=pins,
-        thesis_level_keys=store.data.thesis.levels_of_interest,
+        thesis_level_keys=thesis,
+        offset=offset,
+    )
+
+
+def _fetch_snapshot(
+    feed: Feed,
+    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]],
+    symbol: str,
+    timeframe: str,
+    families: Optional[List[str]],
+    bars: int,
+    offset: int,
+) -> FeedSnapshot:
+    """A snapshot for ``(timeframe, bars, offset)``, cached within the turn."""
+    key = _cache_key(timeframe, bars, offset)
+    if cache is not None and key in cache:
+        return cache[key]
+    snapshot = feed.snapshot(symbol, timeframe, families=families, bars=bars, offset=offset)
+    if cache is not None:
+        cache[key] = snapshot
+    return snapshot
+
+
+def _render_split(
+    store: ContextStore,
+    feed: Feed,
+    renderer: Renderer,
+    *,
+    symbol: str,
+    families: Optional[List[str]],
+    bars: int,
+    offset: int,
+    pane_timeframes: List[str],
+    thesis: Any,
+    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]],
+) -> RenderResult:
+    """The two-pane perception: one snapshot/bars pair per pane, pins per pane."""
+    view = store.data.view
+    pane_snapshots = {
+        tf: _fetch_snapshot(feed, cache, symbol, tf, families, bars, offset)
+        for tf in pane_timeframes
+    }
+    pane_bars = {
+        tf: feed.bars(symbol, tf, bars=bars, offset=offset) for tf in pane_timeframes
+    }
+    primary_tf = pane_timeframes[0]
+    pins_by_tf: Dict[str, List[LevelRecord]] = {tf: [] for tf in pane_timeframes}
+    for sub in store.open_subscriptions(SubscriptionKind.PIN):
+        pin_tf = str((sub.params or {}).get("timeframe") or view.timeframe)
+        target = pin_tf if pin_tf in pins_by_tf else primary_tf
+        if pin_tf in pane_snapshots:
+            source = pane_snapshots[pin_tf]
+        else:
+            source = _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset)
+        level = _resolve_pin(source, sub)
+        if level is not None:
+            pins_by_tf[target].append(level)
+
+    pane_objs = [
+        Pane(pane_snapshots[tf], pane_bars[tf], pins_by_tf[tf]) for tf in pane_timeframes
+    ]
+    primary = pane_objs[0]
+    return renderer.render(
+        primary.snapshot,
+        primary.bars,
+        pins=list(pins_by_tf[primary_tf]),
+        thesis_level_keys=thesis,
+        panes=pane_objs,
+        layout="split",
+        offset=offset,
     )
 
 
@@ -385,7 +501,7 @@ class ToolRegistry:
         self._notes: List[Dict[str, Any]] = []
         self._renders = 0
         self._render_refusals = 0
-        self._snapshots: Dict[str, FeedSnapshot] = {}
+        self._snapshots: Dict[Tuple[str, int, int], FeedSnapshot] = {}
         #: The most recent render (initial or tool), for the loop to show the model.
         self.last_result: Optional[RenderResult] = None
 
@@ -426,6 +542,15 @@ class ToolRegistry:
             return ToolResult(
                 call_id=call.call_id, name=name, ok=False, error=f"{reason}: {exc}"
             )
+        except InsufficientHistory:
+            # A feed window the broker does not hold is the model's request to fix,
+            # not a server bug: name it so it can reduce the offset.
+            return ToolResult(
+                call_id=call.call_id,
+                name=name,
+                ok=False,
+                error="insufficient_history: requested offset exceeds available bars; reduce offset",
+            )
         except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
             # A label distinct from a store reason: an internal bug must never be
             # mistaken for the model asking badly.
@@ -447,6 +572,15 @@ class ToolRegistry:
     def notes(self) -> List[Dict[str, Any]]:
         """Notes added this turn, oldest first (a copy)."""
         return [dict(note) for note in self._notes]
+
+    def reset_snapshots(self) -> None:
+        """Drop every snapshot cached for the turn's old view dials.
+
+        Called when the view changes (``set_view``) and by the loop when it
+        degrades a bad offset to the live edge, so a lookup never reads a snapshot
+        fetched for a different ``(timeframe, bars, offset)``.
+        """
+        self._snapshots.clear()
 
     # ------------------------------------------------------------------ render
 
@@ -472,16 +606,32 @@ class ToolRegistry:
         self.last_result = result
         return result
 
-    def _snapshot_for_view(self) -> FeedSnapshot:
-        """A snapshot for the current view, cached within the turn."""
+    def _snapshot_for_timeframe(self, timeframe: str) -> FeedSnapshot:
+        """A snapshot for one timeframe of the current view, cached within the turn.
+
+        The cache key is ``(timeframe, bars, offset)``, matching the render path,
+        so a lookup after a ``set_view`` never reads a snapshot fetched for the
+        old dials.
+        """
         view = self._store.data.view
         symbol = view.symbol or self._store.data.symbol
-        key = view.timeframe
+        bars = int(view.bars)
+        offset = int(view.offset or 0)
+        tf = str(timeframe)
+        key = _cache_key(tf, bars, offset)
         if key not in self._snapshots:
             self._snapshots[key] = self._feed.snapshot(
-                symbol, key, families=list(view.families) or None, bars=int(view.bars)
+                symbol,
+                tf,
+                families=list(view.families) or None,
+                bars=bars,
+                offset=offset,
             )
         return self._snapshots[key]
+
+    def _snapshot_for_view(self) -> FeedSnapshot:
+        """A snapshot for the view's primary timeframe, cached within the turn."""
+        return self._snapshot_for_timeframe(self._store.data.view.timeframe)
 
     # ------------------------------------------------------------------ dispatch
 
@@ -497,7 +647,7 @@ class ToolRegistry:
         view = self._store.set_view(**args)
         # The view changed, so any snapshot cached for the old dials is stale;
         # the next lookup must re-read the feed.
-        self._snapshots.clear()
+        self.reset_snapshots()
         return view.to_dict()
 
     def _tool_render(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -509,13 +659,21 @@ class ToolRegistry:
         }
 
     def _tool_level_lookup(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        snapshot = self._snapshot_for_view()
-        tags = self.last_result.manifest.get("tags") if self.last_result else None
+        view = self._store.data.view
+        if view.layout is Layout.SPLIT and len(view.panes) > 1:
+            # Split mode: search *every* pane, not just the primary, so a
+            # bottom-pane level resolves by family / near_price / level_key too.
+            snapshots = [self._snapshot_for_timeframe(tf) for tf in view.panes]
+        else:
+            snapshots = [self._snapshot_for_view()]
+        manifest = self.last_result.manifest if self.last_result else {}
         result = level_lookup(
-            snapshot,
+            snapshots[0],
             args,
-            tags=tags,
+            tags=manifest.get("tags"),
             thesis_level_keys=self._store.data.thesis.levels_of_interest,
+            snapshots=snapshots if len(snapshots) > 1 else None,
+            panes=manifest.get("panes"),
         )
         return result.to_dict()
 

@@ -20,8 +20,10 @@ from _fixtures import (
     FeedStub,
     at,
     bars_rows,
+    candles_payload,
     level as _level,
     snapshot as _snapshot,
+    snapshot_payload,
     ts,
 )
 from agentic import prompts
@@ -32,6 +34,7 @@ from agentic.agent_loop import (
     AgentRequest,
     ScriptedAgent,
 )
+from agentic.feed import Feed, InsufficientHistory
 from agentic.models import SubscriptionKind, Trigger
 from agentic.renderer import Renderer
 from agentic.store import (
@@ -613,6 +616,165 @@ def test_the_real_renderer_marks_the_pin_and_the_thesis_level(tmp_path):
     assert entry["origin"] == "pinned"
     assert entry["is_thesis_level"] is True
     assert entry["level_key"] == key
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6d: offset and split through the whole tool surface
+# --------------------------------------------------------------------------- #
+
+def test_set_view_offset_flows_into_the_rendered_manifest(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(), _png_renderer(tmp_path, clock), clock=clock)
+
+    assert registry.execute(ToolCall(name="set_view", arguments={"offset": 17})).ok
+    result = registry.execute(ToolCall(name="render"))
+    assert result.ok
+    manifest = result.result["manifest"]
+    assert manifest["window"]["offset"] == 17
+    assert manifest["window"]["from"] and manifest["window"]["to"]
+
+
+def test_split_view_renders_two_panes_through_the_registry(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(), _png_renderer(tmp_path, clock), clock=clock)
+
+    ok = registry.execute(
+        ToolCall(name="set_view", arguments={"layout": "split", "panes": ["H2", "M15"]})
+    )
+    assert ok.ok
+    # the primary pane drives the timeframe everything else keys off
+    assert store.data.view.timeframe == "H2"
+
+    result = registry.execute(ToolCall(name="render"))
+    assert result.ok
+    manifest = result.result["manifest"]
+    assert [pane["timeframe"] for pane in manifest["panes"]] == ["H2", "M15"]
+    # the M15 pane's fvg is drawn on pane 2 with a pane-prefixed, globally-unique tag
+    assert any(tag.startswith("P2:") for tag in manifest["tags"])
+
+
+def _split_feed():
+    """A feed whose two panes carry *different* price bases (H2 4150, M15 4155)."""
+    h2 = [_level("crt", type="BEARISH (CLASSIC)", price=4185.0, time=ts(at(4)), end_kind="active")]
+    m15 = [
+        _level("fvg", type="FVG (BULLISH)", price=4155.0, time=ts(at(6, 30)),
+               end_kind="active", box_top=4158.0, box_bottom=4152.0)
+    ]
+    levels = {"H2": h2, "M15": m15}
+    prices = {"H2": 4150.0, "M15": 4155.0}
+    counts = {"H2": 20, "M15": 40}
+
+    def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
+        return snapshot_payload(
+            levels.get(timeframe, []), symbol=symbol, timeframe=timeframe,
+            price=prices.get(timeframe, 4150.0), atr=5.0,
+        )
+
+    def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
+        return candles_payload(
+            bars_rows(counts.get(timeframe, 20)), symbol=symbol, timeframe=timeframe
+        )
+
+    return Feed(provider=provider, candles_provider=candles_provider)
+
+
+def test_level_lookup_measures_a_p2_tag_against_pane_two(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(layout="split", panes=["H2", "M15"])
+    registry = ToolRegistry(store, _split_feed(), _png_renderer(tmp_path, clock), clock=clock)
+
+    registry.initial_render()
+    tag = next(t for t in registry.last_result.manifest["tags"] if t.startswith("P2:"))
+
+    result = registry.execute(ToolCall(name="level_lookup", arguments={"tag": tag})).result
+
+    match = result["matches"][0]
+    assert match["family"] == "fvg"
+    # pane 2's basis is 4155, so the fvg at 4155 is at distance 0 — measured
+    # against the primary pane's 4150 it would read 5.0.
+    assert result["current_price"] == approx(4155.0)
+    assert match["distance_points"] == approx(0.0)
+
+
+def test_level_lookup_searches_every_pane_by_family_and_near_price(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(layout="split", panes=["H2", "M15"])
+    registry = ToolRegistry(store, _split_feed(), _png_renderer(tmp_path, clock), clock=clock)
+
+    registry.initial_render()
+
+    by_family = registry.execute(
+        ToolCall(name="level_lookup", arguments={"family": "fvg"})
+    ).result
+    # the fvg lives only on pane 2; a primary-only search would return nothing.
+    assert [m["family"] for m in by_family["matches"]] == ["fvg"]
+    assert by_family["matches"][0]["timeframe"] == "M15"
+    # the header is still the primary pane's basis; the match is pane 2's.
+    assert by_family["current_price"] == approx(4150.0)
+    assert by_family["matches"][0]["distance_points"] == approx(0.0)
+
+    by_near = registry.execute(
+        ToolCall(name="level_lookup", arguments={"near_price": 4156.0, "radius": 3.0})
+    ).result
+    assert [m["family"] for m in by_near["matches"]] == ["fvg"]
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6d: a persisted bad offset degrades instead of bricking the loop (C1)
+# --------------------------------------------------------------------------- #
+
+def _historyless_feed(*, fail_when):
+    """A feed that raises ``InsufficientHistory`` for offsets matching ``fail_when``."""
+
+    def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
+        if fail_when(int(offset)):
+            raise InsufficientHistory(f"offset {offset} is past the feed's history")
+        return snapshot_payload([_fvg_level()], symbol=symbol, timeframe=timeframe,
+                                price=4155.0, atr=5.0)
+
+    def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
+        if fail_when(int(offset)):
+            raise InsufficientHistory(f"offset {offset} is past the feed's history")
+        return candles_payload(bars_rows(), symbol=symbol, timeframe=timeframe)
+
+    return Feed(provider=provider, candles_provider=candles_provider)
+
+
+def test_a_persisted_offset_past_history_degrades_to_the_live_edge(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(offset=999)  # persisted: the feed holds nowhere near this
+    feed = _historyless_feed(fail_when=lambda offset: offset > 0)
+    agent = ScriptedAgent([AgentReply(output={"reasoning": "recovered"})])
+    loop = AgentLoop(store, feed, _png_renderer(tmp_path, clock), agent, clock=clock)
+
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.ok is True
+    assert store.data.view.offset == 0      # degraded to the live edge, so the view is usable
+    assert outcome.image_path               # the retry rendered an image
+    assert "render_error" not in outcome.output
+    assert len(store.data.turns) == 1
+
+
+def test_a_render_failure_is_recorded_and_the_turn_still_completes(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(offset=5)
+    feed = _historyless_feed(fail_when=lambda offset: True)  # even the live edge fails
+    agent = ScriptedAgent([AgentReply(output={"reasoning": "no image, carry on"})])
+    loop = AgentLoop(store, feed, _png_renderer(tmp_path, clock), agent, clock=clock)
+
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.ok is True
+    assert outcome.image_path == ""
+    assert outcome.output["render_error"].startswith("InsufficientHistory")
+    assert store.data.turns[0].output["render_error"].startswith("InsufficientHistory")
 
 
 # --------------------------------------------------------------------------- #

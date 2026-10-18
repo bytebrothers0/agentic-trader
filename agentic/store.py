@@ -64,6 +64,12 @@ MAX_SPEND_PER_DAY_USD = 5.0
 
 MIN_BARS = 20
 MAX_BARS = 5000
+#: How far back (in bars, per timeframe) the agent may shift its window. A cap
+#: exists for the same reason the bar cap does: an unbounded lookback asks the
+#: provider for history it may not hold and renders a window nobody asked for.
+#: 5000 bars matches ``MAX_BARS`` — you can move a full window behind the newest
+#: bar, but not forever.
+MAX_OFFSET = 5000
 
 DEFAULT_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 
@@ -272,6 +278,37 @@ class ContextStore:
             changes["bars"] = bars
         if "show_tags" in changes:
             changes["show_tags"] = bool(changes["show_tags"])
+        if "offset" in changes:
+            try:
+                offset = int(changes["offset"])
+            except (TypeError, ValueError):
+                raise StoreError("invalid_offset", f"offset must be an integer, got {changes['offset']!r}")
+            if not 0 <= offset <= MAX_OFFSET:
+                raise StoreError("invalid_offset", f"offset must be between 0 and {MAX_OFFSET}")
+            changes["offset"] = offset
+
+        # A split render is capped at exactly two **distinct** timeframes in v1, and
+        # the primary pane (``panes[0]``) is what ``level_lookup``, pins and
+        # subscriptions treat as *the* timeframe. So ``view.timeframe`` is kept in
+        # sync to it when panes are supplied, and re-asserted on *every* split
+        # mutation — a bare ``set_view(timeframe=...)`` while split must not desync
+        # the view from ``panes[0]``.
+        panes_value = changes.get("panes") if "panes" in changes else None
+        if panes_value:
+            if "timeframe" in changes and changes["timeframe"] != panes_value[0]:
+                raise StoreError(
+                    "invalid_split",
+                    "timeframe and panes disagree; panes[0] is the primary timeframe",
+                )
+            changes["timeframe"] = panes_value[0]
+        effective_panes = changes.get("panes", self.data.view.panes)
+        effective_layout = changes.get("layout", self.data.view.layout)
+        if effective_layout is Layout.SPLIT:
+            if len(effective_panes) != 2:
+                raise StoreError("invalid_split", "split needs exactly 2 panes")
+            if effective_panes[0] == effective_panes[1]:
+                raise StoreError("invalid_split", "split needs two distinct timeframes")
+            changes["timeframe"] = effective_panes[0]
 
         for key, value in changes.items():
             setattr(self.data.view, key, value)

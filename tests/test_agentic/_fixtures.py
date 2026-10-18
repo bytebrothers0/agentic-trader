@@ -148,6 +148,10 @@ class FeedStub:
         self.candles = {}
         self.snapshot_calls = []
         self.bars_calls = []
+        #: The ``offset`` each provider call was made with (parallel to the call
+        #: lists above), so an offset test can prove the slice was requested.
+        self.snapshot_offsets = []
+        self.bars_offsets = []
 
     def set_levels(self, levels, timeframe="M15"):
         self.levels[timeframe] = list(levels)
@@ -158,8 +162,9 @@ class FeedStub:
         return self
 
     def build(self) -> Feed:
-        def provider(*, symbol, timeframe, families=None, bars=300, **kwargs):
+        def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
             self.snapshot_calls.append((symbol, timeframe))
+            self.snapshot_offsets.append(int(offset))
             return snapshot_payload(
                 self.levels.get(timeframe, []),
                 symbol=symbol,
@@ -168,11 +173,15 @@ class FeedStub:
                 atr=self.atr,
             )
 
-        def candles_provider(*, symbol, timeframe, bars=300, **kwargs):
+        def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
             self.bars_calls.append((symbol, timeframe))
-            return candles_payload(
-                self.candles.get(timeframe, []), symbol=symbol, timeframe=timeframe
-            )
+            self.bars_offsets.append(int(offset))
+            rows = self.candles.get(timeframe, [])
+            if offset:
+                # A past window skips the newest ``offset`` bars, exactly like the
+                # live endpoint's ``offset`` dial.
+                rows = rows[: max(0, len(rows) - int(offset))]
+            return candles_payload(rows, symbol=symbol, timeframe=timeframe)
 
         return Feed(provider=provider, candles_provider=candles_provider)
 
@@ -211,13 +220,17 @@ class FakeRenderer:
         self.height = height
         self.calls = []
 
-    def render(self, snapshot, bars, *, pins=(), thesis_level_keys=(), out_dir=None):
+    def render(self, snapshot, bars, *, pins=(), thesis_level_keys=(), out_dir=None,
+               panes=(), layout="single", offset=0):
         self.calls.append(
             {
                 "snapshot": snapshot,
                 "bars": bars,
                 "pins": list(pins),
                 "thesis_level_keys": list(thesis_level_keys),
+                "panes": list(panes),
+                "layout": layout,
+                "offset": offset,
             }
         )
         target = str(out_dir or self.out_dir)

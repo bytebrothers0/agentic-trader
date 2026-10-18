@@ -54,7 +54,7 @@ from agentic import prompts
 from agentic._time import as_aware, new_id
 from agentic.feed import Feed
 from agentic.models import Serde, Trigger
-from agentic.renderer import Renderer
+from agentic.renderer import RenderResult, Renderer
 from agentic.store import (
     MAX_TOOL_CALLS_PER_TURN,
     ContextStore,
@@ -378,6 +378,34 @@ class AgentLoop:
             retroactive=retroactive,
         )
 
+    # ------------------------------------------------------------------ step 3
+
+    def _initial_render(
+        self, registry: ToolRegistry
+    ) -> Tuple[Optional[RenderResult], str]:
+        """Step 3's first render, hardened so a persisted bad view cannot brick the loop.
+
+        A view whose ``offset`` exceeds the feed's history makes every render
+        raise. Because ``set_view`` has already persisted that offset, leaving it
+        in place would refuse *every* future turn and the model would never get a
+        chance to ``set_view(offset=0)``. So a feed failure **degrades instead of
+        propagating**: retry once at the live edge (``offset=0``, same
+        timeframe/families), then — if that also fails — return ``(None, reason)``
+        so the turn still completes with the refusal recorded on it.
+        """
+        try:
+            return registry.initial_render(), ""
+        except Exception as exc:  # noqa: BLE001 — a feed failure must never escape
+            reason = f"{type(exc).__name__}: {_truncate(exc)}"
+        if int(self.store.data.view.offset or 0) <= 0:
+            return None, reason
+        try:
+            self.store.set_view(offset=0)
+            registry.reset_snapshots()
+            return registry.initial_render(), ""
+        except Exception as exc:  # noqa: BLE001 — a second failure is still a refusal, not a crash
+            return None, f"{type(exc).__name__}: {_truncate(exc)}"
+
     # ------------------------------------------------------------------ step 4
 
     def _tool_phase(self, registry: ToolRegistry, request: AgentRequest) -> _ToolPhase:
@@ -481,7 +509,7 @@ class AgentLoop:
         registry = ToolRegistry(
             self.store, self.feed, self.renderer, clock=self._clock, now=now
         )
-        initial = registry.initial_render()
+        initial, render_error = self._initial_render(registry)
 
         request = AgentRequest(
             turn_id=new_id("turn"),
@@ -489,8 +517,8 @@ class AgentLoop:
             trigger_detail=detail,
             system_prompt=prompts.build_system_prompt(),
             briefing=briefing,
-            image_path=initial.image_path,
-            manifest=initial.manifest,
+            image_path=initial.image_path if initial else "",
+            manifest=initial.manifest if initial else {},
             tools=registry.schemas(),
             tool_results=[],
         )
@@ -510,6 +538,8 @@ class AgentLoop:
             if not (phase.tokens or phase.cost):
                 return TurnOutcome(trigger=trigger, ok=False, reason=phase.error)
             output = {"error": phase.error, "partial": True}
+            if render_error:
+                output["render_error"] = render_error
             final = registry.last_result or initial
             record = self.store.record_turn(
                 trigger,
@@ -530,8 +560,8 @@ class AgentLoop:
                 renders=registry.renders_used(),
                 tool_calls=len(phase.log),
                 output=output,
-                image_path=final.image_path,
-                manifest=final.manifest,
+                image_path=final.image_path if final else "",
+                manifest=final.manifest if final else {},
             )
 
         # 5. Output — applying it must never raise out of run_turn. The registry's
@@ -540,6 +570,10 @@ class AgentLoop:
         output["notes"] = registry.notes() + [
             _normalise_note(note, now) for note in (output.get("notes") or [])
         ]
+        if render_error:
+            # The initial render degraded (e.g. a persisted offset past history):
+            # record it on the turn so the model knows why there was no image.
+            output["render_error"] = render_error
         output, apply_errors = _apply_output(self.store, output, now)
         if apply_errors:
             output["apply_errors"] = apply_errors
@@ -570,6 +604,6 @@ class AgentLoop:
             renders=registry.renders_used(),
             tool_calls=len(phase.log),
             output=output,
-            image_path=final.image_path,
-            manifest=final.manifest,
+            image_path=final.image_path if final else "",
+            manifest=final.manifest if final else {},
         )
