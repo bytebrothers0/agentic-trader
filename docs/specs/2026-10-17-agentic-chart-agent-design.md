@@ -1,7 +1,7 @@
 # Agentic Chart Agent — Self-Directed Perception, Pins and Watches
 
 Date: 2026-10-17
-Status: Phases 0–6 built and wired 2026-10-17; phase 6c (live-mode wiring against the shared Groq provider, 2026-10-18) is in place and confirmed against the live API up to the account tier's token ceiling; Phase 7 (execution) deferred. The pure core, the loop, the renderer, the LLM client, the runtime service and the web panel are all in place.
+Status: Phases 0–6 built and wired 2026-10-17; phase 6c (live-mode wiring against the shared provider, 2026-10-18) is in place and was confirmed against the live API up to the Groq on-demand tier's per-request token ceiling — which the **keyless local provider** (`LLM_PROVIDER=local`) now lifts; phase 6d added the `offset` dial and a real two-pane `split`. Phase 7 (execution) deferred. The pure core, the loop, the renderer, the LLM client, the runtime service and the web panel are all in place.
 Module: `agentic/` (new) — the pure, LLM-free substrate (`models`, `conditions`, `store`, `crt_strategy`, `subscriptions`, `watchdog`, `lookup`, `tools`, `prompts`, `agent_loop`, `_time`, `llm`), the two impure edges (`feed.py`, the single lazy read-only bridge; `renderer.py`, which loads the vision stack inside its functions), and the repo-root runtime `agent_service.py`. `GET /api/agent/*` wires it into the running system.
 
 ## Problem
@@ -581,6 +581,8 @@ client and the wiring followed in phases 3–6.
 - **Lookup spans the panes.** In split mode `level_lookup` (via `_tool_level_lookup`) passes **every** pane's `snapshot` plus the manifest `panes` array, so `family`/`near_price`/`level_key` search all panes (not just the primary) and each match is measured against **its own pane's** `current_price`/`atr`/`price_basis`; a `tag` query maps `P{n}:` back to pane *n* via `_pane_index_for_tag`. The header is the primary pane's basis (or the tag's pane for a tag query).
 - **Purity held.** Only the two impure files were touched outside the pure core — `data/mt5_loader.py` and `server.py`; the pure module set now imports `InsufficientHistory` only from within `agentic` (defined in `feed.py`, never imported from the loader) and the store root stays exactly 11 fields; `ai_agent/` was untouched.
 
+**Provider — the keyless local endpoint (`LLM_PROVIDER=local`).** The shared provider is not limited to a hosted key: `ai_agent.config.resolve_provider()` accepts `LLM_PROVIDER=local` and returns `LOCAL_BASE_URL`/`LOCAL_MODEL` (defaults `http://localhost:8080/v1` and `deepseek-v4.1-flash-free`) with an **empty key name**, which means *keyless* — the client sends no `Authorization` header and the endpoint injects its own upstream credential (e.g. an opencode-proxy on localhost; one that is itself unconfigured answers its own `401`). The agent inherits it like any other provider, so `AGENT_MODE="live"` with all three `AGENT_*` connection settings blank now talks to the local model with no secret. Two supporting changes make a blank key name first-class: `server._resolve_agent_connection` requires only `model` and `api_base` to be non-empty (a blank key name is a valid, keyless configuration, not an incomplete one), and `agent_service._request_headers`/`make_transport` treat it as keyless — no key is read, none is required, and no bare `"Bearer "` header is sent. `make_transport` also tolerates a full `…/v1/chat/completions` value for `api_base` (the tail is stripped, so the path is never doubled). `deepseek-v4.1-flash-free` is added to `agentic.llm.PRICES` as a *known free* model, `(0.0, 0.0)` — the one deliberate exception to "an unknown model is never free", which is unchanged; if that endpoint is ever pointed at a paid model, that line must change. The legacy `/api/ai` prose flow (`agent_loop._llm_creds` / `ts_validator._creds`) is untouched and keeps its own Groq/xAI selection, so setting `LLM_PROVIDER=local` routes the **agentic agent** to the local endpoint without disturbing it. The shipped `AGENT_MODE` default is now `"live"` against this provider (a zero-spend `"mock"` run is one line away); `AGENT_ENABLED` still gates autostart, so nothing watches on its own.
+
 **Invariants now enforced by tests**
 
 - **Purity** — `agentic/*` imports only stdlib + `agentic.*`; `feed.py` is the single lazy bridge; `renderer.py` loads `matplotlib`/`PIL` inside functions. `tests/test_agentic/test_standalone.py` pins this with an AST check (`PURE_MODULES`/`BRIDGE_MODULES`).
@@ -589,7 +591,7 @@ client and the wiring followed in phases 3–6.
 - **Turn serialisation** — one `RLock` across `boot`/`scan_once`/`run_now`; `ContextStore.save` writes a unique per-process/per-thread temp file before `os.replace`.
 - **Per-thread stop event** — each scanning thread owns its own `threading.Event`; a timed-out `stop()` leaves the service *draining* and no second thread can spawn.
 - **Leash pre-check** — `scan_once` checks the leash before scanning; a refusal consumes nothing.
-- **Mock by default** — `AGENT_MODE="mock"` runs the whole loop against a scripted agent with zero spend.
+- **Zero-spend by default; live is a one-line switch** — the shipped `AGENT_MODE` is `"live"` against the keyless local provider, but `AGENT_MODE="mock"` still runs the whole loop against a scripted agent with zero spend and no provider at all, and `AGENT_ENABLED=False` keeps the watchdog from autostarting either way.
 - **Provider inheritance is pure and lazy** — `ai_agent.config.resolve_provider()` is a pure function; `server.get_agent_service()` merges it in (via the pure `server._resolve_agent_connection()`) only when `AGENT_MODE=="live"`, so a live agent never needs a secret of its own. The three inheritance fields default to `""`. (`server.py` already imports `ai_agent.api` → `ai_agent.config` at module scope for `/api/ai`; it is the in-function call that keeps `get_agent_service()` independent of the provider, not the import graph.)
 - **Live requests carry an explicit User-Agent** — `_request_headers()` always sends a non-blank UA (blank falls back to `DEFAULT_USER_AGENT`), pinned network-free in `tests/test_agent_service.py`; Cloudflare 1010 otherwise blocks the turn before auth.
 - **429/503 are retried, daily quotas are not** — bounded retry honouring `Retry-After`; a `429` naming a per-day quota raises at once (`_is_daily_quota`).
@@ -599,7 +601,7 @@ client and the wiring followed in phases 3–6.
 - **Split is exactly two distinct panes** — `set_view(layout="split")` refuses `len(panes) != 2` or two equal panes; an explicit `timeframe` disagreeing with `panes[0]` is refused; `view.timeframe` is re-asserted to the primary pane `panes[0]` on every split mutation; tags stay globally unique across panes and any pane's tag resolves through the merged manifest, with each match measured against its own pane's price basis.
 - **A window past history is fixable, never fatal** — `InsufficientHistory` reaches the endpoint as `422` and the tools as `insufficient_history: … reduce offset`; a persisted bad `offset` degrades the turn's first render to the live edge, and a still-failing render is recorded as `output["render_error"]` while the turn completes.
 
-Baseline: **478 passed, 2 skipped**; `import server` → **38 routes**. (Both shipped skips are opt-in/environment-gated: the pre-existing one and the phase-6c live test.)
+Baseline: **485 passed, 2 skipped**; `import server` → **38 routes**. (Both shipped skips are opt-in/environment-gated: the pre-existing one and the phase-6c live test.)
 
 ## Deferred / out of scope
 
@@ -624,14 +626,14 @@ Baseline: **478 passed, 2 skipped**; `import server` → **38 routes**. (Both sh
 | Authority | Propose-only |
 | Store scope | One per symbol; one active symbol in v1 |
 | Runtime switch | The store gate (`store.data.agent.enabled`) is **authoritative** for "is it on"; `AGENT_ENABLED` is only the process **autostart** switch. The registry flag in `config/modules_state.json` is written *after* `enable()`/`disable()` succeeds, so the two cannot disagree. |
-| Default mode | `AGENT_MODE="mock"`: the full loop runs against a scripted agent with zero API spend. Live mode is wired by an injected transport only. |
+| Default mode | `AGENT_MODE="live"` against the keyless local provider (`LLM_PROVIDER=local`) — but `AGENT_ENABLED=False` gates autostart, and `AGENT_MODE="mock"` runs the full loop against a scripted agent with zero API spend. |
 | Render determinism | The PNG is drawn once and `render_id = "r_" + sha256(png)[:16]`; `rendered_at` lives in the manifest only, so identical state yields a byte-identical image. |
 | Notes storage | Agent notes are **not** a store field: they persist in `TurnRecord.output["notes"]` and resurface in the briefing. The store root stays exactly 11 fields. |
 | Pins | A pin is a watch (`level_alive`) on level existence; the panel's `pins` are rendered from the shared subscription projection, so pins ≡ watches. |
 | Wake cadence | The daemon is woken by the watchdog only, and its fires are **coalesced** (`COALESCE_WINDOW_S`) into one turn; `scan_once` never force-flushes. |
-| Live provider | Live mode **inherits** the shared `/api/ai` provider (`LLM_PROVIDER` via `ai_agent.config.resolve_provider()`); `AGENT_MODEL`/`AGENT_API_BASE`/`AGENT_API_KEY_ENV` default to `""` = inherit and can pin one field each. No new secret. |
-| Live transport | stdlib `urllib` only, with an explicit `User-Agent` (`AGENT_HTTP_USER_AGENT`) because Cloudflare 1010 blocks urllib's default before auth; bounded retry on `429`/`503` honouring `Retry-After`, but not on a per-day quota. |
-| Live test | `tests/test_agent_live.py` is opt-in (`AGENT_LIVE_TEST=1` + a resolved key) and skips on a provider quota refusal, so `pytest -q` stays offline; `qwen/qwen3.8-27b` priced at Groq's `$0.80/$4.00`. |
+| Live provider | Live mode **inherits** the shared provider (`LLM_PROVIDER` via `ai_agent.config.resolve_provider()`); `AGENT_MODEL`/`AGENT_API_BASE`/`AGENT_API_KEY_ENV` default to `""` = inherit and can pin one field each. Hosted groq/xai return a key-variable name; `LLM_PROVIDER=local` returns the keyless local endpoint (`LOCAL_BASE_URL`/`LOCAL_MODEL`, empty key name). No new secret either way. |
+| Live transport | stdlib `urllib` only, with an explicit `User-Agent` (`AGENT_HTTP_USER_AGENT`) because Cloudflare 1010 blocks urllib's default before auth; a blank key name is **keyless** (no `Authorization` header at all); bounded retry on `429`/`503` honouring `Retry-After`, but not on a per-day quota. A full `…/v1/chat/completions` `api_base` is tolerated (tail stripped). |
+| Live test | `tests/test_agent_live.py` is opt-in (`AGENT_LIVE_TEST=1` + a resolved key *or* a keyless provider with a base) and skips on a provider quota refusal, so `pytest -q` stays offline; `qwen/qwen3.8-27b` priced at Groq's `$0.80/$4.00`, the local `deepseek-v4.1-flash-free` priced free. |
 | Past window | `View.offset` (integer, `0 <= offset <= MAX_OFFSET`=5000) skips that many newest bars per timeframe, so the window is `[now-(offset+bars)*tf, now-offset*tf]`; `offset=0` is the live edge and byte-identical to pre-6d. `manifest.window` always echoes `offset`, so `window.from`/`to` is the agent's ground truth for which bars it sees; off the live edge `price_basis="window_end"` (else `"live"`) marks that the window's price is not the live market. A window the feed does not hold is `InsufficientHistory` → `422` / a fixable `insufficient_history` refusal, and a persisted bad `offset` degrades the turn's first render to the live edge instead of bricking the loop. |
 | Split layout | `layout="split"` renders exactly two **distinct** stacked panes (v1) top→bottom = `view.panes`; `panes[0]` is primary and `view.timeframe` stays synced to it on every split mutation (a disagreeing `timeframe` is refused). `level_lookup` searches every pane, measuring each match against its own pane's price basis. The primary pane keeps raw tags and later panes are `P{i+1}:`-prefixed into one merged, sorted manifest; the `panes` array appears in the manifest only in split mode. |
 
@@ -672,7 +674,8 @@ Baseline: **478 passed, 2 skipped**; `import server` → **38 routes**. (Both sh
    which keeps spend deliberate and operator-armed.
 5. **Model choice** *(was "settled during the build", now revised)* — **Decided: live mode
    inherits the shared provider's model.** `ai_agent.config.resolve_provider()` returns the
-   `LLM_PROVIDER` selection (Groq `qwen/qwen3.8-27b` for the local `.env`), so the
+   `LLM_PROVIDER` selection (Groq `qwen/qwen3.8-27b`, or the keyless local
+   `deepseek-v4.1-flash-free` for `LLM_PROVIDER=local`, for the local `.env`), so the
    agent reuses the already-integrated model instead of pinning `gpt-4o-mini`. The pin
    remains available via a non-empty `AGENT_MODEL`. Hard requirement: the inherited model
    must be **vision-capable** (a text-only model such as `openai/gpt-oss-120b` cannot see
