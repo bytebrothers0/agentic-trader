@@ -131,6 +131,7 @@ One store per **symbol**; one symbol active at a time in v1.
   "chart_type": "candles",
   "families": ["bos", "idm", "fvg", "ob", "liquidity", "trendline", "sr", "qm"],
   "bars": 300,
+  "offset": 0,
   "layout": "single",
   "panes": [],
   "show_tags": true,
@@ -139,7 +140,12 @@ One store per **symbol**; one symbol active at a time in v1.
 ```
 
 `layout` ∈ `single | split`; `panes` is the multi-timeframe list when `split` (e.g.
-`["H2","M15"]`). `bars` is the lookback window.
+`["H2","M15"]`, top pane first). `bars` is the lookback window and `offset` is how many
+of the most-recent bars to skip back, so the visible window is
+`[now-(offset+bars)*tf, now-offset*tf]` — `offset=0` is the live edge. `split` needs
+exactly two **distinct** panes in v1; `timeframe` is kept equal to the primary pane
+`panes[0]` on every split mutation (an explicit `timeframe` that disagrees with `panes[0]`
+is refused). `single` ignores `panes`.
 
 **`pins`** — durable records of pinned levels. A pin stores a **level identity query**,
 not a snapshot, and is re-resolved against fresh feed output on every render.
@@ -418,7 +424,7 @@ The boot turn's job, per the playbook: orient (HTF bias) → locate (the levels 
 
 | Tool | Purpose |
 |---|---|
-| `set_view` | symbol, timeframe, chart type, families, bars, layout/panes, tags, annotations |
+| `set_view` | symbol, timeframe, chart type, families, bars, offset, layout/panes, tags, annotations |
 | `render` | re-render after a change; returns image + manifest |
 | `level_lookup` | exact numbers for a tag, a level key, a family, or a price neighbourhood |
 | `add_pin` / `release_pin` | hold a level across timeframes |
@@ -565,6 +571,16 @@ client and the wiring followed in phases 3–6.
 
 **Phase 6c — what the one real run proved, and the ceiling it hit.** The UA fix and the wiring are confirmed against the live API: with `AGENT_MODE="live"` the real client reaches Groq (HTTP 200), the real 1536×864 chart is legible to `qwen/qwen3.8-27b` (round 1 replies with a coherent `set_view` to D1 and a real tag manifest: e.g. `tag_count 28`, a live `price_range`), and the round is billed. A full boot turn, however, cannot complete on this account's Groq **on-demand** tier: it caps a *request* at **7000 input tokens** (ITPM), and every round re-sends a fixed prefix measured at ~**3839** tokens (system prompt 1177 + 11-tool schema 1478 + image 783 + briefing ~401), leaving ~3161 for tool results — while a single `render` tool result carries the tag manifest at **2314 tokens** (M15/20 bars/crt+bos) to **5936** (M15/crt+bos+fvg). The round that carries the manifest is refused with `HTTP 413` (and, once the daily cap is also spent, `HTTP 429` on TPD). The live test asserts the whole contract and, when the provider refuses a round on a documented quota, records the fact and **skips** — a half-run vision turn (real image in, a real parsed reply out, billed) is proven before the skip. The full-thesis assertion therefore runs only on a tier that fits; the wiring is proven regardless.
 
+**Phase 6d** *(perception: the offset dial + a real split)* — the agent can now look at a past window and at two timeframes at once.
+
+- **`offset` (the dial).** `View.offset` is an integer count of the most-recent bars to skip back, per timeframe, so the visible window is `[now-(offset+bars)*tf, now-offset*tf]`; `offset=0` is the live edge and renders **byte-identically** to before (same PNG, same `render_id`). `set_view` validates it as an integer `0 <= offset <= MAX_OFFSET` (5000, mirroring `MAX_BARS`) or refuses with `StoreError("invalid_offset", ...)`. The value threads the whole way down: `Feed.snapshot`/`bars`/`snapshots` **always** pass `offset` to the provider (including `0`), `/api/candles` and `/api/indicators` take an `offset` query param (`ge=0`, `le=MAX_OFFSET`; `bars` is bounded `MIN_BARS`..`MAX_BARS`) and hand it to `fetch_timeframe(..., start=offset)`, and `MT5DataLoader.fetch_timeframe` maps `start` onto MT5 `start_pos` (the synthesized M45 path fetches enough M15, resamples, slices off the newest `start` bars, and raises on insufficient history). Every render manifest's `window` now carries `offset`, so `window.from`/`window.to` (with `offset`) is exactly how the agent confirms which bars it is looking at; the per-turn snapshot cache is keyed by `(timeframe, bars, offset)` and dropped (`reset_snapshots()`) whenever the view changes.
+- **Past-window truth (`price_basis`).** Off the live edge the endpoint labels the window `price_basis="window_end"` (at `offset=0` it is `"live"`); the field is carried on the payload, the `FeedSnapshot`, the `LookupResult` and each split pane's manifest entry. So a past `current_price`/`atr` — and every `distance_points` — is measured **inside the window**, never mistaken for the live market. `level_view`/`TagEntry` are built from the resolving snapshot/pane, so a `P2:` tag's distance is measured against pane 2's price.
+- **Insufficient history is a refusal, not a crash.** An explicit-window request the feed cannot fill raises `InsufficientHistory(ValueError)` (`data.mt5_loader` for the loader; an identical, independently-defined `agentic.feed.InsufficientHistory` for the pure core, which the default live providers raise when the endpoint answers `HTTP 422`). The endpoint maps it to `422` (not the blanket `500`), and the tool surface maps it to a fixable `ToolResult(ok=False, error="insufficient_history: … reduce offset")` rather than an `internal_error`. A **persisted** bad `offset` cannot brick the loop either: the turn's first render degrades to the live edge (`offset=0`, same timeframe/families), and if that too fails the turn still completes with the failure recorded in `output["render_error"]`.
+- **Real `split`.** `layout="split"` renders two stacked panes top→bottom in `view.panes` order (HTF above, LTF below), each with its own y-range, title and price markers. v1 caps this at exactly two **distinct** timeframes: `set_view(layout="split")` with `len(panes) != 2` (or two equal panes) is refused with `StoreError("invalid_split", ...)`, and an explicit `timeframe` that disagrees with `panes[0]` is refused too. `view.timeframe` is re-asserted to the primary pane `panes[0]` on **every** split mutation, so a bare `set_view(timeframe=…)` while split cannot desync it; `layout="single"` ignores `panes` (a stray `panes` cannot silently split the figure) and is otherwise unchanged. Top-level `pins` are merged into the primary pane (deduped by `level_key`).
+- **Tag scheme.** The primary pane keeps its raw tags (`F1`, `F1*`); every pane after the first is prefixed with its 1-based index (`P2:F1`) so tags stay globally unique. All panes' tags are merged into `manifest["tags"]` and `result.tags` (sorted), so a `P2:*` tag resolves through the merged manifest even though `_snapshot_for_view` returns the primary (HTF) snapshot. Each `TagEntry` carries `created_at`. The manifest's top-level keys (`window`/`timeframe`/`price_range`/`tags`) always describe the primary pane; a `"panes": [{timeframe, window{from,to,bars,offset}, price_range, current_price, atr, price_basis}]` array is added **only in split mode**, so the single-mode manifest's key set is unchanged. `render_current` fetches a `(snapshot, bars)` pair per pane and resolves pins onto their own pane (falling back to the primary pane when a pin's timeframe is not a pane).
+- **Lookup spans the panes.** In split mode `level_lookup` (via `_tool_level_lookup`) passes **every** pane's `snapshot` plus the manifest `panes` array, so `family`/`near_price`/`level_key` search all panes (not just the primary) and each match is measured against **its own pane's** `current_price`/`atr`/`price_basis`; a `tag` query maps `P{n}:` back to pane *n* via `_pane_index_for_tag`. The header is the primary pane's basis (or the tag's pane for a tag query).
+- **Purity held.** Only the two impure files were touched outside the pure core — `data/mt5_loader.py` and `server.py`; the pure module set now imports `InsufficientHistory` only from within `agentic` (defined in `feed.py`, never imported from the loader) and the store root stays exactly 11 fields; `ai_agent/` was untouched.
+
 **Invariants now enforced by tests**
 
 - **Purity** — `agentic/*` imports only stdlib + `agentic.*`; `feed.py` is the single lazy bridge; `renderer.py` loads `matplotlib`/`PIL` inside functions. `tests/test_agentic/test_standalone.py` pins this with an AST check (`PURE_MODULES`/`BRIDGE_MODULES`).
@@ -579,8 +595,11 @@ client and the wiring followed in phases 3–6.
 - **429/503 are retried, daily quotas are not** — bounded retry honouring `Retry-After`; a `429` naming a per-day quota raises at once (`_is_daily_quota`).
 - **Unknown models are never free** — `estimate_cost` falls back to the default model's non-zero rate, so the leash always counts.
 - **The live test is opt-in and offline by default** — `tests/test_agent_live.py` is skipped unless `AGENT_LIVE_TEST=1` with a resolved key; on a provider quota refusal it skips rather than red-fails.
+- **`offset=0` is byte-identical** — the offset dial defaults to the live edge, and a zero-offset single render matches the pre-6d output byte for byte (`render_id` and PNG); `offset` is forwarded to the provider even when `0`, and the manifest `window` always echoes it.
+- **Split is exactly two distinct panes** — `set_view(layout="split")` refuses `len(panes) != 2` or two equal panes; an explicit `timeframe` disagreeing with `panes[0]` is refused; `view.timeframe` is re-asserted to the primary pane `panes[0]` on every split mutation; tags stay globally unique across panes and any pane's tag resolves through the merged manifest, with each match measured against its own pane's price basis.
+- **A window past history is fixable, never fatal** — `InsufficientHistory` reaches the endpoint as `422` and the tools as `insufficient_history: … reduce offset`; a persisted bad `offset` degrades the turn's first render to the live edge, and a still-failing render is recorded as `output["render_error"]` while the turn completes.
 
-Baseline: **441 passed, 2 skipped**; `import server` → **38 routes**. (Both shipped skips are opt-in/environment-gated: the pre-existing one and the phase-6c live test.)
+Baseline: **478 passed, 2 skipped**; `import server` → **38 routes**. (Both shipped skips are opt-in/environment-gated: the pre-existing one and the phase-6c live test.)
 
 ## Deferred / out of scope
 
@@ -613,6 +632,8 @@ Baseline: **441 passed, 2 skipped**; `import server` → **38 routes**. (Both sh
 | Live provider | Live mode **inherits** the shared `/api/ai` provider (`LLM_PROVIDER` via `ai_agent.config.resolve_provider()`); `AGENT_MODEL`/`AGENT_API_BASE`/`AGENT_API_KEY_ENV` default to `""` = inherit and can pin one field each. No new secret. |
 | Live transport | stdlib `urllib` only, with an explicit `User-Agent` (`AGENT_HTTP_USER_AGENT`) because Cloudflare 1010 blocks urllib's default before auth; bounded retry on `429`/`503` honouring `Retry-After`, but not on a per-day quota. |
 | Live test | `tests/test_agent_live.py` is opt-in (`AGENT_LIVE_TEST=1` + a resolved key) and skips on a provider quota refusal, so `pytest -q` stays offline; `qwen/qwen3.8-27b` priced at Groq's `$0.80/$4.00`. |
+| Past window | `View.offset` (integer, `0 <= offset <= MAX_OFFSET`=5000) skips that many newest bars per timeframe, so the window is `[now-(offset+bars)*tf, now-offset*tf]`; `offset=0` is the live edge and byte-identical to pre-6d. `manifest.window` always echoes `offset`, so `window.from`/`to` is the agent's ground truth for which bars it sees; off the live edge `price_basis="window_end"` (else `"live"`) marks that the window's price is not the live market. A window the feed does not hold is `InsufficientHistory` → `422` / a fixable `insufficient_history` refusal, and a persisted bad `offset` degrades the turn's first render to the live edge instead of bricking the loop. |
+| Split layout | `layout="split"` renders exactly two **distinct** stacked panes (v1) top→bottom = `view.panes`; `panes[0]` is primary and `view.timeframe` stays synced to it on every split mutation (a disagreeing `timeframe` is refused). `level_lookup` searches every pane, measuring each match against its own pane's price basis. The primary pane keeps raw tags and later panes are `P{i+1}:`-prefixed into one merged, sorted manifest; the `panes` array appears in the manifest only in split mode. |
 
 ## Open questions (resolved, phase 6c)
 
@@ -623,7 +644,8 @@ Baseline: **441 passed, 2 skipped**; `import server` → **38 routes**. (Both sh
    (`price_crosses`/`price_enters_zone`/`range_expands`) and time (`session_opens`/
    `session_closes`/`time_reached`) — which is the right *shape* of things to sit and
    wait for. The one live turn did not surface a missing shape, only that the agent
-   reaches for more timeframes. Revisit only after sustained live turns, and then by
+   reaches for more timeframes (phase 6d now lets it *look* at two at once and at a past
+   window, so that reach needs no new conditions). Revisit only after sustained live turns, and then by
    **adding** conditions to the table, never reshaping it.
 2. **Timezone** — **Decided: UTC only, and nothing on the image to label.** The renderer
    draws **no x-axis tick labels** (`ax.set_xticks([])`), and every timestamp the agent
