@@ -56,6 +56,8 @@ from agentic._time import as_aware, new_id
 from agentic.feed import Feed
 from agentic.models import Serde, Trigger
 from agentic.renderer import RenderResult, Renderer
+from agentic._dialect import coerce_bias as _coerce_bias
+from agentic._dialect import coerce_proposal as _coerce_proposal
 from agentic.store import (
     MAX_TOOL_CALLS_PER_TURN,
     ContextStore,
@@ -78,10 +80,17 @@ MAX_TOOL_ROUNDS = 4
 CLOSING_INSTRUCTION = (
     "End the turn now. You have no more tool calls to make. Reply with ONLY the "
     "strict JSON object defined in the output contract — no prose, no markdown "
-    "fence, nothing before or after it."
+    "fence, nothing before or after it. This closing call does not re-attach the "
+    "chart image even when one rendered earlier in the turn: that render is real "
+    "evidence, so when ``image_seen_this_turn`` is true, reason from it rather "
+    "than claiming no chart was available."
 )
 
-#: The single key the closing instruction is carried under in the briefing.
+#: The single key the closing instruction is carried under in the briefing. It
+#: holds a dict: the instruction plus a truthful ``image_seen_this_turn`` flag —
+#: a turn whose tool rounds degenerated must not let the closing call honestly
+#: believe no chart ever existed (replayed turns did exactly that and refused
+#: to read).
 CLOSING_KEY = "closing"
 
 #: Whether the closing call is made at all. A knob so an operator can turn it off
@@ -280,8 +289,15 @@ def _apply_output(
     apply_errors: List[str] = []
     thesis = output.get("thesis")
     if isinstance(thesis, dict):
+        picked = _pick(thesis, _THESIS_KEYS)
+        if "bias" in picked:
+            picked["bias"] = _coerce_bias(picked["bias"])
+            # Record the read-back dialect so the turn log shows what was applied,
+            # not just what arrived.
+            if picked["bias"] != thesis.get("bias"):
+                output.setdefault("dialect", {})["thesis_bias"] = picked["bias"]
         try:
-            store.set_thesis(**_pick(thesis, _THESIS_KEYS), now=now)
+            store.set_thesis(**picked, now=now)
         except (StoreError, TypeError, ValueError) as exc:
             apply_errors.append(f"thesis: {exc}")
     for proposal in output.get("proposals") or []:
@@ -289,7 +305,7 @@ def _apply_output(
             apply_errors.append(f"proposal: not an object: {proposal!r}")
             continue
         try:
-            store.add_proposal(**_pick(proposal, _PROPOSAL_KEYS), now=now)
+            store.add_proposal(**_coerce_proposal(proposal, _PROPOSAL_KEYS), now=now)
         except (StoreError, TypeError, ValueError) as exc:
             apply_errors.append(f"proposal: {exc}")
     return output, apply_errors
@@ -552,7 +568,14 @@ class AgentLoop:
         digest, so the model still answers from what it actually saw.
         """
         briefing = dict(request.briefing or {})
-        briefing[CLOSING_KEY] = CLOSING_INSTRUCTION
+        briefing[CLOSING_KEY] = {
+            "instruction": CLOSING_INSTRUCTION,
+            # The closing call drops the image, but it must not mislead the model
+            # about the turn it is closing: say truthfully whether a chart render
+            # existed earlier, so "no chart was available" stays a fact, not a
+            # guess from this call's own shape.
+            "image_seen_this_turn": bool(request.image_path),
+        }
         digest = _evidence_digest(log)
         if digest:
             briefing["evidence"] = digest

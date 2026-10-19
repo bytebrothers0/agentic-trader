@@ -66,9 +66,9 @@ exactly as it does live (the newest settled bar is `offset = 0`).
 | `--scenarios` | how many setups to replay, best R:R first |
 | `--mode` | `live` (real model) or `mock` (zero spend) |
 | `--message` | run a human `request` turn with this detail instead of `boot` |
-| `--families` | seed the view with these families (default: every family — heavy) |
-| `--bars` | agent view bars |
-| `--max-tokens` | per-call output cap |
+| `--families` | seed the view with these families (default: the store's own — the playbook's six) |
+| `--bars` | agent view bars (default: the shipped `AGENT_BARS`) |
+| `--max-tokens` | per-call output cap (default: the shipped `AGENT_MAX_TOKENS`) |
 | `--model` | override the provider's model (handy to compare models) |
 | `--cooldown-s` | pause between live scenarios |
 | `--cache` / `--refresh` | history cache path / ignore it and re-fetch |
@@ -118,13 +118,32 @@ perception the live test uses (`--families crt,bos,fvg --bars 120
   `"bearish"`, and its `entry`/`sl`/`tp` were *zone strings*, not the numbers the
   schema wants. `output.apply_errors` records this; nothing surfaces it in the
   panel. 1/1 emitted proposal never reached the store.
-* **A full-family render is a token bomb.** The default view carries all ten
+* **A full-family render is a token bomb.** The default view carried all ten
   families; at M15/300 bars that is **639 levels ≈ 49k tokens** of manifest,
   resent every round (observed prompts of 52k–79k). Narrowing to `crt,bos,fvg`
   drops it to ~4.8k, and `crt` alone to ~1.6k.
 * **The production token cap cannot absorb the runaway.** At `--max-tokens 2000`
   the closing call runs away too and the turn yields nothing; at `8000` it
-  finishes. `AGENT_MAX_TOKENS` is `1500`.
+  finishes.
+
+**Fixed the same day (2026-10-19):**
+
+* the dialect wall (`agentic/_dialect.py`) now translates at *both* boundaries —
+  `short`→`bearish`, zone strings→numbers — so the scenario-3 plan shape lands;
+* `models.DEFAULT_FAMILIES` is the playbook's own six families, not all ten
+  (~15k tokens at M15/300 for the six, measured, vs 49k);
+* `AGENT_MAX_TOKENS` is `8000`;
+* the backtest CLI inherits `AGENT_BARS`/`AGENT_MAX_TOKENS` from the shipped
+  settings when the flags are omitted, so a plain run replays the bot as
+  configured (`--bars`/`--max-tokens`/`--families` remain overrides);
+* the renderer draws the dashboard's visual language (bounded rays, zone boxes,
+  per-family ink, an 80-per-family ray budget with `hidden_levels` counted in
+  the manifest) after a replayed render was seen painting the chart solid blue
+  with full-width band fills;
+* the closing call's briefing carries a truthful `image_seen_this_turn`;
+* `simulate()` treats an entry as a pending order (an unfilled limit is
+  `unfilled`, not an invented excursion) and marks an open trade to market
+  (`r_mark`).
 
 Rebuild any report from its saved run, without spending a turn:
 
@@ -136,5 +155,5 @@ Reproduce the run itself:
 
 ```
 python -m backtest.run_crt_backtest --mode live --scenarios 3 --days 120 --timeframe M15 ^
-    --bars 120 --max-tokens 8000 --families crt,bos,fvg --cooldown-s 20
+    --cooldown-s 20
 ```

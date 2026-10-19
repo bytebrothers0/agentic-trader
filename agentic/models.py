@@ -25,8 +25,15 @@ SPEC_VERSION = "0.1.0"
 #: monthly form is spelled out rather than folded into ``M\d{1,2}``.
 _TIMEFRAME_RE = re.compile(r"^(M\d{1,2}|MN\d{0,2}|H\d{1,2}|D\d{1,2}|W\d{1,2})$")
 
+#: The *default view* families. This is the CRT playbook's own ``REQUIRED_FAMILIES``
+#: (``crt_strategy`` documents "the agent's view defaults to it") — the set the
+#: top-down read cannot reason without — not "every detector that exists". The
+#: heavier overlays (`sr`, `qm`, `idm`, `trendline`) stay one ``set_view`` away:
+#: a fresh M15/300-bar render carrying all ten families measured **639 levels ≈
+#: 49k token** of manifest, resent every round of a turn, versus ~15k for these
+#: six — enough to lose the turn under a token cap before the model said anything.
 DEFAULT_FAMILIES: List[str] = [
-    "crt", "ts", "bos", "idm", "fvg", "ob", "liquidity", "trendline", "sr", "qm",
+    "crt", "bos", "fvg", "ob", "liquidity", "ts",
 ]
 
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}

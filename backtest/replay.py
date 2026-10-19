@@ -351,12 +351,16 @@ def _tool_log(turn: Any) -> List[Dict[str, Any]]:
 class TradeSim:
     """What a proposed plan would have done, walked bar by bar."""
 
-    outcome: str = "invalid"          # tp | sl | ambiguous | open | invalid
+    outcome: str = "invalid"          # tp | sl | ambiguous | open | unfilled | invalid
     bars_to_event: Optional[int] = None
     r_multiple: Optional[float] = None
     mfe: float = 0.0                  # max favourable excursion, price units
     mae: float = 0.0                  # max adverse excursion, price units
     reason: str = ""
+    #: Unrealised R at the end of the window for a still-open trade. The window
+    #: simply ran out before either level was reached; ``None`` would read as
+    #: "unmeasurable" when the position's state is perfectly knowable.
+    r_mark: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -365,9 +369,18 @@ class TradeSim:
 def simulate(bars_after: pd.DataFrame, bias: str, entry, sl, tp) -> TradeSim:
     """Walk forward from the decision bar and report which level was reached first.
 
-    Conservative on the ambiguity that only a lower timeframe could resolve: when a
-    single bar contains *both* the stop and the target, the stop is taken. ``open``
-    means neither was touched before the history ended.
+    The entry is treated as a **pending order**, not an instant fill: a bar only
+    counts once its range actually touches the entry price (``low <= entry <=
+    high`` — the generic pending-order fill, direction-agnostic). Excursions and
+    stop/target checks are measured from the fill bar onward; a plan whose entry
+    was never touched within the window reports ``unfilled`` rather than
+    inventing an excursion for a position that never existed.
+
+    Conservative on the ambiguity that only a lower timeframe could resolve: when
+    a single bar contains *both* the stop and the target (fill bar included), the
+    stop is taken. ``open`` means the fill happened but neither level was reached
+    before the history ended — ``r_mark`` then carries the unrealised R at the
+    window's last close.
     """
     side = str(bias or "").lower().strip()
     long = side in _LONG
@@ -385,8 +398,31 @@ def simulate(bars_after: pd.DataFrame, bias: str, entry, sl, tp) -> TradeSim:
         return TradeSim(outcome="invalid", reason="risk or reward is not positive")
 
     mfe = mae = 0.0
+    last_close: Optional[float] = None
+    filled = False
     for offset, (_, bar) in enumerate(bars_after.iterrows(), start=1):
-        high, low = float(bar["high"]), float(bar["low"])
+        high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+        last_close = close
+        if not filled:
+            if min(low, high) <= entry <= max(low, high):
+                filled = True
+                #--------------------------------------------------------------#
+                # The fill bar: the entry traded somewhere inside the bar's
+                # range, so its own stop/target extremes are treated as the
+                # same unknowable in-bar order as any other bar.
+                #--------------------------------------------------------------#
+                hit_sl = (low <= sl) if long else (high >= sl)
+                hit_tp = (high >= tp) if long else (low <= tp)
+                if hit_sl and hit_tp:
+                    return TradeSim("ambiguous", offset, -1.0, mfe, mae,
+                                    "fill, stop and target inside one bar; stop taken")
+                if hit_sl:
+                    return TradeSim("sl", offset, -1.0, mfe, mae,
+                                    "filled and stopped inside one bar")
+                if hit_tp:
+                    return TradeSim("tp", offset, round(reward / risk, 2), mfe, mae,
+                                    "filled and reached target inside one bar")
+            continue
         mfe = max(mfe, (high - entry) if long else (entry - low))
         mae = max(mae, (entry - low) if long else (high - entry))
         hit_sl = (low <= sl) if long else (high >= sl)
@@ -398,7 +434,12 @@ def simulate(bars_after: pd.DataFrame, bias: str, entry, sl, tp) -> TradeSim:
             return TradeSim("sl", offset, -1.0, mfe, mae, "stop reached")
         if hit_tp:
             return TradeSim("tp", offset, round(reward / risk, 2), mfe, mae, "target reached")
-    return TradeSim("open", None, None, round(mfe, 3), round(mae, 3), "neither level reached yet")
+    if not filled:
+        return TradeSim("unfilled", None, None, 0.0, 0.0,
+                        f"entry never touched within {len(bars_after)} bars")
+    r_mark = None if last_close is None else round(((last_close - entry) if long else (entry - last_close)) / risk, 2)
+    return TradeSim("open", None, None, round(mfe, 3), round(mae, 3),
+                    "neither level reached yet", r_mark=r_mark)
 
 
 @dataclass

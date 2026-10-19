@@ -71,8 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="drop setups whose naive trade carried a worse R:R (default 1.5)")
     p.add_argument("--scenarios", type=int, default=1,
                    help="how many setups to replay, best R:R first (default 1)")
-    p.add_argument("--bars", type=int, default=200, help="agent view bars (default 200)")
-    p.add_argument("--max-tokens", type=int, default=2000, help="per-call output cap")
+    # The agent-view defaults inherit the *shipped* settings (AGENT_BARS /
+    # AGENT_MAX_TOKENS) so a plain run replays the bot as configured, not a
+    # private hard-coded opinion of it; an explicit flag still overrides.
+    p.add_argument("--bars", type=int, default=None,
+                   help="agent view bars (default: the shipped AGENT_BARS)")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="per-call output cap (default: the shipped AGENT_MAX_TOKENS)")
     p.add_argument("--model", default="", help="override the provider's model (else LLM_PROVIDER's)")
     p.add_argument("--mode", default="live", choices=["live", "mock"],
                    help="live = real model; mock = zero-spend scripted agent")
@@ -382,6 +387,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.report_only:
         return _rebuild_report(args.report_only)
+    # The agent-view defaults inherit the shipped settings so a plain run replays
+    # the bot as configured; resolved here so --help stays honest about "default".
+    if args.bars is None or args.max_tokens is None:
+        from config.settings import AGENT_BARS, AGENT_MAX_TOKENS
+
+        args.bars = int(args.bars if args.bars is not None else AGENT_BARS)
+        args.max_tokens = int(args.max_tokens if args.max_tokens is not None else AGENT_MAX_TOKENS)
     os.makedirs(args.out, exist_ok=True)
     # Every run gets a brand-new root: a resumed store would seed the replay with
     # the *previous* run's view and silently change what the agent saw first.
@@ -500,6 +512,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             "days": float(args.days),
             "min_rr": float(args.min_rr),
             "scenarios": len(scenarios),
+            "bars": int(args.bars),
+            "max_tokens": int(args.max_tokens),
+            "families": [f.strip() for f in args.families.split(",") if f.strip()],
             "dry_run": bool(args.dry_run),
             "run_dir": run_root,
             "report_json": report_json,

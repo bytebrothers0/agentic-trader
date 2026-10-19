@@ -939,3 +939,16 @@ def test_join_budget_covers_a_worst_case_retried_turn(tmp_path):
     worst_case_turn = worst_case_call * (MAX_TOOL_ROUNDS + 1) + 15.0
     assert service._join_budget() >= worst_case_turn
 
+
+def test_the_shipped_output_cap_leaves_room_for_a_reasoning_runaway():
+    """A config floor, not a style choice — recorded replay evidence behind it.
+
+    ``AGENT_MAX_TOKENS = 1500`` truncated the closing call mid-reasoning: the
+    recovery call died at the cap on the very turns it exists to rescue, and the
+    turn yielded nothing. The closing calls that did finish measured 2354 and
+    8725 completion tokens, so the shipped default must clear both by a margin.
+    """
+    from config.settings import AGENT_MAX_TOKENS
+
+    assert AGENT_MAX_TOKENS >= 8000
+

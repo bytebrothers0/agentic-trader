@@ -47,6 +47,7 @@ PURE_MODULES = (
     "watchdog.py",
     "lookup.py",
     "_time.py",
+    "_dialect.py",
     "prompts.py",
     "tools.py",
     "agent_loop.py",

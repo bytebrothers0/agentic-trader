@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from agentic._dialect import coerce_proposal
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import ConditionError
 from agentic.feed import Feed, FeedSnapshot, InsufficientHistory, LevelRecord
@@ -761,7 +762,13 @@ class ToolRegistry:
         return note
 
     def _tool_propose_trade(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        proposal = self._store.add_proposal(**args, now=self._now_utc())
+        # The tool schema *describes* the fields but dispatch validates nothing,
+        # so a tool call arrives with the same dialect problems the structured
+        # output does — and gets translated at the same wall.
+        proposal = self._store.add_proposal(
+            **coerce_proposal(dict(args), TOOL_SCHEMAS["propose_trade"]["properties"].keys()),
+            now=self._now_utc(),
+        )
         return proposal.to_dict()
 
 

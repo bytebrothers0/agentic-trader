@@ -3,9 +3,10 @@
 Spec: docs/specs/2026-10-17-agentic-chart-agent-design.md, "Perception contract:
 render + manifest + lookup".
 
-There is no browser in the loop. The view is rendered to a PNG on the server, in
-a style built for a *vision model* rather than a human: high contrast, thick
-lines, large legible fonts, minimal chrome, no gridline noise. Every drawn level
+There is no browser in the loop. The view is rendered to a PNG on the server in
+the dashboard's own visual language (``web/app.js``'s dark theme: bounded
+per-family rays, quiet zone boxes, right-side price scale) — the agent sees what
+the operator would see, like a screenshot of the dashboard. Every drawn level
 carries a short **tag** (family initial + ordinal within this render, ``F1`` /
 ``F1*`` when pinned), and the manifest is the machine-readable map from tag back
 to the exact ``level_key``.
@@ -44,7 +45,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 from agentic._time import as_aware
 from agentic.feed import Bars, FeedSnapshot, LevelRecord
 from agentic.lookup import level_view
-from agentic.models import Serde
+from agentic.models import LevelStatus, Serde
 
 # --------------------------------------------------------------------------- #
 # Layout constants
@@ -73,30 +74,53 @@ FAMILY_INITIALS: Dict[str, str] = {
 
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-# Vision-optimised palette: saturated ink on white, so the raster survives
-# downscaling and JPEG-ish tokenisation.
-_BG = "#ffffff"
-_INK = "#101010"
-_UP = "#0b8a3e"
-_DOWN = "#c62828"
-_LEVEL = "#1f4fd8"
+# Palette matched to the dashboard (``web/app.js`` dark theme) so the agent's
+# PNG reads like a screenshot of it: same background, same green/red candles,
+# same per-family ink. Saturated on a dark ground, which is what the vision
+# stack tokenises reliably.
+_BG = "#121418"
+_INK = "#9aa5b5"
+_GRID = "#1e222b"
+_UP = "#089981"
+_DOWN = "#f23645"
 _PINNED = "#e07600"
-_PRICE = "#101010"
+_PRICE = "#00e5ff"
+#: Broken levels are history — the exact gray the dashboard fades them to.
+_BROKEN = "#5a6b7a"
+#: Swept/taken/distributed levels keep their family colour at the dashboard's
+#: fade — history, present but no longer a decision.
+_HISTORY_ALPHA = 0.35
+#: The zone fill's quietness: 8% exactly like the dashboard's rgba fills.
+_ZONE_FILL_ALPHA = 0.08
+
+#: Families drawn as zones (edges + a quiet fill) rather than a single ray —
+#: the dashboard's ``isZoneLevel`` set. Every other family's band is *information*
+#: (y-range), never a painted slab: full-width band fills stacked across 300 bars
+#: is what used to flood the chart solid blue.
+_ZONE_FAMILIES = frozenset({"fvg", "ifvg", "ob"})
+
+#: Per-family ray budget, matching the dashboard's ``MAX_RAYS_PER_CATEGORY``:
+#: newest rays win, quieter families can never be starved by a busy one.
+MAX_RAYS_PER_FAMILY = 80
+
+#: A still-active level's open span, in bars (the dashboard's ``+8``).
+_RAY_BARS = 8
 
 _CANDLE_WIDTH = 0.6
-_LEVEL_LINEWIDTH = 3.0
-_PRICE_LINEWIDTH = 2.5
-_TAG_FONTSIZE = 18
-_TITLE_FONTSIZE = 22
-_TICK_FONTSIZE = 16
+_LEVEL_LINEWIDTH = 1.2
+_TAG_FONTSIZE = 12
+_TITLE_FONTSIZE = 15
+_TICK_FONTSIZE = 12
 
 #: Fixed axes margins. A layout engine (``tight_layout``) is expensive and forces
 #: an extra full draw pass inside ``savefig``; fixed margins are cheaper *and*
-#: more deterministic. Tuned so the title (top) and the y tick labels (left) are
-#: not clipped at the default size; tags and the PX label sit inside the axes.
+#: more deterministic. These are **edge positions** of the axes box (matplotlib's
+#: ``subplots_adjust`` semantics): the y-scale sits on the **right** (dashboard /
+#: TradingView pose), so ~6% of width is reserved for it and the candles breathe
+#: from the left edge.
 _MARGINS: Dict[str, float] = {
-    "left": 0.085,
-    "right": 0.995,
+    "left": 0.005,
+    "right": 0.938,
     "top": 0.885,
     "bottom": 0.045,
 }
@@ -105,8 +129,8 @@ _MARGINS: Dict[str, float] = {
 #: pane for its own title, and a fixed ``hspace`` between panes. Fixed (no
 #: ``tight_layout``) for the same determinism reason as ``_MARGINS``.
 _SPLIT_MARGINS: Dict[str, float] = {
-    "left": 0.085,
-    "right": 0.995,
+    "left": 0.005,
+    "right": 0.938,
     "top": 0.93,
     "bottom": 0.04,
     "hspace": 0.30,
@@ -115,6 +139,9 @@ _SPLIT_MARGINS: Dict[str, float] = {
 #: ``pyplot``, ``Rectangle``, ``Image`` — filled on first render, so the vision
 #: stack is imported lazily but only once per process.
 _VISION_STACK: Optional[Tuple[Any, Any, Any]] = None
+
+#: Sort fallback for a level with no ``formed_at`` (aware, like every record).
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _vision_stack() -> Tuple[Any, Any, Any]:
@@ -296,15 +323,16 @@ class Renderer:
             )
 
         levels, pinned_keys = self._level_set(snapshot, pins)
-        display_tags = self._display_tags(levels, pinned_keys)
+        drawn, hidden = self._visible(levels, pinned_keys)
+        display_tags = self._display_tags(drawn, pinned_keys)
 
-        price_range = self._price_range(bars, levels)
-        entries = self._entries(levels, display_tags, pinned_keys, thesis, snapshot)
+        price_range = self._price_range(bars, drawn)
+        entries = self._entries(drawn, display_tags, pinned_keys, thesis, snapshot)
         # Canonical manifest order, so a permuted `pins` cannot reorder the keys
         # of an otherwise identical render.
         entries = {tag: entries[tag] for tag in sorted(entries)}
 
-        png = self._draw(snapshot, bars, levels, display_tags, pinned_keys, price_range)
+        png = self._draw(snapshot, bars, drawn, display_tags, pinned_keys, price_range)
         sha = hashlib.sha256(png).hexdigest()
         render_id = f"r_{sha[:16]}"
 
@@ -322,6 +350,7 @@ class Renderer:
             "window": self._window(bars, offset),
             "rendered_at": _iso_z(self._clock()),
             "price_range": [lo, hi],
+            "hidden_levels": hidden,
             "image": {
                 "path": path,
                 "width": self.width,
@@ -358,32 +387,34 @@ class Renderer:
         merged into the primary pane (deduped by ``level_key``).
         """
         extra_pins = list(pins or ())
-        drawn: List[Tuple["Pane", List[LevelRecord], Dict[str, str], Set[str], Tuple[float, float]]] = []
+        drawn_panes: List[Tuple["Pane", List[LevelRecord], Dict[str, str], Set[str], Tuple[float, float]]] = []
         merged_entries: Dict[str, TagEntry] = {}
         pane_manifest: List[Dict[str, Any]] = []
         for index, pane in enumerate(panes):
             pane_pins = list(pane.pins) + (extra_pins if index == 0 else [])
             levels, pinned_keys = self._level_set(pane.snapshot, pane_pins)
-            display_tags = self._display_tags(levels, pinned_keys)
+            visible, hidden = self._visible(levels, pinned_keys)
+            display_tags = self._display_tags(visible, pinned_keys)
             if index >= 1:
                 prefix = f"P{index + 1}:"
                 display_tags = {key: f"{prefix}{tag}" for key, tag in display_tags.items()}
-            price_range = self._price_range(pane.bars, levels)
-            entries = self._entries(levels, display_tags, pinned_keys, thesis, pane.snapshot)
+            price_range = self._price_range(pane.bars, visible)
+            entries = self._entries(visible, display_tags, pinned_keys, thesis, pane.snapshot)
             entries = {tag: entries[tag] for tag in sorted(entries)}
             merged_entries.update(entries)
-            drawn.append((pane, levels, display_tags, pinned_keys, price_range))
+            drawn_panes.append((pane, visible, display_tags, pinned_keys, price_range))
             pane_manifest.append({
                 "timeframe": pane.snapshot.timeframe,
                 "window": self._window(pane.bars, offset),
                 "price_range": [price_range[0], price_range[1]],
+                "hidden_levels": hidden,
                 "current_price": float(pane.snapshot.current_price),
                 "atr": float(pane.snapshot.atr),
                 "price_basis": str(pane.snapshot.price_basis or "live"),
             })
 
         merged_entries = {tag: merged_entries[tag] for tag in sorted(merged_entries)}
-        png = self._draw_panes(drawn)
+        png = self._draw_panes(drawn_panes)
         sha = hashlib.sha256(png).hexdigest()
         render_id = f"r_{sha[:16]}"
 
@@ -393,7 +424,7 @@ class Renderer:
         with open(path, "wb") as fh:
             fh.write(png)
 
-        primary = drawn[0]
+        primary = drawn_panes[0]
         primary_snapshot, _levels, _tags, _pinned, primary_range = primary
         lo, hi = primary_range
         manifest: Dict[str, Any] = {
@@ -536,23 +567,158 @@ class Renderer:
     # ----------------------------------------------------------------- drawing
 
     @staticmethod
+    def _visible(
+        levels: Sequence[LevelRecord], pinned_keys: Set[str]
+    ) -> Tuple[List[LevelRecord], int]:
+        """The per-family ray budget, dashboard parity: newest rays win.
+
+        Rays are consumed newest-first, ``MAX_RAYS_PER_FAMILY`` per family, so a
+        busy family (``ts`` emits ~130 on 300 M15 bars) can never starve a quiet
+        one, and *pinned* levels are exempt — an agent's own pin is never hidden.
+        Returns ``(drawn, hidden_count)``; the whole point of the count is that
+        the manifest can say why a level is absent instead of the agent silently
+        missing it.
+        """
+        per: Dict[str, int] = {}
+        drawn: List[LevelRecord] = []
+        ordered = sorted(
+            levels,
+            key=lambda level: (level.formed_at or _EPOCH, level.level_key),
+            reverse=True,
+        )
+        for level in ordered:
+            if level.level_key in pinned_keys:
+                drawn.append(level)
+                continue
+            family = level.family
+            used = per.get(family, 0)
+            if used >= MAX_RAYS_PER_FAMILY:
+                continue
+            per[family] = used + 1
+            drawn.append(level)
+        return drawn, len(levels) - len(drawn)
+
+    @staticmethod
+    def _span(level: LevelRecord, bars: Bars) -> Tuple[int, int]:
+        """The bar-index x-span a level is drawn across — never full-width.
+
+        Dashboard parity: a level whose life cycle ended draws formation → end,
+        and a still-active one draws formation → formation + ``_RAY_BARS`` (a
+        short open span, not a ray to the right edge). Everything clamps into the
+        drawn window, which is what an HTF formation outside it needs.
+        """
+        count = max(len(bars.times), 1)
+        start = bars.index_at_or_before(level.formed_at)
+        start = max(start, 0)
+        if level.changed_at is not None and level.changed_at > (level.formed_at or _EPOCH):
+            end = bars.index_at_or_before(level.changed_at)
+            if end < 0:
+                end = min(start + _RAY_BARS, count - 1)
+        else:
+            end = min(start + _RAY_BARS, count - 1)
+        if end <= start:
+            end = min(start + 1, count - 1)
+        return start, end
+
+    @staticmethod
+    def _level_style(
+        level: LevelRecord, pinned: bool, price: float
+    ) -> Tuple[str, str, float, float]:
+        """``(color, linestyle, linewidth, alpha)`` — the dashboard's ink rules.
+
+        Broken levels fade to thin dotted gray; swept/taken/distributed ones keep
+        their family colour at the dashboard's 35% fade; every family carries the
+        colour the web chart shows it in. ``pinned`` overrides colour (the
+        agent's own marker must never be mistaken for a level's family ink).
+        """
+        status = level.status
+        if status is LevelStatus.BROKEN and not pinned:
+            return _BROKEN, "--", 1.0, 1.0
+        family = level.family
+        direction = level.direction
+        attrs = level.attrs
+        if family == "crt":
+            color = "#00e676" if direction == "bullish" else "#ff5c6c"
+            style = "--" if level.variant == "inside_bar" else "-"
+            return (
+                color,
+                style,
+                _LEVEL_LINEWIDTH,
+                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
+            )
+        if family == "bos":
+            return (
+                ("#ff9100" if attrs.get("kind") == "CHoCH" else "#7aa2ff"),
+                "-",
+                _LEVEL_LINEWIDTH,
+                1.0,
+            )
+        if family == "liquidity":
+            # A pool above price is a buy-side magnet (EQH), below is sell-side
+            # (EQL): the record's direction is neutral, so price position says it.
+            color = "#ff5252" if level.price > price else "#4dd0e1"
+            return (
+                color,
+                "-",
+                _LEVEL_LINEWIDTH,
+                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
+            )
+        if family == "ts":
+            color = "#ff5c6c" if direction == "bearish" else "#00e676"
+            return color, "-", _LEVEL_LINEWIDTH, 1.0
+        if family == "idm":
+            rule = str(attrs.get("rule", "") or "")
+            color = "#ffab40" if rule == "two_candle" else (
+                "#d4e157" if rule == "ref_candle" else "#ffd600"
+            )
+            return (
+                color,
+                "-",
+                _LEVEL_LINEWIDTH,
+                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
+            )
+        if family == "sr":
+            fresh = str(attrs.get("state", "") or "").upper() == "FRESH"
+            color = (
+                ("#00e5ff" if level.price <= price else "#ff9100") if fresh
+                else ("#546e7a" if level.price <= price else "#78909c")
+            )
+            return color, "-" if fresh else "--", _LEVEL_LINEWIDTH, 1.0
+        if family == "qm":
+            fresh = str(attrs.get("state", "") or "").upper() == "FRESH"
+            return (
+                ("#b388ff" if fresh else "#6d5b99"),
+                "-" if fresh else "--",
+                _LEVEL_LINEWIDTH,
+                1.0,
+            )
+        if family == "trendline":
+            color = "#26a69a" if level.price >= price else "#ef5350"
+            return color, "--", _LEVEL_LINEWIDTH, 1.0
+        return "#00e5ff", "-", _LEVEL_LINEWIDTH, 1.0
+
+    @staticmethod
     def _price_range(
         bars: Bars, levels: Sequence[LevelRecord]
     ) -> Tuple[float, float]:
         """The drawn price range: candle extremes, level prices, and zone bands.
 
-        Band extents are included so a zone that reaches beyond its anchor price
-        (or beyond the candles) is never clipped.
+        Level *rays* extend the range (the dashboard's autoscale includes every
+        price series a ray is drawn at), and band extents only for the
+        **zone** families actually painted as boxes — a ``crt`` or ``qm`` range
+        is information the ray does not show, and including it here used to zoom
+        the whole chart out to fit rectangles that were never drawn.
         """
         lows: List[float] = [float(v) for v in bars.low]
         highs: List[float] = [float(v) for v in bars.high]
         for level in levels:
             lows.append(float(level.price))
             highs.append(float(level.price))
-            band = level.band()
-            if band is not None:
-                lows.append(min(float(band[0]), float(band[1])))
-                highs.append(max(float(band[0]), float(band[1])))
+            if level.family in _ZONE_FAMILIES:
+                band = level.band()
+                if band is not None:
+                    lows.append(min(float(band[0]), float(band[1])))
+                    highs.append(max(float(band[0]), float(band[1])))
         if not lows or not highs:
             return 0.0, 0.0
         return min(lows), max(highs)
@@ -652,29 +818,57 @@ class Renderer:
         display_tags: Dict[str, str],
         pinned_keys: Set[str],
     ) -> None:
-        """Every level as a line, its band filled, its tag labelled next to it."""
-        count = len(bars.times)
-        label_x = (count - 1) if count else 0
+        """Dashboard parity: bounded rays, zone boxes, per-family ink, mid tags.
+
+        Nothing here paints a full-width band: a level draws from its formation
+        bar to its life-cycle end (or a short open span while still live), zones
+        draw as quiet 8%-alpha boxes with dotted edges, and each drawn level gets
+        its tag at the **middle** of its span — a right-edge pile-up of 190 tags
+        is exactly the unreadable column this rewrite replaces.
+        """
+        current_price = float(bars.close[-1]) if len(bars.close) else 0.0
         for level in levels:
             pinned = level.level_key in pinned_keys
             tag = display_tags[level.level_key]
-            color = _PINNED if pinned else _LEVEL
-            band = level.band()
+            color, style, width, alpha = self._level_style(level, pinned, current_price)
+            x0, x1 = self._span(level, bars)
+            price = float(level.price)
+            band = level.band() if level.family in _ZONE_FAMILIES else None
             if band is not None:
                 lo, hi = sorted(float(v) for v in band)
-                ax.fill_between([-1, count], lo, hi, color=color, alpha=0.16, zorder=1)
-            ax.axhline(float(level.price), color=color, linewidth=_LEVEL_LINEWIDTH, zorder=4)
+                ax.fill_between(
+                    [x0, x1], lo, hi, color=color, alpha=_ZONE_FILL_ALPHA,
+                    linewidth=0, zorder=1,
+                )
+                for edge_price in (lo, hi):
+                    ax.plot(
+                        [x0, x1], [edge_price, edge_price],
+                        color=color, alpha=alpha, linewidth=1.0,
+                        linestyle=":" if style == "-" else style, zorder=2,
+                    )
+                label_price = (lo + hi) / 2.0
+            else:
+                ax.plot(
+                    [x0, x1], [price, price],
+                    color=color, alpha=alpha, linewidth=width, linestyle=style,
+                    zorder=3,
+                )
+                label_price = price
+            if pinned:
+                # A pin must survive every status fade — it is the agent's own marker.
+                color, alpha = _PINNED, 1.0
             ax.text(
-                label_x,
-                float(level.price),
+                (x0 + x1) / 2.0,
+                label_price,
                 tag,
                 color=color,
+                alpha=alpha,
                 fontsize=_TAG_FONTSIZE,
                 fontweight="bold",
-                ha="right",
+                ha="center",
                 va="center",
                 zorder=6,
-                bbox=dict(facecolor=_BG, edgecolor="none", alpha=0.85, pad=1.2),
+                bbox=dict(facecolor=_BG, edgecolor="none", alpha=0.8, pad=1.0),
             )
 
     def _draw_chrome(
@@ -684,27 +878,30 @@ class Renderer:
         bars: Bars,
         price_range: Tuple[float, float],
     ) -> None:
-        """The current-price marker, the title, and the minimal axes chrome."""
+        """The current-price marker, the title, and the dashboard's chrome.
+
+        The pose is the dashboard's (and TradingView's): gridlines in the theme's
+        gray, the price scale along the **right** edge, and the last price as a
+        cyan dashed line with a cyan tag — no black "PX" stamp floating mid-pane.
+        """
         count = len(bars.times)
         y_lo, y_hi = price_range
         pad = (y_hi - y_lo) * 0.05 if y_hi != y_lo else 1.0
 
         current_price = float(snapshot.current_price)
-        ax.axhline(
-            current_price, color=_PRICE, linewidth=_PRICE_LINEWIDTH, linestyle=":", zorder=5
-        )
+        ax.axhline(current_price, color=_PRICE, linewidth=1.0, linestyle="--", zorder=5)
         if count:
             ax.text(
-                0,
+                count - 1,
                 current_price,
-                f"PX {current_price:.2f}",
-                color=_PRICE,
+                f"{current_price:.2f}",
+                color=_BG,
                 fontsize=_TAG_FONTSIZE,
                 fontweight="bold",
-                ha="left",
-                va="bottom",
+                ha="right",
+                va="center",
                 zorder=6,
-                bbox=dict(facecolor=_BG, edgecolor="none", alpha=0.85, pad=1.2),
+                bbox=dict(facecolor=_PRICE, edgecolor="none", alpha=1.0, pad=1.5),
             )
 
         ax.set_title(
@@ -715,13 +912,15 @@ class Renderer:
         )
         ax.set_xlim(-1, count if count else 1)
         ax.set_ylim(y_lo - pad, y_hi + pad)
-        ax.grid(False)
+        ax.grid(True, color=_GRID, linewidth=0.7, alpha=0.9)
+        ax.set_axisbelow(True)
         ax.set_xticks([])
-        for side in ("top", "right"):
+        for side in ("top", "left"):
             ax.spines[side].set_visible(False)
-        ax.spines["left"].set_color(_INK)
-        ax.spines["bottom"].set_color(_INK)
-        ax.tick_params(axis="y", labelsize=_TICK_FONTSIZE, colors=_INK, length=4)
+        ax.spines["right"].set_color(_GRID)
+        ax.spines["bottom"].set_color(_GRID)
+        ax.yaxis.tick_right()
+        ax.tick_params(axis="y", labelsize=_TICK_FONTSIZE, colors=_INK, length=3)
 
     def _png_bytes(self, fig: Any) -> bytes:
         """Serialise the figure to deterministic, metadata-free PNG bytes.

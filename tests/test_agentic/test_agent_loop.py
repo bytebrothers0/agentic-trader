@@ -1027,3 +1027,108 @@ def test_tool_calls_made_includes_calls_dropped_by_the_cap(tmp_path):
     assert len(request.tool_calls_made) == MAX_TOOL_CALLS_PER_TURN + 2
     assert len(request.tool_results) == MAX_TOOL_CALLS_PER_TURN + 2
     assert [r.call_id for r in request.tool_results] == [c.call_id for c in calls]
+
+
+# --------------------------------------------------------------------------- #
+# The model-output <-> store-schema dialect wall (recorded live failure)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_short_proposal_is_translated_into_a_stored_plan(tmp_path):
+    """The exact proposal a replayed boot turn wrote, which the store used to reject.
+
+    ``bias: "short"`` is the same opinion as ``bearish`` in another dialect, and
+    the prices arrived as prose zones because the structured-output contract is
+    documented but never validated. The plan must land as numbers, not vanish
+    into ``apply_errors``.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    agent = ScriptedAgent([
+        AgentReply(output={
+            "thesis": {"bias": "bearish", "confidence": 0.55, "storyline": "ok"},
+            "proposals": [{
+                "bias": "short",
+                "setup": "HTF-aligned CRT rejection",
+                "entry": "4184.55-4190.05 (sell zone; prefer entries on confirmation)",
+                "sl": "above 4190.05 padded",
+                "tp": "T1 4172.84 (partial), T2 4169.14, T3 4154.65",
+                "invalidation": "H1 close above 4190.5",
+                "confidence": 0.55,
+            }],
+        })
+    ])
+    loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
+
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.output.get("apply_errors", []) == []  # nothing was thrown away
+    assert len(store.data.proposals) == 1
+    plan = store.data.proposals[0]
+    assert plan.bias == "bearish"
+    assert plan.entry == approx(4184.55)   # the near edge of the sell zone
+    assert plan.sl == approx(4190.05)
+    assert plan.tp == approx(4172.84)      # T1, not the "1" in "T1"
+    assert store.data.thesis.bias == "bearish"
+
+
+def test_a_long_proposal_is_translated_the_same_way(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([
+        AgentReply(output={"proposals": [{"bias": "Long", "entry": "4175.20"}]})
+    ])
+    AgentLoop(store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent,
+              clock=clock).run_turn(trigger="request")
+
+    plan = store.data.proposals[0]
+    assert plan.bias == "bullish"
+    assert plan.entry == approx(4175.20)
+
+
+def test_a_thesis_bias_alias_is_translated_too(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([AgentReply(output={"thesis": {"bias": "bull"}})])
+    AgentLoop(store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent,
+              clock=clock).run_turn(trigger="request")
+
+    assert store.data.thesis.bias == "bullish"
+
+
+def test_an_unknown_bias_is_still_refused_at_the_wall(tmp_path):
+    """Translation is not licence: an opinion outside the four-word vocabulary
+    still reaches ``apply_errors`` rather than being invented into a bias."""
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([AgentReply(output={"proposals": [{"bias": "sideways"}]})])
+    loop = AgentLoop(store, _stub_with_fvg().build(), _renderer(tmp_path, clock),
+                     agent, clock=clock)
+
+    outcome = loop.run_turn(trigger="request")
+
+    assert store.data.proposals == []
+    assert any("bias must be one of" in e for e in outcome.output["apply_errors"])
+
+
+def test_the_propose_trade_tool_speaks_the_same_dialect(tmp_path):
+    """The tool path dispatches without validating its arguments, so a tool call
+    with the same ""short"/zone-string shape must be translated identically."""
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(),
+                            _renderer(tmp_path, clock), clock=clock)
+
+    result = registry.execute(ToolCall(name="propose_trade", arguments={
+        "bias": "short",
+        "entry": "4184.55-4190.05 (sell zone)",
+        "sl": "above 4190.05 padded",
+        "tp": "T1 4172.84, T2 4169.14",
+    }))
+
+    assert result.ok is True
+    plan = store.data.proposals[0]
+    assert plan.bias == "bearish"
+    assert plan.entry == approx(4184.55) and plan.sl == approx(4190.05)
+    assert plan.tp == approx(4172.84)

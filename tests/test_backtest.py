@@ -18,6 +18,7 @@ import pytest
 
 from backtest.crt_scan import scan_classic_crts
 from backtest.historical import TF_SECONDS, FrozenLoader
+from backtest.replay import simulate
 
 T0 = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
 
@@ -168,3 +169,70 @@ def test_scan_drops_setups_that_did_not_work_when_asked():
         c for c in everything
         if c.direction == "bullish" and abs(c.crh - 110.0) < 1e-6
     ], "the setup should still be visible when unresolved setups are allowed"
+
+
+# --------------------------------------------------------------------------- #
+# The trade simulator: an entry is a pending order, not an instant fill
+# --------------------------------------------------------------------------- #
+
+def _df(rows):
+    """Bars for `simulate`: ``(open, high, low, close)`` tuples."""
+    return _frame(rows)
+
+
+def test_a_limit_entry_only_counts_once_price_touches_it():
+    # Short at 100 (above spot), stop 102, target 97. Bar 1 touches the entry and
+    # carries no event; bar 2 reaches the target: reward 3 / risk 2.
+    rows = [
+        (99.5, 100.5, 99.0, 100.2),
+        (100.0, 100.4, 96.0, 96.5),
+    ]
+    sim = simulate(_df(rows), "bearish", 100.0, 102.0, 97.0)
+    assert sim.outcome == "tp"
+    assert sim.bars_to_event == 2
+    assert sim.r_multiple == 1.5
+
+
+def test_an_entry_never_touched_is_unfilled_not_open():
+    # The price never trades at/through 100, so there is no position and the
+    # excursion must stay zero — the old sim invented ones.
+    rows = [
+        (98.0, 99.8, 97.5, 99.0),
+        (99.0, 99.9, 98.2, 99.5),
+    ]
+    sim = simulate(_df(rows), "bearish", 100.0, 102.0, 90.0)
+    assert sim.outcome == "unfilled"
+    assert sim.bars_to_event is None and sim.r_multiple is None
+    assert sim.mfe == 0.0 and sim.mae == 0.0
+
+
+def test_an_open_trade_is_marked_to_the_window_end():
+    # Filled, neither level reached before history ends: r_mark is the unrealised
+    # R at the last close ((100 - 99.3) / 2), not `None`.
+    rows = [
+        (99.5, 100.5, 98.0, 99.0),
+        (99.2, 100.2, 97.5, 99.3),
+    ]
+    sim = simulate(_df(rows), "bearish", 100.0, 102.0, 80.0)
+    assert sim.outcome == "open"
+    assert sim.bars_to_event is None and sim.r_multiple is None
+    assert sim.r_mark == 0.35
+
+
+def test_a_fill_stop_and_target_inside_one_bar_is_conservative():
+    # The only bar touches the entry (100), the stop (102) and the target (97)
+    # in one bar: the stop is taken — the same in-bar ambiguity rule every bar gets.
+    rows = [(99.0, 102.5, 96.0, 99.8)]
+    sim = simulate(_df(rows), "bearish", 100.0, 102.0, 97.0)
+    assert sim.outcome == "ambiguous"
+    assert sim.r_multiple == -1.0 and sim.bars_to_event == 1
+
+
+def test_a_long_fills_on_a_dip_and_reaches_its_target():
+    rows = [
+        (99.0, 100.2, 98.5, 100.0),   # dips through the buy limit
+        (100.0, 104.5, 99.8, 104.0),  # runs to the target
+    ]
+    sim = simulate(_df(rows), "bullish", 100.0, 98.0, 104.0)
+    assert sim.outcome == "tp"
+    assert sim.r_multiple == 2.0

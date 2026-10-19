@@ -400,6 +400,21 @@ def test_view_symbol_defaults_to_the_store_symbol(tmp_path):
     assert _store(tmp_path).data.view.symbol == "XAUUSDm"
 
 
+def test_the_default_view_families_are_the_playbooks_own_set():
+    """The drift that lost the backtest's turns to a token cap.
+
+    `crt_strategy.REQUIRED_FAMILIES` documents "the agent's view defaults to
+    it", but the view defaulted to *every* detector family instead — a fresh
+    M15/300-bar render measured 639 levels (≈49k tokens of manifest, re-sent
+    every round) against ≈15k for the playbook's six. A default the strategy
+    names must actually be what the strategy names.
+    """
+    from agentic.crt_strategy import REQUIRED_FAMILIES
+    from agentic.models import DEFAULT_FAMILIES
+
+    assert list(DEFAULT_FAMILIES) == list(REQUIRED_FAMILIES)
+
+
 def test_view_rejects_a_foreign_symbol(tmp_path):
     """One store per symbol, so bias and pins cannot leak across instruments."""
     store = _store(tmp_path)

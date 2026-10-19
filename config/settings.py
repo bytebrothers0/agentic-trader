@@ -317,7 +317,7 @@ AGENT_BARS = 300
 AGENT_POLL_S = 15.0            # watchdog poll cadence
 AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
 AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name
-AGENT_MAX_TOKENS = 1500
+AGENT_MAX_TOKENS = 8000         # per-call output cap (a reasoning model bills its hidden reasoning here)
 AGENT_TEMPERATURE = 0.0
 AGENT_HTTP_TIMEOUT_S = 120.0   # per-request timeout for the live transport
 AGENT_HTTP_USER_AGENT = "trading-bot-agent/1.0"  # must match agent_service.DEFAULT_USER_AGENT (Cloudflare 1010 blocks urllib's default)
