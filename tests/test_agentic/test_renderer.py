@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from _fixtures import (
     FakeClock,
     day,
     level as _level,
+    bars_rows,
     render_scene,
     series as _series,
     snapshot as _snapshot,
@@ -132,8 +134,9 @@ def test_manifest_has_the_spec_shape():
 
     assert set(manifest) == {
         "render_id", "symbol", "timeframe", "window", "rendered_at",
-        "price_range", "image", "tags",
+        "price_range", "hidden_levels", "image", "tags",
     }
+    assert manifest["hidden_levels"] == 0   # nothing below the ray budget here
     assert manifest["symbol"] == "XAUUSDm"
     assert manifest["timeframe"] == "M15"
     assert manifest["window"]["bars"] == len(bars.times)
@@ -598,3 +601,50 @@ def test_split_render_draws_into_each_pane_band(tmp_path):
 
     assert top > 0, "the top (HTF) pane drew no candles"
     assert bottom > 0, "the bottom (LTF) pane drew no candles"
+
+
+# --------------------------------------------------------------------------- #
+# The ray budget (dashboard parity): a busy family can never flood the chart
+# --------------------------------------------------------------------------- #
+
+def _many_ts(count):
+    """``count`` live TS levels, one per bar, oldest first."""
+    base = datetime(2026, 10, 10, 0, 0, tzinfo=timezone.utc)
+    return [
+        _level(
+            "ts",
+            type="TS HIGH" if i % 2 else "TS LOW",
+            price=100.0 + (i % 20) * 0.5,
+            time=ts(base + timedelta(minutes=15 * i)),
+        )
+        for i in range(count)
+    ]
+
+
+def test_a_busy_family_never_starves_the_others_or_itself(tmp_path):
+    """The dashboard's per-category cap: 80 newest rays win, the rest are hidden
+    — and counted, so the manifest can say why a level is absent."""
+    snap = _snapshot(_many_ts(85) + [
+        _level("crt", type="BEARISH", price=99.0,
+               time=ts(datetime(2026, 10, 19, 16, 0, tzinfo=timezone.utc)))
+    ])
+    bars = _series(bars_rows(40))
+    result = _renderer(tmp_path, "cap", FakeClock()).render(snap, bars)
+
+    assert result.manifest["hidden_levels"] == 5
+    ts_tags = [t for t, e in result.tags.items() if e.family == "ts"]
+    assert len(ts_tags) == 80
+    assert len(result.tags) == 81          # 80 ts + the 1 crt run
+
+
+def test_a_pinned_level_is_never_hidden(tmp_path):
+    snap = _snapshot(_many_ts(85))
+    bars = _series(bars_rows(40))
+    old = min(snap.levels, key=lambda lvl: (lvl.formed_at, lvl.level_key))
+    result = _renderer(tmp_path, "pin", FakeClock()).render(snap, bars, pins=[old])
+
+    assert result.manifest["hidden_levels"] == 4
+    keys = {e.level_key for e in result.tags.values()}
+    assert old.level_key in keys           # a 45th hidden ts would be exactly wrong
+    ts_tags = [t for t, e in result.tags.items() if e.family == "ts"]
+    assert len(ts_tags) == 81              # 80 budget + the exempt pin
