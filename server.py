@@ -128,8 +128,10 @@ def _resolve_agent_connection(
     real cause; raising a clear ``RuntimeError`` here names it instead.
 
     A blank ``api_key_env`` after the merge is **valid** — it means a keyless
-    endpoint (``LLM_PROVIDER=local`` resolves to ``key_env=""``), so only
-    ``model`` and ``api_base`` are required to be non-empty.
+    endpoint (``LLM_PROVIDER=local`` with a blank ``LOCAL_API_KEY_ENV`` resolves to
+    ``key_env=""``), so only ``model`` and ``api_base`` are required to be
+    non-empty. A non-blank value is equally valid: it names the env var whose value
+    the transport sends as ``Authorization: Bearer``.
     """
     if str(mode or "").strip().lower() != "live":
         return "", model, api_base, api_key_env
@@ -149,9 +151,9 @@ def _resolve_agent_connection(
     api_key_env = api_key_env or key_env
     # ``model`` and ``api_base`` are always required; ``api_key_env`` may stay
     # blank, which means a **keyless** endpoint (``resolve_provider`` returns
-    # ``""`` for ``LLM_PROVIDER=local``, and the transport then sends no
-    # ``Authorization`` header). A blank key variable is therefore a valid
-    # configuration, not an incomplete one.
+    # ``""`` for a keyless ``LLM_PROVIDER=local``, and the transport then sends no
+    # ``Authorization`` header), or name a set variable for a keyed endpoint. A
+    # blank key variable is therefore a valid configuration, not an incomplete one.
     missing = [
         name
         for name, value in (

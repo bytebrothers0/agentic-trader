@@ -11,6 +11,8 @@ equivalence is to the rule, which is written down in both places.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ai_agent import config as cfg
@@ -20,7 +22,7 @@ from ai_agent import config as cfg
 def provider_env(monkeypatch):
     """Set the module constants ``resolve_provider`` reads, per case."""
 
-    def _set(*, llm_provider, groq_key, xai_key):
+    def _set(*, llm_provider, groq_key, xai_key, local_key_env=""):
         monkeypatch.setattr(cfg, "LLM_PROVIDER", llm_provider)
         monkeypatch.setattr(cfg, "GROQ_API_KEY", groq_key)
         monkeypatch.setattr(cfg, "XAI_API_KEY", xai_key)
@@ -30,6 +32,9 @@ def provider_env(monkeypatch):
         monkeypatch.setattr(cfg, "GROK_MODEL", "grok-4")
         monkeypatch.setattr(cfg, "LOCAL_BASE_URL", "http://localhost:8080/v1")
         monkeypatch.setattr(cfg, "LOCAL_MODEL", "deepseek-v4.1-flash-free")
+        # Pin the local key variable so the case does not depend on the ambient
+        # .env (a keyless local endpoint is the default).
+        monkeypatch.setattr(cfg, "LOCAL_API_KEY_ENV", local_key_env)
 
     return _set
 
@@ -65,11 +70,27 @@ def test_groq_is_the_fallback_when_nothing_is_configured(provider_env):
     assert base and model and key_env == "GROQ_API_KEY"
 
 
-def test_local_is_selected_and_keyless(provider_env):
+def test_local_is_selected_and_keyless_by_default(provider_env):
     """LLM_PROVIDER=local returns the local base/model with NO key variable."""
     provider_env(llm_provider="local", groq_key="g", xai_key="x")
     assert cfg.resolve_provider() == (
         "local", "http://localhost:8080/v1", "deepseek-v4.1-flash-free", "",
+    )
+
+
+def test_local_sends_the_client_key_when_local_api_key_env_names_one(provider_env):
+    """A non-blank LOCAL_API_KEY_ENV makes the local endpoint keyed, not keyless.
+
+    This is how the agent talks to an opencode-proxy build that authenticates the
+    *client* (``Authorization: Bearer oc_sk_...``) instead of holding its own key.
+    """
+    provider_env(
+        llm_provider="local", groq_key="g", xai_key="x",
+        local_key_env="OPENCODE_API_KEY",
+    )
+    assert cfg.resolve_provider() == (
+        "local", "http://localhost:8080/v1", "deepseek-v4.1-flash-free",
+        "OPENCODE_API_KEY",
     )
 
 
@@ -83,15 +104,16 @@ def test_the_real_environment_resolves_to_a_usable_provider():
     """The local ``.env`` selection must resolve to a sane endpoint.
 
     Either a **keyed** hosted provider (the ``*_API_KEY`` variable *name*, never
-    the key) or the **keyless** local provider (an empty name, meaning "send no
-    Authorization header").
+    the key) or the local provider — keyless (an empty name, meaning "send no
+    Authorization header") or keyed by naming a variable that is actually set.
     """
     provider, base, model, key_env = cfg.resolve_provider()
     assert provider in {"groq", "xai", "local"}
     assert base.startswith("http")
     assert model
     if provider == "local":
-        assert key_env == ""  # keyless by design
+        # Keyless, or a named client key that really exists in the environment.
+        assert key_env == "" or os.environ.get(key_env)
     else:
         assert key_env.endswith("_API_KEY")
 
