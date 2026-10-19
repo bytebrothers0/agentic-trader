@@ -67,7 +67,7 @@ MIN_BARS = 20
 #: for a vision model, and past the ~50-candle mark the tags collapse into
 #: unreadable noise (the replay proved it at 300). Past price action is reached
 #: with ``offset`` — pan the window back — never by widening it.
-MAX_BARS = 50
+MAX_BARS = 100
 #: How far back (in bars, per timeframe) the agent may shift its window. A cap
 #: exists for the same reason the bar cap does: an unbounded lookback asks the
 #: provider for history it may not hold and renders a window nobody asked for.

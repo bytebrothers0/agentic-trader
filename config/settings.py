@@ -313,10 +313,10 @@ AGENT_MODE = "live"            # "mock" (scripted agent, zero spend) | "live" (v
 AGENT_MODEL = ""               # "" = inherit the LLM_PROVIDER model (e.g. qwen/qwen3.8-27b)
 AGENT_SYMBOL = "XAUUSDm"
 AGENT_TIMEFRAME = "M15"
-#: A *screenshot*: 20 candles is what the dashboard shows and what the agent can
-#: actually parse (the store caps a view at MAX_BARS=50 — past price action is
-#: reached with offset, never by widening the window).
-AGENT_BARS = 20
+#: A *screenshot*: 50 candles is the default view and MAX_BARS (100) the hard
+#: ceiling — past price action is reached with `offset`, never by widening the
+#: window beyond what the agent can actually parse.
+AGENT_BARS = 50
 AGENT_POLL_S = 15.0            # watchdog poll cadence
 AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
 AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name

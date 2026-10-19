@@ -213,7 +213,7 @@ class View(Serde):
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_FAMILIES))
-    bars: int = 20
+    bars: int = 50
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the
     #: default) is the live/latest window, so ``offset`` alone re-renders a *past*

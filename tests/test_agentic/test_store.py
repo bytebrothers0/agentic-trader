@@ -313,6 +313,10 @@ def test_view_validates_its_values(tmp_path):
         store.set_view(bars=5)
     assert exc.value.reason == "invalid_bars"
 
+    with pytest.raises(StoreError) as exc:
+        store.set_view(bars=101)  # a view is a screenshot; MAX_BARS is the ceiling
+    assert exc.value.reason == "invalid_bars"
+
 
 def test_view_accepts_a_derived_timeframe_and_coerces_enums(tmp_path):
     view = _store(tmp_path).set_view(

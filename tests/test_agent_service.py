@@ -52,7 +52,7 @@ def _config(tmp_path, **over) -> AgentConfig:
     base = dict(
         symbol="XAUUSDm",
         timeframe="M15",
-        bars=20,
+        bars=50,
         mode="mock",
         model="gpt-4o-mini",
         poll_s=3600.0,  # a huge cadence: a spawned thread never races the test
@@ -951,4 +951,18 @@ def test_the_shipped_output_cap_leaves_room_for_a_reasoning_runaway():
     from config.settings import AGENT_MAX_TOKENS
 
     assert AGENT_MAX_TOKENS >= 8000
+
+
+def test_the_shipped_view_default_is_a_screenshot_within_the_store_cap():
+    """The boot view's bar count must fit inside the store's view bounds.
+
+    The operator's spec: the default screenshot is 50 candles, 100 is the hard
+    ceiling, and history is reached with ``offset`` — never a wider window. If
+    the config and the store drift apart (config wider than the cap) the boot
+    turn dies on its first ``set_view`` before any render happens.
+    """
+    from agentic.store import MAX_BARS, MIN_BARS
+    from config.settings import AGENT_BARS
+
+    assert MIN_BARS <= AGENT_BARS <= MAX_BARS
 

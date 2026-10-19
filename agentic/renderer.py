@@ -108,8 +108,12 @@ _ZONE_FAMILIES = frozenset({"fvg", "ifvg", "ob"})
 #: newest rays win, quieter families can never be starved by a busy one.
 MAX_RAYS_PER_FAMILY = 80
 
-#: A still-active level's open span, in bars (the dashboard's ``+8``).
-_RAY_BARS = 8
+#: A still-active level's open span, in bars. The dashboard's rule is "+8 bars
+#: while a level is still live" — but its own window is hundreds of candles, so
+#: there +8 is a tiny nub (~3% of width). On the agent's screenshot-sized window
+#: the same fixed 8-over-20-bars read like a wall across half the pane; 4 bars
+#: on a 50-candle default is the same visual ~8% nub the dashboard shows.
+_RAY_BARS = 4
 
 _CANDLE_WIDTH = 0.6
 _WICK_LINEWIDTH = 1.1
@@ -311,7 +315,7 @@ class Renderer:
         dpi: int = 100,
         clock: Optional[Callable[[], datetime]] = None,
         out_dir: Optional[str] = None,
-        max_bars_per_pane: int = 50,
+        max_bars_per_pane: int = 100,
     ):
         self.width = int(width)
         self.height = int(height)
@@ -988,21 +992,23 @@ class Renderer:
         ax.set_axisbelow(True)
         # The date axis is real: the agent reads *when* its window starts and
         # ends straight off the picture, like the dashboard's bottom labels.
-        # An intraday window (all bars on one UTC date) labels times instead —
-        # repeating "19 Oct" six times says nothing.
+        # TradingView's rule: a label shows the date only when the day *changes*
+        # from the previous tick — same-day ticks show clock times, so a window
+        # sitting on one session doesn't print "16 Oct" five times.
         if count:
-            same_day = _date_of(bars.times[0]) == _date_of(bars.times[-1])
             step = max(1, count // _TICKS_PER_PANE)
             ticks = list(range(0, count, step))
+            labels: List[str] = []
+            previous_date: Optional[str] = None
+            for i in ticks:
+                day = _date_of(bars.times[i])
+                labels.append(
+                    _iso_date(bars.times[i]) if day != previous_date
+                    else _time_of(bars.times[i])
+                )
+                previous_date = day
             ax.set_xticks(ticks)
-            ax.set_xticklabels(
-                [
-                    _time_of(bars.times[i]) if same_day else _iso_date(bars.times[i])
-                    for i in ticks
-                ],
-                fontsize=_TICK_FONTSIZE,
-                color=_INK,
-            )
+            ax.set_xticklabels(labels, fontsize=_TICK_FONTSIZE, color=_INK)
         else:
             ax.set_xticks([])
         for side in ("top", "left"):

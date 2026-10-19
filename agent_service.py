@@ -98,7 +98,7 @@ class AgentConfig:
 
     symbol: str = "XAUUSDm"
     timeframe: str = "M15"
-    bars: int = 300
+    bars: int = 50
     mode: str = "mock"
     model: str = "gpt-4o-mini"
     api_base: str = "https://api.openai.com/v1"
@@ -360,7 +360,7 @@ def _mock_script(config: AgentConfig) -> List[AgentReply]:
             ToolCall(
                 call_id="mock-set-view",
                 name="set_view",
-                arguments={"timeframe": timeframe, "bars": int(config.bars or 300)},
+                arguments={"timeframe": timeframe, "bars": int(config.bars or 50)},
             ),
             ToolCall(
                 call_id="mock-add-watch",
