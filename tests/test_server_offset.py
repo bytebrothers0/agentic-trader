@@ -59,10 +59,10 @@ def test_candles_default_offset_is_zero(monkeypatch):
     fake = _FakeLoader()
     client = _client(monkeypatch, fake)
 
-    resp = client.get("/api/candles", params={"timeframe": "D1", "bars": 100})
+    resp = client.get("/api/candles", params={"timeframe": "D1", "bars": 40})
     assert resp.status_code == 200
     payload = resp.json()
-    assert fake.calls == [("D1", 100, 0)]
+    assert fake.calls == [("D1", 40, 0)]
     assert payload["offset"] == 0
 
 

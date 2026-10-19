@@ -52,7 +52,7 @@ def _config(tmp_path, **over) -> AgentConfig:
     base = dict(
         symbol="XAUUSDm",
         timeframe="M15",
-        bars=300,
+        bars=20,
         mode="mock",
         model="gpt-4o-mini",
         poll_s=3600.0,  # a huge cadence: a spawned thread never races the test

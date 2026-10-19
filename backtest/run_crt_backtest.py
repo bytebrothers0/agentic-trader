@@ -114,7 +114,8 @@ def render_crt_chart(loader: FrozenLoader, symbol: str, timeframe: str, bars: in
         feed = build_feed(loader)
         snapshot = feed.snapshot(symbol, timeframe, families=["crt"], bars=bars)
         series = feed.bars(symbol, timeframe, bars=bars)
-        renderer = Renderer(width=896, height=504, out_dir=out_dir)
+        renderer = Renderer(width=896, height=504, out_dir=out_dir,
+                            max_bars_per_pane=5000)
         result = renderer.render(snapshot, series, out_dir=out_dir)
         levels = [lvl.to_dict() for lvl in snapshot.levels]
     return result.image_path, result.manifest, levels

@@ -81,10 +81,15 @@ _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _BG = "#121418"
 _INK = "#9aa5b5"
 _GRID = "#1e222b"
-_UP = "#089981"
-_DOWN = "#f23645"
+#: Candles as the dashboard paints them: solid teal bodies for up, salmon red
+#: for down (the look in the operator's screenshot, which the web theme's
+#: ``#089981``/``#f23645`` renders the same way at this size).
+_UP = "#26a69a"
+_DOWN = "#ef5350"
 _PINNED = "#e07600"
-_PRICE = "#00e5ff"
+#: The current price is a dotted hairline with a red chip on the scale — the
+#: dashboard's TradingView pose.
+_PRICE = "#f23645"
 #: Broken levels are history — the exact gray the dashboard fades them to.
 _BROKEN = "#5a6b7a"
 #: Swept/taken/distributed levels keep their family colour at the dashboard's
@@ -107,33 +112,42 @@ MAX_RAYS_PER_FAMILY = 80
 _RAY_BARS = 8
 
 _CANDLE_WIDTH = 0.6
-_LEVEL_LINEWIDTH = 1.2
-_TAG_FONTSIZE = 12
-_TITLE_FONTSIZE = 15
-_TICK_FONTSIZE = 12
+_WICK_LINEWIDTH = 1.1
+#: Every level is a 1px dotted hairline — the dashboard's ray look. Colour and
+#: fade carry the family/status; weight is uniform by design.
+_LEVEL_LINEWIDTH = 0.9
+_LEVEL_STYLE = (0, (1, 2))
+
+#: Type sizes are dashboard-sized: tags are *small plain text* next to their
+#: dotted line (bold 12pt tags in bubble boxes turned the dense right cluster
+#: into a wall of chips), and the header chip replaces a big title.
+_TAG_FONTSIZE = 8
+_HEADER_FONTSIZE = 9
+_TICK_FONTSIZE = 9
+_TICKS_PER_PANE = 6
 
 #: Fixed axes margins. A layout engine (``tight_layout``) is expensive and forces
 #: an extra full draw pass inside ``savefig``; fixed margins are cheaper *and*
 #: more deterministic. These are **edge positions** of the axes box (matplotlib's
-#: ``subplots_adjust`` semantics): the y-scale sits on the **right** (dashboard /
-#: TradingView pose), so ~6% of width is reserved for it and the candles breathe
-#: from the left edge.
+#: ``subplots_adjust`` semantics): the price scale sits on the **right**
+#: (dashboard / TradingView pose), dates run along the bottom, and the header
+#: chip lives inside the axes' top-left corner.
 _MARGINS: Dict[str, float] = {
     "left": 0.005,
     "right": 0.938,
-    "top": 0.885,
-    "bottom": 0.045,
+    "top": 0.97,
+    "bottom": 0.075,
 }
 
-#: Stacked-pane margins: the same horizontal insets, a little more head-room per
-#: pane for its own title, and a fixed ``hspace`` between panes. Fixed (no
-#: ``tight_layout``) for the same determinism reason as ``_MARGINS``.
+#: Stacked-pane margins: the same horizontal insets, head-room per pane for its
+#: own header chip and date axis, and a fixed ``hspace`` between panes. Fixed
+#: (no ``tight_layout``) for the same determinism reason as ``_MARGINS``.
 _SPLIT_MARGINS: Dict[str, float] = {
     "left": 0.005,
     "right": 0.938,
-    "top": 0.93,
-    "bottom": 0.04,
-    "hspace": 0.30,
+    "top": 0.955,
+    "bottom": 0.07,
+    "hspace": 0.35,
 }
 
 #: ``pyplot``, ``Rectangle``, ``Image`` — filled on first render, so the vision
@@ -263,6 +277,29 @@ def _iso_z(value: Any) -> Optional[str]:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _iso_date(value: Any) -> str:
+    """``"24 Oct"`` from unix seconds or a datetime — the dashboard's date label."""
+    if isinstance(value, datetime):
+        dt = as_aware(value)
+    else:
+        dt = datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%d %b")
+
+
+def _date_of(value: Any) -> str:
+    """Just the UTC calendar date, to detect an intraday (same-day) window."""
+    return _iso_date(value)
+
+
+def _time_of(value: Any) -> str:
+    """``"03:15"`` from unix seconds or a datetime — an intraday bar's label."""
+    if isinstance(value, datetime):
+        dt = as_aware(value)
+    else:
+        dt = datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%H:%M")
+
+
 class Renderer:
     """Render a :class:`FeedSnapshot` + pins to a deterministic PNG + manifest."""
 
@@ -274,12 +311,18 @@ class Renderer:
         dpi: int = 100,
         clock: Optional[Callable[[], datetime]] = None,
         out_dir: Optional[str] = None,
+        max_bars_per_pane: int = 50,
     ):
         self.width = int(width)
         self.height = int(height)
         self.dpi = int(dpi)
         self._clock = clock or _utcnow
         self.out_dir = out_dir or DEFAULT_RENDER_DIR
+        #: The screenshot's size cap. ``agentic.store`` refuses a view wider than
+        #: this already; the renderer enforces the same invariant on anything
+        #: drawn into it, so no call path can paint a pane the tag grid cannot
+        #: survive. A *report* chart may raise the cap explicitly.
+        self.max_bars_per_pane = int(max_bars_per_pane)
 
     # ------------------------------------------------------------------ render
 
@@ -322,6 +365,15 @@ class Renderer:
                 pane_list, thesis, out_dir, int(offset), pins=list(pins or ())
             )
 
+        # The screenshot-size invariant: a pane wider than ``max_bars_per_pane``
+        # is refused, never squeezed — the store caps views at the same bound, so
+        # this only trips for direct callers (a *report* chart raises its cap).
+        if len(bars.times) > self.max_bars_per_pane:
+            raise ValueError(
+                f"too_many_bars: a pane renders at most {self.max_bars_per_pane} "
+                f"bars, got {len(bars.times)} — request a narrower window (or "
+                "pan back with offset) instead"
+            )
         levels, pinned_keys = self._level_set(snapshot, pins)
         drawn, hidden = self._visible(levels, pinned_keys)
         display_tags = self._display_tags(drawn, pinned_keys)
@@ -332,7 +384,8 @@ class Renderer:
         # of an otherwise identical render.
         entries = {tag: entries[tag] for tag in sorted(entries)}
 
-        png = self._draw(snapshot, bars, drawn, display_tags, pinned_keys, price_range)
+        png = self._draw(snapshot, bars, drawn, display_tags, pinned_keys,
+                         price_range, hidden)
         sha = hashlib.sha256(png).hexdigest()
         render_id = f"r_{sha[:16]}"
 
@@ -387,10 +440,18 @@ class Renderer:
         merged into the primary pane (deduped by ``level_key``).
         """
         extra_pins = list(pins or ())
-        drawn_panes: List[Tuple["Pane", List[LevelRecord], Dict[str, str], Set[str], Tuple[float, float]]] = []
+        drawn_panes: List[Tuple["Pane", List[LevelRecord], Dict[str, str], Set[str], Tuple[float, float], int]] = []
         merged_entries: Dict[str, TagEntry] = {}
         pane_manifest: List[Dict[str, Any]] = []
         for index, pane in enumerate(panes):
+            # The screenshot-size invariant, per pane (see ``render``).
+            if len(pane.bars.times) > self.max_bars_per_pane:
+                raise ValueError(
+                    f"too_many_bars: a pane renders at most "
+                    f"{self.max_bars_per_pane} bars, pane {index + 1} "
+                    f"({pane.snapshot.timeframe}) has {len(pane.bars.times)} — "
+                    "request narrower windows (or pan back with offset) instead"
+                )
             pane_pins = list(pane.pins) + (extra_pins if index == 0 else [])
             levels, pinned_keys = self._level_set(pane.snapshot, pane_pins)
             visible, hidden = self._visible(levels, pinned_keys)
@@ -402,7 +463,9 @@ class Renderer:
             entries = self._entries(visible, display_tags, pinned_keys, thesis, pane.snapshot)
             entries = {tag: entries[tag] for tag in sorted(entries)}
             merged_entries.update(entries)
-            drawn_panes.append((pane, visible, display_tags, pinned_keys, price_range))
+            drawn_panes.append(
+                (pane, visible, display_tags, pinned_keys, price_range, hidden)
+            )
             pane_manifest.append({
                 "timeframe": pane.snapshot.timeframe,
                 "window": self._window(pane.bars, offset),
@@ -425,7 +488,7 @@ class Renderer:
             fh.write(png)
 
         primary = drawn_panes[0]
-        primary_snapshot, _levels, _tags, _pinned, primary_range = primary
+        primary_snapshot, _levels, _tags, _pinned, primary_range, _hidden = primary
         lo, hi = primary_range
         manifest: Dict[str, Any] = {
             "render_id": render_id,
@@ -623,49 +686,40 @@ class Renderer:
     @staticmethod
     def _level_style(
         level: LevelRecord, pinned: bool, price: float
-    ) -> Tuple[str, str, float, float]:
-        """``(color, linestyle, linewidth, alpha)`` — the dashboard's ink rules.
+    ) -> Tuple[str, float]:
+        """``(color, alpha)`` — the dashboard's ink rules, hairline weight fixed.
 
-        Broken levels fade to thin dotted gray; swept/taken/distributed ones keep
-        their family colour at the dashboard's 35% fade; every family carries the
-        colour the web chart shows it in. ``pinned`` overrides colour (the
-        agent's own marker must never be mistaken for a level's family ink).
+        Weight is uniform by design (the dashboard draws every level as a 1px
+        dotted line), so only colour and fade vary: broken levels fade to gray;
+        swept/taken/distributed ones keep their family colour at the dashboard's
+        35% fade; every family carries the colour the web chart shows it in.
+        ``pinned`` overrides colour (the agent's own marker must never be
+        mistaken for a level's family ink) and never fades.
         """
         status = level.status
         if status is LevelStatus.BROKEN and not pinned:
-            return _BROKEN, "--", 1.0, 1.0
+            return _BROKEN, 1.0
         family = level.family
         direction = level.direction
         attrs = level.attrs
         if family == "crt":
             color = "#00e676" if direction == "bullish" else "#ff5c6c"
-            style = "--" if level.variant == "inside_bar" else "-"
             return (
                 color,
-                style,
-                _LEVEL_LINEWIDTH,
                 _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
             )
         if family == "bos":
-            return (
-                ("#ff9100" if attrs.get("kind") == "CHoCH" else "#7aa2ff"),
-                "-",
-                _LEVEL_LINEWIDTH,
-                1.0,
-            )
+            return "#ff9100" if attrs.get("kind") == "CHoCH" else "#7aa2ff", 1.0
         if family == "liquidity":
             # A pool above price is a buy-side magnet (EQH), below is sell-side
             # (EQL): the record's direction is neutral, so price position says it.
             color = "#ff5252" if level.price > price else "#4dd0e1"
             return (
                 color,
-                "-",
-                _LEVEL_LINEWIDTH,
                 _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
             )
         if family == "ts":
-            color = "#ff5c6c" if direction == "bearish" else "#00e676"
-            return color, "-", _LEVEL_LINEWIDTH, 1.0
+            return ("#ff5c6c" if direction == "bearish" else "#00e676"), 1.0
         if family == "idm":
             rule = str(attrs.get("rule", "") or "")
             color = "#ffab40" if rule == "two_candle" else (
@@ -673,8 +727,6 @@ class Renderer:
             )
             return (
                 color,
-                "-",
-                _LEVEL_LINEWIDTH,
                 _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
             )
         if family == "sr":
@@ -683,19 +735,13 @@ class Renderer:
                 ("#00e5ff" if level.price <= price else "#ff9100") if fresh
                 else ("#546e7a" if level.price <= price else "#78909c")
             )
-            return color, "-" if fresh else "--", _LEVEL_LINEWIDTH, 1.0
+            return color, 1.0
         if family == "qm":
             fresh = str(attrs.get("state", "") or "").upper() == "FRESH"
-            return (
-                ("#b388ff" if fresh else "#6d5b99"),
-                "-" if fresh else "--",
-                _LEVEL_LINEWIDTH,
-                1.0,
-            )
+            return ("#b388ff" if fresh else "#6d5b99"), 1.0
         if family == "trendline":
-            color = "#26a69a" if level.price >= price else "#ef5350"
-            return color, "--", _LEVEL_LINEWIDTH, 1.0
-        return "#00e5ff", "-", _LEVEL_LINEWIDTH, 1.0
+            return ("#26a69a" if level.price >= price else "#ef5350"), 1.0
+        return "#00e5ff", 1.0
 
     @staticmethod
     def _price_range(
@@ -731,6 +777,7 @@ class Renderer:
         display_tags: Dict[str, str],
         pinned_keys: Set[str],
         price_range: Tuple[float, float],
+        hidden: int = 0,
     ) -> bytes:
         plt, rectangle, _ = _vision_stack()
         fig, ax = plt.subplots(
@@ -742,20 +789,23 @@ class Renderer:
             fig.subplots_adjust(**_MARGINS)
             self._draw_candles(ax, bars, rectangle)
             self._draw_levels(ax, bars, levels, display_tags, pinned_keys)
-            self._draw_chrome(ax, snapshot, bars, price_range)
+            self._draw_chrome(
+                ax, snapshot, bars, price_range,
+                drawn_count=len(levels), hidden_count=hidden,
+            )
             return self._png_bytes(fig)
         finally:
             plt.close(fig)
 
     def _draw_panes(
         self,
-        drawn: Sequence[Tuple[Pane, Sequence[LevelRecord], Dict[str, str], Set[str], Tuple[float, float]]],
+        drawn: Sequence[Tuple[Pane, Sequence[LevelRecord], Dict[str, str], Set[str], Tuple[float, float], int]],
     ) -> bytes:
         """Draw the panes stacked top→bottom on one figure.
 
-        Each pane gets its own candles, levels, title, current-price marker and
-        **independent y-range** (``_draw_chrome`` sets ``set_ylim`` per axes), so a
-        quiet LTF pane is not flattened by the HTF pane's range.
+        Each pane gets its own candles, levels, header chip, current-price
+        marker and **independent y-range** (``_draw_chrome`` sets ``set_ylim``
+        per axes), so a quiet LTF pane is not flattened by the HTF pane's range.
         """
         plt, rectangle, _ = _vision_stack()
         count = len(drawn)
@@ -769,13 +819,16 @@ class Renderer:
         try:
             fig.patch.set_facecolor(_BG)
             fig.subplots_adjust(**_SPLIT_MARGINS)
-            for ax, (pane, levels, display_tags, pinned_keys, price_range) in zip(
+            for ax, (pane, levels, display_tags, pinned_keys, price_range, hidden) in zip(
                 axes.ravel(), drawn
             ):
                 ax.set_facecolor(_BG)
                 self._draw_candles(ax, pane.bars, rectangle)
                 self._draw_levels(ax, pane.bars, levels, display_tags, pinned_keys)
-                self._draw_chrome(ax, pane.snapshot, pane.bars, price_range)
+                self._draw_chrome(
+                    ax, pane.snapshot, pane.bars, price_range,
+                    drawn_count=len(levels), hidden_count=hidden,
+                )
             return self._png_bytes(fig)
         finally:
             plt.close(fig)
@@ -788,13 +841,13 @@ class Renderer:
             low = float(bars.low[i])
             c = float(bars.close[i])
             color = _UP if c >= o else _DOWN
-            ax.plot([i, i], [low, h], color=color, linewidth=1.6, zorder=2)
+            ax.plot([i, i], [low, h], color=color, linewidth=_WICK_LINEWIDTH, zorder=2)
             if c == o:
                 ax.plot(
                     [i - _CANDLE_WIDTH / 2, i + _CANDLE_WIDTH / 2],
                     [c, c],
                     color=color,
-                    linewidth=_LEVEL_LINEWIDTH,
+                    linewidth=_WICK_LINEWIDTH,
                     zorder=3,
                 )
             else:
@@ -804,8 +857,8 @@ class Renderer:
                         _CANDLE_WIDTH,
                         abs(c - o),
                         facecolor=color,
-                        edgecolor=color,
-                        linewidth=0.8,
+                        edgecolor="none",
+                        linewidth=0,
                         zorder=3,
                     )
                 )
@@ -830,7 +883,7 @@ class Renderer:
         for level in levels:
             pinned = level.level_key in pinned_keys
             tag = display_tags[level.level_key]
-            color, style, width, alpha = self._level_style(level, pinned, current_price)
+            color, alpha = self._level_style(level, pinned, current_price)
             x0, x1 = self._span(level, bars)
             price = float(level.price)
             band = level.band() if level.family in _ZONE_FAMILIES else None
@@ -843,20 +896,24 @@ class Renderer:
                 for edge_price in (lo, hi):
                     ax.plot(
                         [x0, x1], [edge_price, edge_price],
-                        color=color, alpha=alpha, linewidth=1.0,
-                        linestyle=":" if style == "-" else style, zorder=2,
+                        color=color, alpha=alpha, linewidth=_LEVEL_LINEWIDTH,
+                        linestyle=_LEVEL_STYLE, zorder=2,
                     )
                 label_price = (lo + hi) / 2.0
             else:
                 ax.plot(
                     [x0, x1], [price, price],
-                    color=color, alpha=alpha, linewidth=width, linestyle=style,
-                    zorder=3,
+                    color=color, alpha=alpha, linewidth=_LEVEL_LINEWIDTH,
+                    linestyle=_LEVEL_STYLE, zorder=3,
                 )
                 label_price = price
             if pinned:
                 # A pin must survive every status fade — it is the agent's own marker.
                 color, alpha = _PINNED, 1.0
+            # The dashboard's label pose: tiny plain family-coloured text sitting
+            # on its own dotted line — no bold, no bubble box. A tag in the
+            # manifest is still always a tag on the image (the ray budget runs
+            # before tagging), so the lookup bridge never points at air.
             ax.text(
                 (x0 + x1) / 2.0,
                 label_price,
@@ -864,11 +921,9 @@ class Renderer:
                 color=color,
                 alpha=alpha,
                 fontsize=_TAG_FONTSIZE,
-                fontweight="bold",
                 ha="center",
-                va="center",
+                va="bottom",
                 zorder=6,
-                bbox=dict(facecolor=_BG, edgecolor="none", alpha=0.8, pad=1.0),
             )
 
     def _draw_chrome(
@@ -877,50 +932,87 @@ class Renderer:
         snapshot: FeedSnapshot,
         bars: Bars,
         price_range: Tuple[float, float],
+        drawn_count: int = 0,
+        hidden_count: int = 0,
     ) -> None:
-        """The current-price marker, the title, and the dashboard's chrome.
+        """The dashboard's chrome: header chip, price rail, dates — nothing else.
 
-        The pose is the dashboard's (and TradingView's): gridlines in the theme's
-        gray, the price scale along the **right** edge, and the last price as a
-        cyan dashed line with a cyan tag — no black "PX" stamp floating mid-pane.
+        The header chip is the web panel's ("``XAUUSDm  TF: D1  LEVELS DRAWN: 13``"),
+        telling the agent at a glance what it is looking at and *that some levels
+        are off-picture* when the ray budget hid any. The current price is a
+        dotted hairline with a red chip on the right scale, as on the dashboard.
         """
+        from matplotlib.ticker import FuncFormatter
+
         count = len(bars.times)
         y_lo, y_hi = price_range
         pad = (y_hi - y_lo) * 0.05 if y_hi != y_lo else 1.0
 
         current_price = float(snapshot.current_price)
-        ax.axhline(current_price, color=_PRICE, linewidth=1.0, linestyle="--", zorder=5)
+        ax.axhline(current_price, color=_PRICE, linewidth=_LEVEL_LINEWIDTH,
+                   linestyle=_LEVEL_STYLE, zorder=5)
         if count:
             ax.text(
-                count - 1,
+                count - 1 + 0.4,
                 current_price,
                 f"{current_price:.2f}",
                 color=_BG,
-                fontsize=_TAG_FONTSIZE,
-                fontweight="bold",
-                ha="right",
+                fontsize=_TICK_FONTSIZE,
+                ha="left",
                 va="center",
-                zorder=6,
+                zorder=7,
                 bbox=dict(facecolor=_PRICE, edgecolor="none", alpha=1.0, pad=1.5),
             )
 
-        ax.set_title(
-            f"{snapshot.symbol}  {snapshot.timeframe}  ({count} bars)",
-            fontsize=_TITLE_FONTSIZE,
-            fontweight="bold",
+        hidden_s = f" (+{hidden_count} hidden)" if hidden_count else ""
+        ax.text(
+            0.0,
+            1.0,
+            f"{snapshot.symbol}   TF: {snapshot.timeframe}   "
+            f"LEVELS DRAWN: {drawn_count}{hidden_s}",
+            transform=ax.transAxes,
             color=_INK,
+            fontsize=_HEADER_FONTSIZE,
+            ha="left",
+            va="top",
+            zorder=7,
+            bbox=dict(
+                boxstyle="round,pad=0.35", facecolor="#1c1f26", edgecolor="#2a2e39",
+                alpha=0.9,
+            ),
         )
+
         ax.set_xlim(-1, count if count else 1)
         ax.set_ylim(y_lo - pad, y_hi + pad)
-        ax.grid(True, color=_GRID, linewidth=0.7, alpha=0.9)
+        ax.grid(True, color=_GRID, linewidth=0.6, alpha=0.9)
         ax.set_axisbelow(True)
-        ax.set_xticks([])
+        # The date axis is real: the agent reads *when* its window starts and
+        # ends straight off the picture, like the dashboard's bottom labels.
+        # An intraday window (all bars on one UTC date) labels times instead —
+        # repeating "19 Oct" six times says nothing.
+        if count:
+            same_day = _date_of(bars.times[0]) == _date_of(bars.times[-1])
+            step = max(1, count // _TICKS_PER_PANE)
+            ticks = list(range(0, count, step))
+            ax.set_xticks(ticks)
+            ax.set_xticklabels(
+                [
+                    _time_of(bars.times[i]) if same_day else _iso_date(bars.times[i])
+                    for i in ticks
+                ],
+                fontsize=_TICK_FONTSIZE,
+                color=_INK,
+            )
+        else:
+            ax.set_xticks([])
         for side in ("top", "left"):
             ax.spines[side].set_visible(False)
         ax.spines["right"].set_color(_GRID)
         ax.spines["bottom"].set_color(_GRID)
         ax.yaxis.tick_right()
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v:.2f}"))
         ax.tick_params(axis="y", labelsize=_TICK_FONTSIZE, colors=_INK, length=3)
+        ax.tick_params(axis="x", colors=_INK, length=3)
 
     def _png_bytes(self, fig: Any) -> bytes:
         """Serialise the figure to deterministic, metadata-free PNG bytes.

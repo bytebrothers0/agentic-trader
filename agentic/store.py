@@ -63,12 +63,16 @@ MAX_TURNS_PER_DAY = 60
 MAX_SPEND_PER_DAY_USD = 5.0
 
 MIN_BARS = 20
-MAX_BARS = 5000
+#: A *screenshot*'s size, not a history bound: the agent's charts are rendered
+#: for a vision model, and past the ~50-candle mark the tags collapse into
+#: unreadable noise (the replay proved it at 300). Past price action is reached
+#: with ``offset`` — pan the window back — never by widening it.
+MAX_BARS = 50
 #: How far back (in bars, per timeframe) the agent may shift its window. A cap
 #: exists for the same reason the bar cap does: an unbounded lookback asks the
 #: provider for history it may not hold and renders a window nobody asked for.
-#: 5000 bars matches ``MAX_BARS`` — you can move a full window behind the newest
-#: bar, but not forever.
+#: 5000 bars matches the widest window the pre-50 era could ask for — you can
+#: move a full window behind the newest bar, but not forever.
 MAX_OFFSET = 5000
 
 DEFAULT_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")

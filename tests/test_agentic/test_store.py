@@ -58,7 +58,7 @@ def _store(tmp_path=None, clock=None) -> ContextStore:
 
 def test_round_trips_through_json(tmp_path):
     store = _store(tmp_path)
-    store.set_view(timeframe="H2", bars=200)
+    store.set_view(timeframe="H2", bars=50)
     store.add_subscription("pin", params={"family": "fvg", "timeframe": "H2", "price": 4152.86})
     store.add_subscription("watch", "price_crosses", {"price": 4160.0})
     store.set_thesis(bias="bullish", storyline="continuation", invalidation="below 4130")
@@ -72,7 +72,7 @@ def test_round_trips_through_json(tmp_path):
 
 def test_saves_and_reloads_atomically(tmp_path):
     store = _store(tmp_path)
-    store.set_view(timeframe="H2", bars=200)
+    store.set_view(timeframe="H2", bars=50)
     store.add_subscription("pin", params={"family": "fvg", "timeframe": "H2", "price": 4152.86})
     path = store.save()
     assert Path(path).name == "XAUUSDm.json"
@@ -94,7 +94,7 @@ def test_concurrent_saves_never_corrupt_the_file(tmp_path):
     def writer(n):
         try:
             for _ in range(25):
-                store.set_view(bars=100 + n, timeframe="M15")
+                store.set_view(bars=30 + n, timeframe="M15")
                 store.save()
         except Exception as exc:  # pragma: no cover — the assertion below is the point
             errors.append(exc)
@@ -316,7 +316,7 @@ def test_view_validates_its_values(tmp_path):
 
 def test_view_accepts_a_derived_timeframe_and_coerces_enums(tmp_path):
     view = _store(tmp_path).set_view(
-        timeframe="H2", chart_type="line", layout="split", panes=["H2", "M15"], bars=200
+        timeframe="H2", chart_type="line", layout="split", panes=["H2", "M15"], bars=50
     )
     assert view.timeframe == "H2"
     assert view.chart_type.value == "line"
@@ -393,7 +393,7 @@ def test_split_reasserts_the_primary_timeframe_on_every_mutation(tmp_path):
     assert view.panes == ["H2", "M15"]
 
     # ...and an unrelated dial keeps the sync too.
-    assert store.set_view(bars=120).timeframe == "H2"
+    assert store.set_view(bars=50).timeframe == "H2"
 
 
 def test_view_symbol_defaults_to_the_store_symbol(tmp_path):

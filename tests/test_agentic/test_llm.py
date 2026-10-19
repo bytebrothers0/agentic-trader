@@ -463,7 +463,7 @@ def test_complete_prices_the_reply_from_usage():
 
 def _store(tmp_path, clock):
     store = ContextStore("XAUUSDm", state_dir=str(tmp_path / "state"), clock=clock)
-    store.set_view(timeframe="M15", bars=300)
+    store.set_view(timeframe="M15", bars=20)
     store.set_enabled(True)
     return store
 
@@ -503,7 +503,7 @@ def _boot_responses():
                             "type": "function",
                             "function": {
                                 "name": "set_view",
-                                "arguments": '{"timeframe": "H1", "bars": 150}',
+                                "arguments": '{"timeframe": "H1", "bars": 50}',
                             },
                         },
                         {
@@ -579,7 +579,7 @@ def test_phase_5_boot_turn_over_a_fake_transport(tmp_path):
     assert store.data.thesis.bias == "bullish"
     assert store.data.thesis.invalidation == "below 4100"
     assert store.data.view.timeframe == "H1"
-    assert store.data.view.bars == 150
+    assert store.data.view.bars == 50
     watches = store.open_subscriptions(SubscriptionKind.WATCH)
     assert len(watches) >= 1
     assert watches[0].condition == "level_forms"

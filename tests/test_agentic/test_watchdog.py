@@ -35,7 +35,7 @@ from agentic.watchdog import (
 # Harness
 # --------------------------------------------------------------------------- #
 
-def _store(clock, tmp_path, *, symbol="XAUUSDm", timeframe="M15", bars=300):
+def _store(clock, tmp_path, *, symbol="XAUUSDm", timeframe="M15", bars=20):
     store = ContextStore(symbol, state_dir=str(tmp_path), clock=clock)
     store.set_view(timeframe=timeframe, bars=bars)
     return store

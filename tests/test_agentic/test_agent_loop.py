@@ -79,7 +79,7 @@ def _renderer(tmp_path, clock, name="fake-renders"):
     return FakeRenderer(out_dir=str(tmp_path / name), clock=clock)
 
 
-def _store(tmp_path, clock, *, enabled=True, timeframe="M15", bars=300):
+def _store(tmp_path, clock, *, enabled=True, timeframe="M15", bars=20):
     store = ContextStore("XAUUSDm", state_dir=str(tmp_path / "state"), clock=clock)
     store.set_view(timeframe=timeframe, bars=bars)
     store.set_enabled(enabled)
@@ -128,7 +128,7 @@ def test_full_turn_end_to_end(tmp_path):
 
     reply1 = AgentReply(
         tool_calls=[
-            ToolCall(call_id="c1", name="set_view", arguments={"bars": 120, "show_tags": False}),
+            ToolCall(call_id="c1", name="set_view", arguments={"bars": 50, "show_tags": False}),
             ToolCall(call_id="c2", name="render"),
             ToolCall(call_id="c3", name="level_lookup", arguments={"family": "fvg"}),
             ToolCall(call_id="c4", name="add_pin", arguments={"level_key": key, "reason": "HTF draw"}),
@@ -184,7 +184,7 @@ def test_full_turn_end_to_end(tmp_path):
     assert outcome.renders == 2
 
     # the store reflects every mutation
-    assert store.data.view.bars == 120
+    assert store.data.view.bars == 50
     assert store.data.view.show_tags is False
     assert len(store.open_subscriptions(SubscriptionKind.PIN)) == 1
     assert len(store.open_subscriptions(SubscriptionKind.WATCH)) == 1
@@ -586,7 +586,7 @@ def test_an_internal_bug_is_labelled_distinctly(tmp_path, monkeypatch):
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(store, "set_view", boom)
-    result = registry.execute(ToolCall(name="set_view", arguments={"bars": 120}))
+    result = registry.execute(ToolCall(name="set_view", arguments={"bars": 50}))
     assert result.ok is False
     assert result.error.startswith("internal_error: RuntimeError: kaboom")
 
@@ -717,13 +717,13 @@ def _split_feed():
     prices = {"H2": 4150.0, "M15": 4155.0}
     counts = {"H2": 20, "M15": 40}
 
-    def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
+    def provider(*, symbol, timeframe, families=None, bars=20, offset=0, **kwargs):
         return snapshot_payload(
             levels.get(timeframe, []), symbol=symbol, timeframe=timeframe,
             price=prices.get(timeframe, 4150.0), atr=5.0,
         )
 
-    def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
+    def candles_provider(*, symbol, timeframe, bars=20, offset=0, **kwargs):
         return candles_payload(
             bars_rows(counts.get(timeframe, 20)), symbol=symbol, timeframe=timeframe
         )
@@ -781,13 +781,13 @@ def test_level_lookup_searches_every_pane_by_family_and_near_price(tmp_path):
 def _historyless_feed(*, fail_when):
     """A feed that raises ``InsufficientHistory`` for offsets matching ``fail_when``."""
 
-    def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
+    def provider(*, symbol, timeframe, families=None, bars=20, offset=0, **kwargs):
         if fail_when(int(offset)):
             raise InsufficientHistory(f"offset {offset} is past the feed's history")
         return snapshot_payload([_fvg_level()], symbol=symbol, timeframe=timeframe,
                                 price=4155.0, atr=5.0)
 
-    def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
+    def candles_provider(*, symbol, timeframe, bars=20, offset=0, **kwargs):
         if fail_when(int(offset)):
             raise InsufficientHistory(f"offset {offset} is past the feed's history")
         return candles_payload(bars_rows(), symbol=symbol, timeframe=timeframe)
@@ -835,7 +835,7 @@ def test_a_render_failure_is_recorded_and_the_turn_still_completes(tmp_path):
 def test_one_turn_stamps_one_time(tmp_path):
     clock = _AdvancingClock(at(6, 0))
     store = ContextStore("XAUUSDm", state_dir=str(tmp_path / "state"), clock=clock)
-    store.set_view(timeframe="M15", bars=120)
+    store.set_view(timeframe="M15", bars=50)
     store.set_enabled(True)
     feed = _stub_with_fvg().build()
     key = _m15_key()
