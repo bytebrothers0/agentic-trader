@@ -81,22 +81,41 @@ def _crt_label(level: LevelRecord) -> str:
 
 # Palette matched to the dashboard (``web/app.js`` dark theme) so the agent's
 # PNG reads like a screenshot of it: same background, same green/red candles,
-# same per-family ink. Saturated on a dark ground, which is what the vision
-# stack tokenises reliably.
-_BG = "#121418"
-_INK = "#9aa5b5"
-_GRID = "#1e222b"
+# same per-family ink — then every colour is lifted by the operator's
+# brightness spec. Saturated on a dark ground, which is what the vision stack
+# tokenises reliably.
+
+#: The operator's brightness ruling for the agent's ingest: +50% on every
+#: colour the render paints. The web pixels are mixed for a lit screen and
+#: human contrast adaptation; the agent's own screenshot of the same chart
+#: reads flat and dim, so the palette is raised. Brightness here is plain RGB
+#: multiply toward white, clamped: ``(r,g,b) -> min(255, v * k)``.
+_VISUAL_BRIGHTNESS = 1.5
+
+
+def _bright(hex_color: str) -> str:
+    """Scale one hex colour toward white by ``_VISUAL_BRIGHTNESS``: constants
+    and per-family inks alike go through this."""
+    k = _VISUAL_BRIGHTNESS
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return (f"#{min(255, round(r * k)):02x}"
+            f"{min(255, round(g * k)):02x}"
+            f"{min(255, round(b * k)):02x}")
+
+
+_BG = _bright("#121418")
+_INK = _bright("#9aa5b5")
+_GRID = _bright("#1e222b")
 #: Candles as the dashboard paints them: solid teal bodies for up, salmon red
-#: for down (the look in the operator's screenshot, which the web theme's
-#: ``#089981``/``#f23645`` renders the same way at this size).
-_UP = "#26a69a"
-_DOWN = "#ef5350"
-_PINNED = "#e07600"
+#: for down (the look in the operator's screenshot).
+_UP = _bright("#26a69a")
+_DOWN = _bright("#ef5350")
+_PINNED = _bright("#e07600")
 #: The current price is a dotted hairline with a red chip on the scale — the
 #: dashboard's TradingView pose.
-_PRICE = "#f23645"
+_PRICE = _bright("#f23645")
 #: Broken levels are history — the exact gray the dashboard fades them to.
-_BROKEN = "#5a6b7a"
+_BROKEN = _bright("#5a6b7a")
 #: Swept/taken/distributed levels keep their family colour at the dashboard's
 #: fade — history, present but no longer a decision.
 _HISTORY_ALPHA = 0.35
@@ -730,8 +749,18 @@ class Renderer:
         mistaken for a level's family ink) and never fades.
         """
         status = level.status
+        family = level.family
+        direction = level.direction
+        if family in _ZONE_FAMILIES:
+            # The dashboard's ``drawZoneLevel``: teal/red edges for FVG and OB,
+            # purple for the upthrust inversion - straight 8% fill, no status
+            # gray, no fade (a zone's span ending at its fill *is* the history).
+            if family == "ifvg":
+                return "#b388ff", 1.0
+            return ("#089981" if direction == "bullish" else "#f23645"), 1.0
         if status is LevelStatus.BROKEN and not pinned:
-            return _BROKEN, 1.0
+            # Raw - the paint site applies the brightness once.
+            return "#5a6b7a", 1.0
         family = level.family
         direction = level.direction
         attrs = level.attrs
@@ -923,6 +952,8 @@ class Renderer:
                 # entry's ``label`` bridge for the closing digest.
                 text = _crt_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
+            # The brightness spec applies at the paint site: family inks too.
+            color = _bright(color)
             x0, x1 = self._span(level, bars)
             price = float(level.price)
             band = level.band() if level.family in _ZONE_FAMILIES else None
@@ -1016,7 +1047,8 @@ class Renderer:
             va="top",
             zorder=7,
             bbox=dict(
-                boxstyle="round,pad=0.35", facecolor="#1c1f26", edgecolor="#2a2e39",
+                boxstyle="round,pad=0.35",
+                facecolor=_bright("#1c1f26"), edgecolor=_bright("#2a2e39"),
                 alpha=0.9,
             ),
         )
