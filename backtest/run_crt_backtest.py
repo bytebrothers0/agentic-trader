@@ -338,9 +338,13 @@ def print_summary(report: Dict[str, Any]) -> None:
         if verdict["proposals"]:
             for prop in verdict["proposals"]:
                 sim = prop["sim"]
+                if sim["outcome"] == "open" and sim.get("r_mark") is not None:
+                    # A still-open trade is marked to market, not "R=None".
+                    result = f"r_mark={_fmt(sim['r_mark'], 2)} at window end"
+                else:
+                    result = f"({sim['bars_to_event']} bars, R={sim['r_multiple']})"
                 print(f"  proposal {prop['bias']}: {prop['entry']}/{prop['sl']}/{prop['tp']} "
-                      f"aligned={prop['aligned']} -> {sim['outcome']} "
-                      f"({sim['bars_to_event']} bars, R={sim['r_multiple']})")
+                      f"aligned={prop['aligned']} -> {sim['outcome']} {result}")
         else:
             print("  proposal: none")
     print("")

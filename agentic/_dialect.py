@@ -42,17 +42,47 @@ _BIAS_ALIASES = {
 #: target ladders ("T1 4172.84, T2 4169") read back as T1, the nearest target.
 _PRICE_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?")
 
+#: The *directional* aliases only: the side words a compound stance can conclude
+#: with. ``neutral``/``none`` are deliberately absent — "neutral-lean-bearish"
+#: means the bearish part qualifies the neutral one, never the reverse.
+_DIRECTIONAL_ALIASES = {
+    key: target for key, target in _BIAS_ALIASES.items() if target in ("bullish", "bearish")
+}
+
+#: Words that flip the side word they precede: "not-bearish" is not a bearish
+#: stance, and the honest outcome is the store's refusal, not an invented one.
+_NEGATORS = {"not", "no", "never", "neither", "isnt", "isn't", "aint", "ain't"}
+
 
 def coerce_bias(value: Any) -> Any:
     """Return ``value`` if it already names a valid bias, else its dialect twin.
 
     Unknown words are returned **unchanged** so the store's own ``invalid_bias``
     refusal still applies — translation is not licence to invent an opinion.
+
+    Compound stances translate by their **conclusion** word: a replayed turn
+    wrote ``"neutral-lean-bearish (range-bound under an unconfirmed H4 bearish
+    CRT)"`` — a real, decided lean the exact-alias map cannot see. The rule is
+    deliberately narrow: the *leading* hyphenated token must END in a
+    directional word, with no negator anywhere in it (``"not-bearish"`` is not a
+    bearish stance and passes through to the store's refusal), so
+    ``"short-term"`` (a horizon, not a side) still refuses honestly.
     """
     if not isinstance(value, str):
         return value
-    key = value.strip().lower().replace(" ", "_").replace("-", "_")
-    return _BIAS_ALIASES.get(key, value)
+    text = value.strip().lower()
+    key = text.replace(" ", "_").replace("-", "_")
+    alias = _BIAS_ALIASES.get(key)
+    if alias is not None:
+        return alias
+    # The compound-stance rule: leading token "neutral-lean-bearish" -> bearish.
+    head = text.split()[0].strip("\"'()") if text else ""
+    parts = [part.strip("()\"'") for part in head.split("-") if part]
+    if len(parts) > 1:
+        conclusion = _DIRECTIONAL_ALIASES.get(parts[-1])
+        if conclusion is not None and not any(part in _NEGATORS for part in parts):
+            return conclusion
+    return value
 
 
 def first_price(value: Any) -> Optional[float]:

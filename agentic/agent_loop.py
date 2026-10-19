@@ -81,9 +81,9 @@ CLOSING_INSTRUCTION = (
     "End the turn now. You have no more tool calls to make. Reply with ONLY the "
     "strict JSON object defined in the output contract — no prose, no markdown "
     "fence, nothing before or after it. This closing call does not re-attach the "
-    "chart image even when one rendered earlier in the turn: that render is real "
-    "evidence, so when ``image_seen_this_turn`` is true, reason from it rather "
-    "than claiming no chart was available."
+    "chart image even when one rendered earlier in the turn: the chart's levels "
+    "ride along as text in the briefing's `chart` block, so reason from those "
+    "numbers rather than claiming no chart was available."
 )
 
 #: The single key the closing instruction is carried under in the briefing. It
@@ -158,6 +158,44 @@ def _evidence_digest(log: Sequence[Dict[str, Any]], *, per_result: int = 600) ->
                 per_result,
             )
         lines.append(f"- {name}({args}) -> {outcome}")
+    return "\n".join(lines)
+
+
+def _manifest_digest(manifest: Optional[Dict[str, Any]], *, max_lines: int = 160) -> str:
+    """The last render's manifest as the compact **text** a closing call reads.
+
+    The closing call is image-less by design, and the tool log it digest is often
+    just a ``set_view`` — so a turn whose rounds degenerated used to close with
+    the model honestly holding no numbers at all. This is the image's numbers:
+    one line per drawn tag (live levels first — they are the actionable ones),
+    capped with a ``+N more`` tail so a huge manifest cannot balloon the rescue
+    call that exists to *prevent* ballooning. Returns ``""`` when nothing rendered.
+    """
+    tags = (manifest or {}).get("tags") or {}
+    if not isinstance(tags, dict) or not tags:
+        return ""
+    entries = [entry for entry in tags.values() if isinstance(entry, dict)]
+
+    def _order(entry: Dict[str, Any]) -> tuple:
+        return (0 if entry.get("status") == "live" else 1, str(entry.get("tag") or ""))
+
+    lines: List[str] = []
+    for entry in sorted(entries, key=_order):
+        band = ""
+        low, high = entry.get("price_low"), entry.get("price_high")
+        if low is not None and high is not None:
+            band = f" band {low}-{high}"
+        distance = entry.get("distance_points")
+        distance_s = f" ({distance:+g} pts)" if isinstance(distance, (int, float)) else ""
+        lines.append(
+            f"- {entry.get('tag')} {entry.get('family')} {entry.get('timeframe')} "
+            f"{entry.get('direction')} {entry.get('price')}{band} "
+            f"{entry.get('status')}{distance_s}"
+        )
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + [
+            f"- (+{len(entries) - max_lines} more levels; render for the full manifest)"
+        ]
     return "\n".join(lines)
 
 
@@ -576,6 +614,12 @@ class AgentLoop:
             # guess from this call's own shape.
             "image_seen_this_turn": bool(request.image_path),
         }
+        chart = _manifest_digest(request.manifest)
+        if chart:
+            # The image's numbers, as text: without this, a turn whose tool
+            # rounds were spent on set_view closes with the model honestly
+            # holding no prices at all.
+            briefing["chart"] = chart
         digest = _evidence_digest(log)
         if digest:
             briefing["evidence"] = digest

@@ -33,6 +33,21 @@ def test_an_unmappable_bias_passes_through_untouched_to_be_refused(given):
     assert coerce_bias(given) == given
 
 
+@pytest.mark.parametrize("given, expected", [
+    ("neutral-lean-bearish (range-bound under an unconfirmed H4 bearish CRT)", "bearish"),
+    ("neutral-lean-bullish", "bullish"),
+    ("lean-bearish", "bearish"),
+    ("not-bearish", "not-bearish"),          # a negated side is no side at all
+    ("short-term", "short-term"),            # a horizon, not a trade side
+    ("range-bound (choppy)", "range-bound (choppy)"),
+])
+def test_a_compound_stance_translates_by_its_conclusion_word(given, expected):
+    """A replayed turn wrote `neutral-lean-bearish (...)` — a real, decided lean
+    the exact-alias map cannot see. The rule is narrow: the leading hyphenated
+    token must END in a directional word, with no negator in it."""
+    assert coerce_bias(given) == expected
+
+
 def test_a_non_string_bias_is_left_alone():
     assert coerce_bias(None) is None
     assert coerce_bias(0.55) == 0.55

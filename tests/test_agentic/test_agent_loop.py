@@ -1132,3 +1132,74 @@ def test_the_propose_trade_tool_speaks_the_same_dialect(tmp_path):
     assert plan.bias == "bearish"
     assert plan.entry == approx(4184.55) and plan.sl == approx(4190.05)
     assert plan.tp == approx(4172.84)
+
+
+# --------------------------------------------------------------------------- #
+# The closing call's chart digest: the image's numbers, as text
+# --------------------------------------------------------------------------- #
+
+class _FailingRenderer(FakeRenderer):
+    """A renderer stub whose render always fails (the degraded-render path)."""
+
+    def render(self, *args, **kwargs):
+        raise RuntimeError("no feed")
+
+
+class _ManifestRenderer(FakeRenderer):
+    """A renderer stub that also returns a manifest, like the real one."""
+
+    def render(self, snapshot, bars, *, pins=(), thesis_level_keys=(), out_dir=None,
+               layout="single", panes=(), offset=0):
+        result = super().render(snapshot, bars, pins=pins,
+                                thesis_level_keys=thesis_level_keys,
+                                out_dir=out_dir, layout=layout, panes=panes,
+                                offset=offset)
+        result.manifest = {
+            "tags": {
+                "T9": {"tag": "T9", "family": "ts", "timeframe": "M15",
+                       "direction": "bearish", "price": 4184.0, "status": "filled",
+                       "distance_points": 9.0},
+                "C1": {"tag": "C1", "family": "crt", "timeframe": "M15",
+                       "direction": "bearish", "price": 4186.0,
+                       "price_low": 4180.0, "price_high": 4186.0,
+                       "status": "live", "distance_points": 11.0},
+            },
+        }
+        return result
+
+
+def test_the_closing_call_sees_the_chart_as_text(tmp_path):
+    """A turn whose tool rounds were spent on `set_view` must not close with the
+    model honestly holding no numbers: the last render's manifest rides along as
+    a text digest, live levels first."""
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([AgentReply(text="thinking out loud")])  # no output, no tools
+    loop = AgentLoop(store, _stub_with_fvg().build(), _ManifestRenderer(
+        out_dir=str(tmp_path / "r"), clock=clock), agent, clock=clock)
+
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.ok is True
+    closing = agent.requests[-1]
+    assert closing.image_path == ""                    # still image-less...
+    chart = closing.briefing["chart"]
+    assert "C1 crt M15 bearish 4186.0 band 4180.0-4186.0 live" in chart
+    # live levels first, history after
+    assert chart.index("C1 ") < chart.index("T9 ")
+    assert closing.briefing["closing"]["image_seen_this_turn"] is True
+
+
+def test_the_closing_call_admits_when_nothing_rendered(tmp_path):
+    """No manifest -> no `chart` block: the model is told the truth either way."""
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([AgentReply(text="thinking out loud")])
+    loop = AgentLoop(store, _stub_with_fvg().build(), _FailingRenderer(
+        out_dir=str(tmp_path / "r"), clock=clock), agent, clock=clock)
+
+    loop.run_turn(trigger="request")
+
+    closing = agent.requests[-1]
+    assert "chart" not in closing.briefing
+    assert closing.briefing["closing"]["image_seen_this_turn"] is False
