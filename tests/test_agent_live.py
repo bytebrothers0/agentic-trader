@@ -71,8 +71,12 @@ LIVE_ENABLED = os.environ.get("AGENT_LIVE_TEST") == "1"
 #: resolves it to the same gold instrument (loader alias), so the feed is genuinely live.
 LIVE_SYMBOL = os.environ.get("AGENT_LIVE_SYMBOL", "XAUUSD")
 
-#: A hard per-turn output cap: the vision turn's spend is bounded by it.
-MAX_OUTPUT_TOKENS = 600
+#: A hard per-turn output cap: the vision turn's spend is bounded by it. It is
+#: generous because the local provider's strong models are **reasoning** models —
+#: the hidden reasoning counts against this cap, so a small value truncates the
+#: turn before the structured object is ever written (300-1300 visible tokens, but
+#: 600 was not enough; see the provider subsection of the spec).
+MAX_OUTPUT_TOKENS = 2000
 
 #: The render size for the smoke test. The renderer is real; only the size is
 #: dialled down so the image is not the thing that overflows (image tokens are a

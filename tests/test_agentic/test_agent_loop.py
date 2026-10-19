@@ -434,6 +434,57 @@ def test_max_tool_rounds_is_enforced(tmp_path):
     assert outcome.reason == "truncated: rounds"
 
 
+def test_a_toolless_closing_call_recovers_the_structured_output(tmp_path):
+    """A loop that never emits the object gets one last, tool-less ask.
+
+    The local-provider failure mode: a vision model burns its rounds on tool calls
+    (or its whole output budget on reasoning) and reaches the end with no
+    structured object. Rather than bill the turn and record nothing, the loop makes
+    exactly one more call — *without* tools and *without* the chart image, the
+    shape these models reliably answer — carrying the tool evidence back as text.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+
+    endless = AgentReply(
+        tool_calls=[ToolCall(call_id="c1", name="add_note", arguments={"text": "saw an fvg"})],
+        tokens={"prompt": 10, "completion": 5},
+        cost_usd=0.01,
+    )
+    closing = AgentReply(
+        output={"thesis": {"bias": "bullish", "storyline": "swept the low, fvg above",
+                           "invalidation": "below 4100", "confidence": 0.6}},
+        tokens={"prompt": 20, "completion": 10},
+        cost_usd=0.02,
+    )
+
+    def client(request):
+        return closing if not request.tools else endless  # no tools == the closing call
+
+    agent = ScriptedAgent(client)
+    loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
+    outcome = loop.run_turn(trigger="request")
+
+    assert outcome.ok is True
+    # The object the model never produced during the tool rounds was recovered.
+    assert store.data.thesis.bias == "bullish"
+    assert store.data.thesis.invalidation == "below 4100"
+    # The cap still stands: one closing call, not a second tool phase.
+    assert outcome.tool_calls == MAX_TOOL_ROUNDS
+
+    closing_request = agent.requests[-1]
+    assert closing_request.tools == []          # no tools: the model must answer now
+    assert closing_request.image_path == ""     # the chart image is what provokes the runaway
+    assert closing_request.briefing["closing"]  # the instruction to end the turn
+    assert "add_note" in closing_request.briefing["evidence"]  # evidence survives as text
+
+    # The closing call is billed like any other round (all MAX_TOOL_ROUNDS + 1 calls).
+    record = store.data.turns[0]
+    assert record.tokens == (10 + 5) * MAX_TOOL_ROUNDS + (20 + 10)
+    assert record.cost_usd == approx(0.01 * MAX_TOOL_ROUNDS + 0.02)
+
+
 # --------------------------------------------------------------------------- #
 # Kill switch
 # --------------------------------------------------------------------------- #

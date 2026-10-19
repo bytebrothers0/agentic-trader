@@ -46,6 +46,7 @@ Triggers on top of the algorithm:
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
@@ -67,6 +68,25 @@ from agentic.watchdog import Watchdog
 #: How many times the model may be asked again after a round of tool calls. Small
 #: on purpose: a loop is a leash in itself.
 MAX_TOOL_ROUNDS = 4
+
+#: The instruction for the *closing call* — the one last, tool-less ask made when
+#: the tool rounds ended without a structured object. Tool-calling loops and
+#: reasoning runaways are a model behaviour, not a wiring fault: rather than let a
+#: turn bill tokens and record nothing, we make exactly one more call with no
+#: tools and no chart image, which is the shape these models reliably answer. It
+#: fires only when there is nothing to lose (see ``_tool_phase``).
+CLOSING_INSTRUCTION = (
+    "End the turn now. You have no more tool calls to make. Reply with ONLY the "
+    "strict JSON object defined in the output contract — no prose, no markdown "
+    "fence, nothing before or after it."
+)
+
+#: The single key the closing instruction is carried under in the briefing.
+CLOSING_KEY = "closing"
+
+#: Whether the closing call is made at all. A knob so an operator can turn it off
+#: (and so tests can pin either branch) without editing the loop.
+CLOSING_CALL = True
 
 _THESIS_KEYS = ("bias", "storyline", "levels_of_interest", "invalidation", "confidence")
 _PROPOSAL_KEYS = (
@@ -96,6 +116,40 @@ def _normalise_note(note: Any, now: datetime) -> Dict[str, Any]:
     if isinstance(note, dict):
         return {"at": str(note.get("at") or at), "text": str(note.get("text", ""))}
     return {"at": at, "text": str(note)}
+
+
+def _one_line(text: Any, limit: int = 0) -> str:
+    """Collapse whitespace (and optionally truncate) for a digest line."""
+    flat = " ".join(str(text if text is not None else "").split())
+    if limit and len(flat) > limit:
+        return flat[: limit - 1].rstrip() + "…"
+    return flat
+
+
+def _evidence_digest(log: Sequence[Dict[str, Any]], *, per_result: int = 600) -> str:
+    """The turn's tool activity as a compact **text** block.
+
+    Used only by the closing call: the assistant/tool message pair cannot be
+    replayed without a ``tools`` array, and the raw ``render`` manifest is exactly
+    the bulk that provokes a reasoning runaway — so each result is flattened to a
+    single truncated line. Returns ``""`` for a turn that called no tools.
+    """
+    lines: List[str] = []
+    for entry in log or ():
+        call = (entry or {}).get("call") or {}
+        result = (entry or {}).get("result") or {}
+        name = _one_line(call.get("name") or "?", 60) or "?"
+        args = _one_line(json.dumps(call.get("arguments") or {}, ensure_ascii=False, default=str), 200)
+        if result.get("ok", True) is False:
+            outcome = "ERROR: " + _one_line(result.get("error") or "failed", per_result)
+        else:
+            body = result.get("result")
+            outcome = _one_line(
+                json.dumps(body, ensure_ascii=False, default=str) if body is not None else "(ok)",
+                per_result,
+            )
+        lines.append(f"- {name}({args}) -> {outcome}")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -463,6 +517,21 @@ class AgentLoop:
                 request.manifest = registry.last_result.manifest
         else:
             truncations.append("rounds")
+        # The closing call. The tool rounds are over; if they ended with no
+        # structured object, ask exactly once more, tool-less and image-less (a
+        # shape these models reliably answer — the chart image and a tool-calling
+        # history are what push a vision model into a reasoning runaway). The
+        # evidence the tools produced rides along as *text* in the briefing rather
+        # than as assistant/tool messages, so the request stays valid without a
+        # ``tools`` array. A failure here is swallowed: the turn then simply ends
+        # as it would have, so the closing call can only ever add an output.
+        if CLOSING_CALL and not (reply.output or {}):
+            closed = self._closing_call(request, log)
+            if closed is not None:
+                tokens += sum(int(v or 0) for v in (closed.tokens or {}).values())
+                cost += float(closed.cost_usd or 0.0)
+                if closed.output:
+                    reply = closed
         return _ToolPhase(
             reply=reply,
             log=log,
@@ -471,6 +540,36 @@ class AgentLoop:
             cost=cost,
             renders=registry.renders_used(),
         )
+
+    def _closing_call(
+        self, request: AgentRequest, log: Sequence[Dict[str, Any]]
+    ) -> Optional[AgentReply]:
+        """One last, tool-less ask for the structured object (see the constants).
+
+        Returns the reply, or ``None`` if the call itself failed. The chart image is
+        deliberately dropped (it is what sends a vision model into a reasoning
+        runaway) and the tool evidence is folded into the briefing as a compact text
+        digest, so the model still answers from what it actually saw.
+        """
+        briefing = dict(request.briefing or {})
+        briefing[CLOSING_KEY] = CLOSING_INSTRUCTION
+        digest = _evidence_digest(log)
+        if digest:
+            briefing["evidence"] = digest
+        closing = AgentRequest(
+            turn_id=request.turn_id,
+            trigger=request.trigger,
+            trigger_detail=request.trigger_detail,
+            system_prompt=request.system_prompt,
+            briefing=briefing,
+            image_path="",
+            manifest={},
+            tools=[],
+        )
+        try:
+            return self.client.complete(closing)
+        except Exception:  # noqa: BLE001 — a failed closing call must not lose the turn
+            return None
 
     # ------------------------------------------------------------------ turn
 
