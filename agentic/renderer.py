@@ -79,22 +79,28 @@ def _crt_label(level: LevelRecord) -> str:
     """The dashboard's own word for a CRT level: ``CRT`` or ``CRT-IB``."""
     return "CRT-IB" if level.variant == "inside_bar" else "CRT"
 
-# Palette matched to the dashboard (``web/app.js`` dark theme) so the agent's
-# PNG reads like a screenshot of it: same background, same green/red candles,
-# same per-family ink — then every colour is lifted by the operator's
-# brightness spec. Saturated on a dark ground, which is what the vision stack
-# tokenises reliably.
+# Paper theme (the operator's phase-7 ruling, research-backed): a white
+# ground, bull candles as white bodies with black borders, bear candles solid
+# black, every indicator in the black ink — with ONE accent. Deep red
+# ``#c1121f`` is reserved exclusively for the CRT levels: 6.2:1 contrast on
+# white (WCAG luminance, the strongest red that still reads as red), and the
+# research line behind the choice is deliberate — vision encoders recover
+# *colour encoding* from charts poorly, so colour carries exactly ONE meaning
+# here and everything else rides on luminance (black ≠ white bodies) plus the
+# word labels the digest bridges. No other inks: no direction colours, no
+# family hues, no amber — status speaks through geometry (the nub span), the
+# visible grays, and the manifest.
 
 #: Brightness ruling history: the operator once asked for +50% on every colour
 #: for the agent's ingest, then reverted it ("it was a mistake") — the spec
 #: value is 1.0, deliberate. ``_bright`` stays as the one dial in case a
-#: brightness figure is ever specified again; identity at 1.0.
+#: brightness figure is ever specified again; identity at 1.0, and family
+#: inks leave ``_level_style`` as raw hexes so nothing lifts twice.
 _VISUAL_BRIGHTNESS = 1.0
 
 
 def _bright(hex_color: str) -> str:
-    """Scale one hex colour toward white by ``_VISUAL_BRIGHTNESS``: constants
-    and per-family inks alike go through this."""
+    """Scale one hex colour toward white by ``_VISUAL_BRIGHTNESS``."""
     k = _VISUAL_BRIGHTNESS
     r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
     return (f"#{min(255, round(r * k)):02x}"
@@ -102,23 +108,25 @@ def _bright(hex_color: str) -> str:
             f"{min(255, round(b * k)):02x}")
 
 
-_BG = _bright("#121418")
-_INK = _bright("#9aa5b5")
-_GRID = _bright("#1e222b")
-#: Candles as the dashboard paints them: solid teal bodies for up, salmon red
-#: for down (the look in the operator's screenshot).
-_UP = _bright("#26a69a")
-_DOWN = _bright("#ef5350")
-_PINNED = _bright("#e07600")
-#: The current price is a dotted hairline with a red chip on the scale — the
-#: dashboard's TradingView pose.
-_PRICE = _bright("#f23645")
-#: Broken levels are history — the exact gray the dashboard fades them to.
-_BROKEN = _bright("#5a6b7a")
-#: Swept/taken/distributed levels keep their family colour at the dashboard's
-#: fade — history, present but no longer a decision.
+_BG = "#ffffff"
+_INK = "#2a2f3a"
+_GRID = "#e9ebef"
+#: The paper candle look: white bull bodies with a black border, solid black
+#: bear bodies — direction lives in the fill, not in a hue.
+_UP = "#ffffff"
+_DOWN = "#111111"
+_CANDLE_EDGE = "#111111"
+_PINNED = "#b45309"
+#: The current price is a dotted hairline with a black chip on the scale —
+#: neutral ink, so the deep red stays CRT's alone.
+_PRICE = "#16181d"
+#: Broken levels are history — a gray that stays visible on white (3.9:1).
+_BROKEN = "#7a828e"
+#: Swept/taken/distributed levels keep their family ink at the history's
+#: 35% fade — readable mid-red/mid-gray on white, where the same fade on the
+#: old dark panel was near-invisible (the complaint that started phase 7).
 _HISTORY_ALPHA = 0.35
-#: The zone fill's quietness: 8% exactly like the dashboard's rgba fills.
+#: The zone fill's quietness: 8% of the ink.
 _ZONE_FILL_ALPHA = 0.08
 
 #: Families drawn as zones (edges + a quiet fill) rather than a single ray —
@@ -738,71 +746,34 @@ class Renderer:
     def _level_style(
         level: LevelRecord, pinned: bool, price: float
     ) -> Tuple[str, float]:
-        """``(color, alpha)`` — the dashboard's ink rules, hairline weight fixed.
+        """``(color, alpha)`` — the paper theme's ink rules.
 
-        Weight is uniform by design (the dashboard draws every level as a 1px
-        dotted line), so only colour and fade vary: broken levels fade to gray;
-        swept/taken/distributed ones keep their family colour at the dashboard's
-        35% fade; every family carries the colour the web chart shows it in.
+        Deep red ``#c1121f`` is reserved exclusively for the CRT family; every
+        other level paints in the black ink ``#16181d``, so the accent is
+        unclaimed by anything else on the chart. Status still speaks: broken
+        levels fade to the visible gray, settled CRT/IDM/liquidity levels keep
+        their ink at the 35% history alpha, live levels run full strength.
         ``pinned`` overrides colour (the agent's own marker must never be
-        mistaken for a level's family ink) and never fades.
+        mistaken for a level's ink) and never fades. Direction is deliberately
+        NOT an ink — the digest words carry it.
         """
+        _ = price
         status = level.status
         family = level.family
-        direction = level.direction
-        if family in _ZONE_FAMILIES:
-            # The dashboard's ``drawZoneLevel``: teal/red edges for FVG and OB,
-            # purple for the upthrust inversion - straight 8% fill, no status
-            # gray, no fade (a zone's span ending at its fill *is* the history).
-            if family == "ifvg":
-                return "#b388ff", 1.0
-            return ("#089981" if direction == "bullish" else "#f23645"), 1.0
         if status is LevelStatus.BROKEN and not pinned:
-            # Raw - the paint site applies the brightness once.
-            return "#5a6b7a", 1.0
-        family = level.family
-        direction = level.direction
-        attrs = level.attrs
+            # Raw — the paint site applies the one-shot dial.
+            return "#7a828e", 1.0
         if family == "crt":
-            color = "#00e676" if direction == "bullish" else "#ff5c6c"
             return (
-                color,
+                "#c1121f",
                 _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
             )
-        if family == "bos":
-            return "#ff9100" if attrs.get("kind") == "CHoCH" else "#7aa2ff", 1.0
-        if family == "liquidity":
-            # A pool above price is a buy-side magnet (EQH), below is sell-side
-            # (EQL): the record's direction is neutral, so price position says it.
-            color = "#ff5252" if level.price > price else "#4dd0e1"
+        if family in ("liquidity", "idm"):
             return (
-                color,
+                "#16181d",
                 _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
             )
-        if family == "ts":
-            return ("#ff5c6c" if direction == "bearish" else "#00e676"), 1.0
-        if family == "idm":
-            rule = str(attrs.get("rule", "") or "")
-            color = "#ffab40" if rule == "two_candle" else (
-                "#d4e157" if rule == "ref_candle" else "#ffd600"
-            )
-            return (
-                color,
-                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
-            )
-        if family == "sr":
-            fresh = str(attrs.get("state", "") or "").upper() == "FRESH"
-            color = (
-                ("#00e5ff" if level.price <= price else "#ff9100") if fresh
-                else ("#546e7a" if level.price <= price else "#78909c")
-            )
-            return color, 1.0
-        if family == "qm":
-            fresh = str(attrs.get("state", "") or "").upper() == "FRESH"
-            return ("#b388ff" if fresh else "#6d5b99"), 1.0
-        if family == "trendline":
-            return ("#26a69a" if level.price >= price else "#ef5350"), 1.0
-        return "#00e5ff", 1.0
+        return "#16181d", 1.0
 
     @staticmethod
     def _price_range(
@@ -895,19 +866,26 @@ class Renderer:
             plt.close(fig)
 
     def _draw_candles(self, ax: Any, bars: Bars, rectangle: Any) -> None:
-        """One OHLC candlestick per bar, bullish/bearish colour-coded."""
+        """One OHLC candlestick per bar — the paper theme's candle look.
+
+        Direction lives in the fill, not in a hue: a bull candle is a WHITE
+        body with a BLACK border, a bear candle is a SOLID BLACK body, and the
+        wick is black either way. On white the two classes tokenize clean,
+        which is what the research says colour-direction pairs don't.
+        """
         for i in range(len(bars.times)):
             o = float(bars.open[i])
             h = float(bars.high[i])
             low = float(bars.low[i])
             c = float(bars.close[i])
-            color = _UP if c >= o else _DOWN
-            ax.plot([i, i], [low, h], color=color, linewidth=_WICK_LINEWIDTH, zorder=2)
+            body = _UP if c >= o else _DOWN
+            ax.plot([i, i], [low, h], color=_CANDLE_EDGE,
+                    linewidth=_WICK_LINEWIDTH, zorder=2)
             if c == o:
                 ax.plot(
                     [i - _CANDLE_WIDTH / 2, i + _CANDLE_WIDTH / 2],
                     [c, c],
-                    color=color,
+                    color=_CANDLE_EDGE,
                     linewidth=_WICK_LINEWIDTH,
                     zorder=3,
                 )
@@ -917,9 +895,9 @@ class Renderer:
                         (i - _CANDLE_WIDTH / 2, min(o, c)),
                         _CANDLE_WIDTH,
                         abs(c - o),
-                        facecolor=color,
-                        edgecolor="none",
-                        linewidth=0,
+                        facecolor=body,
+                        edgecolor=_CANDLE_EDGE,
+                        linewidth=0.6,
                         zorder=3,
                     )
                 )
@@ -1013,7 +991,8 @@ class Renderer:
         The header chip is the web panel's ("``XAUUSDm  TF: D1  LEVELS DRAWN: 13``"),
         telling the agent at a glance what it is looking at and *that some levels
         are off-picture* when the ray budget hid any. The current price is a
-        dotted hairline with a red chip on the right scale, as on the dashboard.
+        dotted hairline with a black chip on the right scale — neutral ink, so
+        the deep red stays the CRT family's alone.
         """
         from matplotlib.ticker import FuncFormatter
 
@@ -1051,7 +1030,7 @@ class Renderer:
             zorder=7,
             bbox=dict(
                 boxstyle="round,pad=0.35",
-                facecolor=_bright("#1c1f26"), edgecolor=_bright("#2a2e39"),
+                facecolor="#ffffff", edgecolor="#d7dae0",
                 alpha=0.9,
             ),
         )

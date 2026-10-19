@@ -617,19 +617,21 @@ def test_split_render_draws_into_each_pane_band(tmp_path):
         pixels = rgb.load()
         mid = height // 2
 
-        def coloured_ink(lo, hi):
-            # Candles are the only saturated ink (green/red); the background and
-            # the axes' spines/text are white/grey. So a band with saturation is a
-            # band the renderer actually drew candles into.
+        def dark_ink(lo, hi):
+            # The paper theme draws candles in black/white only: bear bodies,
+            # wicks and borders are near-black ink on the white ground, while
+            # the grid/spines stay light gray and the CRT accent is deep red
+            # (max channel 193 — not dark ink). So a band carrying dark pixels
+            # is a band the renderer actually drew candles into.
             return sum(
                 1
                 for y in range(lo, hi)
                 for x in range(width)
-                if max(pixels[x, y]) - min(pixels[x, y]) > 40
+                if max(pixels[x, y]) < 100
             )
 
-        top = coloured_ink(0, mid)
-        bottom = coloured_ink(mid, height)
+        top = dark_ink(0, mid)
+        bottom = dark_ink(mid, height)
 
     assert top > 0, "the top (HTF) pane drew no candles"
     assert bottom > 0, "the bottom (LTF) pane drew no candles"
@@ -680,3 +682,40 @@ def test_a_pinned_level_is_never_hidden(tmp_path):
     assert old.level_key in keys           # a 45th hidden ts would be exactly wrong
     ts_tags = [t for t, e in result.tags.items() if e.family == "ts"]
     assert len(ts_tags) == 81              # 80 budget + the exempt pin
+
+
+# --------------------------------------------------------------------------- #
+# The paper theme (phase 7): a black/white chart with ONE accent — deep red
+# for the CRT levels and nothing else
+# --------------------------------------------------------------------------- #
+
+def _style_of(family, *, type="BULLISH", status=None):
+    lv = _snapshot(
+        [_level(family, type=type, time=ts(day(19, 12)), end_kind="active")],
+        symbol="XAUUSDm", timeframe="M15", price=4150.0, atr=5.0,
+    ).levels[0]
+    if status is not None:
+        lv.status = status
+    return Renderer._level_style(lv, False, 4150.0)
+
+
+def test_the_paper_theme_reserves_red_for_crt_alone():
+    from agentic.models import LevelStatus
+
+    import agentic.renderer as paper
+
+    assert paper._BG == "#ffffff"
+    assert paper._UP == "#ffffff" and paper._DOWN == "#111111"
+    # The price hairline/chip is neutral ink — nothing else claims red.
+    assert paper._PRICE == "#16181d"
+    # The one accent, full strength while live; settled at the history alpha.
+    assert _style_of("crt", type="BEARISH (CLASSIC)") == ("#c1121f", 1.0)
+    assert _style_of("crt", type="BEARISH (CLASSIC)",
+                     status=LevelStatus.FILLED) == ("#c1121f", 0.35)
+    # Every other family — zones included — paints in the black ink.
+    for family in ("bos", "ts", "liquidity", "fvg", "ob", "ifvg"):
+        color, alpha = _style_of(family)
+        assert (color, alpha) == ("#16181d", 1.0), family
+    # Broken is the visible gray, never a hue.
+    assert _style_of("crt", type="BEARISH (CLASSIC)",
+                     status=LevelStatus.BROKEN) == ("#7a828e", 1.0)
