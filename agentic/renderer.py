@@ -108,12 +108,13 @@ _ZONE_FAMILIES = frozenset({"fvg", "ifvg", "ob"})
 #: newest rays win, quieter families can never be starved by a busy one.
 MAX_RAYS_PER_FAMILY = 80
 
-#: A still-active level's open span, in bars. The dashboard's rule is "+8 bars
-#: while a level is still live" — but its own window is hundreds of candles, so
-#: there +8 is a tiny nub (~3% of width). On the agent's screenshot-sized window
-#: the same fixed 8-over-20-bars read like a wall across half the pane; 4 bars
-#: on a 50-candle default is the same visual ~8% nub the dashboard shows.
-_RAY_BARS = 4
+#: The screenshot's ray rule: a ray is a *nub*, never a wall. A still-live
+#: level spans 3 bars from formation; a dead one ends ONE STEP PAST its
+#: life-event bar (the dashboard's CRT pose — the dotted line pokes one candle
+#: beyond the sweep), capped at the same 3 steps. Zone *boxes* (fvg/ifvg/ob)
+#: are exempt: a zone's fill is the information, so it keeps its full
+#: formation→fill span.
+_SPAN_BARS = 3
 
 _CANDLE_WIDTH = 0.6
 _WICK_LINEWIDTH = 1.1
@@ -669,20 +670,35 @@ class Renderer:
     def _span(level: LevelRecord, bars: Bars) -> Tuple[int, int]:
         """The bar-index x-span a level is drawn across — never full-width.
 
-        Dashboard parity: a level whose life cycle ended draws formation → end,
-        and a still-active one draws formation → formation + ``_RAY_BARS`` (a
-        short open span, not a ray to the right edge). Everything clamps into the
-        drawn window, which is what an HTF formation outside it needs.
+        The dashboard's ray pose, per the operator's screenshot: every ray is a
+        ~3-step nub. A dead level ends ONE STEP PAST its life-event bar (the
+        dotted line pokes one candle beyond the sweep it records), capped at
+        ``_SPAN_BARS`` from formation; a still-live one spans the same cap. Only
+        zone boxes keep their full formation→fill span — a zone's extent is the
+        information the box carries.
         """
         count = max(len(bars.times), 1)
         start = bars.index_at_or_before(level.formed_at)
         start = max(start, 0)
-        if level.changed_at is not None and level.changed_at > (level.formed_at or _EPOCH):
-            end = bars.index_at_or_before(level.changed_at)
-            if end < 0:
-                end = min(start + _RAY_BARS, count - 1)
+        if level.family in _ZONE_FAMILIES:
+            # Zone boxes: formation -> life-cycle end (or a short open span).
+            if level.changed_at is not None and level.changed_at > (
+                level.formed_at or _EPOCH
+            ):
+                end = bars.index_at_or_before(level.changed_at)
+                if end < 0:
+                    end = min(start + _SPAN_BARS + 1, count - 1)
+            else:
+                end = min(start + _SPAN_BARS + 1, count - 1)
+        elif level.changed_at is not None and level.changed_at > (
+            level.formed_at or _EPOCH
+        ):
+            # Dead: one step past the event bar, never more than the cap.
+            event = bars.index_at_or_before(level.changed_at)
+            end = min(event + 1, count - 1) if event >= 0 else start + _SPAN_BARS
+            end = min(end, start + _SPAN_BARS, count - 1)
         else:
-            end = min(start + _RAY_BARS, count - 1)
+            end = min(start + _SPAN_BARS, count - 1)
         if end <= start:
             end = min(start + 1, count - 1)
         return start, end
