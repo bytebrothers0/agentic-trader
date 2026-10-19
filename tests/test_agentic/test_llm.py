@@ -314,13 +314,13 @@ def test_estimate_cost_prices_the_inherited_vision_model():
     assert estimate_cost(model, 1_000_000, 1_000_000) > estimate_cost(DEFAULT_MODEL, 1_000_000, 1_000_000)
 
 
-def test_estimate_cost_prices_the_keyless_local_model():
-    """The local keyless endpoint's model is a *known* free model, priced zero.
+@pytest.mark.parametrize("model", ["glm-5.3-flash-free", "deepseek-v4.1-flash-free"])
+def test_estimate_cost_prices_the_keyless_local_models(model):
+    """The local endpoint's free models are *known* free models, priced zero.
 
     Zero is deliberate here (the local provider is free); an *unknown* model still
-    falls back to a non-zero rate, so this is the one exception, not a loophole.
+    falls back to a non-zero rate, so these are named exceptions, not a loophole.
     """
-    model = "deepseek-v4.1-flash-free"
     assert model in PRICES
     assert PRICES[model] == (0.0, 0.0)
     assert estimate_cost(model, 1_000_000, 1_000_000) == approx(0.0)
@@ -380,6 +380,9 @@ def test_build_messages_reconstructs_prior_tool_activity_in_order():
     assert [c["id"] for c in assistant["tool_calls"]] == ["c1", "c2"]
     assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {"bars": 120}
     assert [m["tool_call_id"] for m in messages[2:4]] == ["c1", "c2"]
+    # A tool message is spec-exactly {role, content, tool_call_id}: no ``name``
+    # (some gateways reject it as an unsupported parameter).
+    assert all(set(m) == {"role", "tool_call_id", "content"} for m in messages[2:4])
     assert json.loads(messages[2]["content"])["ok"] is True
 
 

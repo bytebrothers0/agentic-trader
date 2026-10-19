@@ -61,12 +61,13 @@ DEFAULT_MODEL = "gpt-4o-mini"
 #: ``/api/ai`` provider (Groq) by default; its published Groq price is $0.80/$4.00
 #: per 1M tokens.
 #:
-#: ``deepseek-v4.1-flash-free`` is the model of the **local, keyless**
-#: OpenAI-compatible endpoint (``LLM_PROVIDER=local``), which is free — so it is
-#: priced at zero deliberately. This is the one *known* model that is free; the
-#: "an unknown model is never free" rule below is unchanged, so if that endpoint
-#: is ever pointed at a paid model, change this line (a free entry here would
-#: under-count spend, the one direction the leash must not fail in).
+#: The free models of the **local** OpenAI-compatible endpoint
+#: (``LLM_PROVIDER=local``) — e.g. ``glm-5.3-flash-free`` or
+#: ``deepseek-v4.1-flash-free`` — cost nothing, so they are zero-priced
+#: deliberately. These are the *known* free models; the "an unknown model is never
+#: free" rule below is unchanged, so if the endpoint is ever pointed at a paid
+#: model, add it here (or remove these lines): a wrong free entry under-counts
+#: spend, the one direction the leash must not fail in.
 PRICES: Dict[str, Tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
@@ -74,6 +75,7 @@ PRICES: Dict[str, Tuple[float, float]] = {
     "gpt-4.1": (2.00, 8.00),
     "qwen/qwen3.8-27b": (0.80, 4.00),
     "deepseek-v4.1-flash-free": (0.0, 0.0),
+    "glm-5.3-flash-free": (0.0, 0.0),
 }
 
 #: What an unknown model is billed at: the default model's price.
@@ -421,11 +423,14 @@ def _tool_activity_messages(
             if result is not None
             else {"ok": False, "error": "no result was recorded for this call"}
         )
+        # A ``tool`` message is exactly {role, content, tool_call_id} per the OpenAI
+        # spec. In particular a ``name`` field is **not** part of it (that belonged
+        # to the old ``function`` role) and some gateways reject it outright with
+        # ``unsupported_parameter ... "name" is not supported``, so it is omitted.
         messages.append(
             {
                 "role": "tool",
                 "tool_call_id": call_id,
-                "name": call.name,
                 "content": json.dumps(payload, ensure_ascii=False, default=str),
             }
         )
