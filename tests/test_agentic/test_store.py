@@ -419,6 +419,21 @@ def test_the_default_view_families_are_the_playbooks_own_set():
     assert list(DEFAULT_FAMILIES) == list(REQUIRED_FAMILIES)
 
 
+def test_the_default_view_is_the_dashboards_crt_toggle():
+    """The operator's screenshot IS the default boot render: CRT only.
+
+    The dashboard opens with the CRT toggle on and every other family off —
+    13 levels, every word readable. The agent's default view now does the
+    same (``DEFAULT_VIEW_FAMILIES = ["crt"]``); the other families stay a
+    ``set_view(families=...)`` call away, off but never gone.
+    """
+    from agentic.models import DEFAULT_FAMILIES, DEFAULT_VIEW_FAMILIES
+
+    assert DEFAULT_VIEW_FAMILIES == ["crt"]
+    assert DEFAULT_VIEW_FAMILIES != DEFAULT_FAMILIES
+    assert "crt" in DEFAULT_FAMILIES
+
+
 def test_view_rejects_a_foreign_symbol(tmp_path):
     """One store per symbol, so bias and pins cannot leak across instruments."""
     store = _store(tmp_path)

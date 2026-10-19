@@ -1159,7 +1159,7 @@ class _ManifestRenderer(FakeRenderer):
                 "T9": {"tag": "T9", "family": "ts", "timeframe": "M15",
                        "direction": "bearish", "price": 4184.0, "status": "filled",
                        "distance_points": 9.0},
-                "C1": {"tag": "C1", "family": "crt", "timeframe": "M15",
+                "C1": {"tag": "C1", "label": "CRT", "family": "crt", "timeframe": "M15",
                        "direction": "bearish", "price": 4186.0,
                        "price_low": 4180.0, "price_high": 4186.0,
                        "status": "live", "distance_points": 11.0},
@@ -1184,9 +1184,11 @@ def test_the_closing_call_sees_the_chart_as_text(tmp_path):
     closing = agent.requests[-1]
     assert closing.image_path == ""                    # still image-less...
     chart = closing.briefing["chart"]
-    assert "C1 crt M15 bearish 4186.0 band 4180.0-4186.0 live" in chart
+    # The label bridge: the image shows the dashboard word, the digest shows
+    # word + unique tag, because the same word may repeat across levels.
+    assert "CRT (C1) M15 bearish 4186.0 band 4180.0-4186.0 live" in chart
     # live levels first, history after
-    assert chart.index("C1 ") < chart.index("T9 ")
+    assert chart.index("CRT (") < chart.index("T9 ")
     assert closing.briefing["closing"]["image_seen_this_turn"] is True
 
 

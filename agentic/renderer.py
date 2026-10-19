@@ -74,6 +74,11 @@ FAMILY_INITIALS: Dict[str, str] = {
 
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+
+def _crt_label(level: LevelRecord) -> str:
+    """The dashboard's own word for a CRT level: ``CRT`` or ``CRT-IB``."""
+    return "CRT-IB" if level.variant == "inside_bar" else "CRT"
+
 # Palette matched to the dashboard (``web/app.js`` dark theme) so the agent's
 # PNG reads like a screenshot of it: same background, same green/red candles,
 # same per-family ink. Saturated on a dark ground, which is what the vision
@@ -198,6 +203,12 @@ class TagEntry(Serde):
     """
 
     tag: str = ""
+    #: The exact text painted on the image for this entry — the dashboard's own
+    #: word for the family (``CRT``/``CRT-IB`` for CRT levels). The manifest's
+    #: ``tag`` keys stay unique ordinals; ``label`` is what the agent sees, and
+    #: it lets the closing digest bridge an ambiguous on-image word to exactly
+    #: one level (several ``CRT`` words may share a pane, one price each).
+    label: str = ""
     level_key: str = ""
     family: str = ""
     timeframe: str = ""
@@ -630,6 +641,8 @@ class Renderer:
                 is_thesis_level=level.level_key in thesis,
             )
             entries[tag] = TagEntry.from_dict(view)
+            if level.family == "crt":
+                entries[tag].label = _crt_label(level)
         return entries
 
     # ----------------------------------------------------------------- drawing
@@ -902,7 +915,13 @@ class Renderer:
         current_price = float(bars.close[-1]) if len(bars.close) else 0.0
         for level in levels:
             pinned = level.level_key in pinned_keys
-            tag = display_tags[level.level_key]
+            text = display_tags[level.level_key]
+            if level.family == "crt":
+                # The dashboard paints the family's word, not an ordinal: the
+                # operator's screenshot shows plain ``CRT``/``CRT-IB`` text on
+                # every line. The manifest tag stays unique and lives in the
+                # entry's ``label`` bridge for the closing digest.
+                text = _crt_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
             x0, x1 = self._span(level, bars)
             price = float(level.price)
@@ -931,13 +950,13 @@ class Renderer:
                 # A pin must survive every status fade — it is the agent's own marker.
                 color, alpha = _PINNED, 1.0
             # The dashboard's label pose: tiny plain family-coloured text sitting
-            # on its own dotted line — no bold, no bubble box. A tag in the
-            # manifest is still always a tag on the image (the ray budget runs
-            # before tagging), so the lookup bridge never points at air.
+            # on its own dotted line — no bold, no bubble box. A manifest tag
+            # still always has its exact text on the image (the label bridge and
+            # the digest carry the mapping), so the lookup never points at air.
             ax.text(
                 (x0 + x1) / 2.0,
                 label_price,
-                tag,
+                text,
                 color=color,
                 alpha=alpha,
                 fontsize=_TAG_FONTSIZE,

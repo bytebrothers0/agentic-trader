@@ -173,6 +173,38 @@ def test_tags_are_the_family_initial_plus_an_ordinal():
     assert result.tags["F2"].price == 4160.0
 
 
+def test_crt_levels_paint_the_dashboard_word_with_a_label_bridge(tmp_path):
+    """The image text for a CRT level is the dashboard's own word.
+
+    The operator's screenshot shows plain ``CRT``/``CRT-IB`` text on each
+    dotted line — no ordinals. The manifest tag stays the *unique* lookup key,
+    and the entry's ``label`` bridges the (possibly repeated) image word back
+    to exactly one level for the closing digest.
+    """
+    levels = [
+        _level("crt", type="BEARISH (CLASSIC)", price=4170.0, time=ts(day(16, 8)),
+               end_kind="active", range_high=4175.0, range_low=4165.0),
+        _level("crt", type="BULLISH (INSIDE_BAR)", price=4152.0, time=ts(day(16, 12)),
+               end_kind="active", variant="inside_bar"),
+        _level("bos", type="INTERNAL CHOCH", price=4160.0, time=ts(day(16, 14)),
+               end_kind="active"),
+    ]
+    result = _renderer(tmp_path, "crt-labels", FakeClock()).render(
+        _snapshot(levels, price=4155.0, atr=2.0),
+        _series(bars_rows(price=4155.0, step_s=900)),
+    )
+
+    by_price = {entry.price: entry for entry in result.tags.values()}
+    assert by_price[4170.0].label == "CRT"
+    assert by_price[4152.0].label == "CRT-IB"
+    # Non-CRT families keep the unique ordinal tag as their image text.
+    assert by_price[4160.0].label == ""
+    # ...and the labels ride the manifest dict, not just the typed entry.
+    labelled = [e for e in result.manifest["tags"].values() if e.get("label")]
+    assert sorted(e["label"] for e in labelled) == ["CRT", "CRT-IB"]
+
+
+
 def test_origin_is_pinned_for_a_pin_and_live_otherwise():
     result = _standard()[4]
 

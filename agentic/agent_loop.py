@@ -187,11 +187,22 @@ def _manifest_digest(manifest: Optional[Dict[str, Any]], *, max_lines: int = 160
             band = f" band {low}-{high}"
         distance = entry.get("distance_points")
         distance_s = f" ({distance:+g} pts)" if isinstance(distance, (int, float)) else ""
-        lines.append(
-            f"- {entry.get('tag')} {entry.get('family')} {entry.get('timeframe')} "
-            f"{entry.get('direction')} {entry.get('price')}{band} "
-            f"{entry.get('status')}{distance_s}"
-        )
+        label = str(entry.get("label") or "")
+        if label:
+            # The image's word may repeat across levels (three ``CRT`` lines on
+            # one pane); the unique manifest tag in parentheses is the bridge.
+            name = f"{label} ({entry.get('tag')})"
+            lines.append(
+                f"- {name} {entry.get('timeframe')} "
+                f"{entry.get('direction')} {entry.get('price')}{band} "
+                f"{entry.get('status')}{distance_s}"
+            )
+        else:
+            lines.append(
+                f"- {entry.get('tag')} {entry.get('family')} {entry.get('timeframe')} "
+                f"{entry.get('direction')} {entry.get('price')}{band} "
+                f"{entry.get('status')}{distance_s}"
+            )
     if len(lines) > max_lines:
         lines = lines[:max_lines] + [
             f"- (+{len(entries) - max_lines} more levels; render for the full manifest)"

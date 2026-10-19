@@ -36,6 +36,12 @@ DEFAULT_FAMILIES: List[str] = [
     "crt", "bos", "fvg", "ob", "liquidity", "ts",
 ]
 
+#: The default *view* is the dashboard's CRT toggle: the operator's screenshot
+#: shows a boot render with only the CRT range boundaries (and their inside-bar
+#: variant) drawn — 13 levels, every tag readable. The other families stay
+#: reachable with ``set_view(families=...)``; they are off, not gone.
+DEFAULT_VIEW_FAMILIES: List[str] = ["crt"]
+
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}
 
 #: A level is identified by family + timeframe + direction + price + birth bar.
@@ -212,7 +218,7 @@ class View(Serde):
     symbol: str = ""
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
-    families: List[str] = field(default_factory=lambda: list(DEFAULT_FAMILIES))
+    families: List[str] = field(default_factory=lambda: list(DEFAULT_VIEW_FAMILIES))
     bars: int = 50
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the
