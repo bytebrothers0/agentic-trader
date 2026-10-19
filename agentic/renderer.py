@@ -951,11 +951,15 @@ class Renderer:
                 # entry's ``label`` bridge for the closing digest.
                 text = _crt_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
-            # The brightness spec applies at the paint site: family inks too.
+            # The brightness dial applies at the paint site: family inks too.
             color = _bright(color)
             x0, x1 = self._span(level, bars)
             price = float(level.price)
-            band = level.band() if level.family in _ZONE_FAMILIES else None
+            is_zone = level.family in _ZONE_FAMILIES
+            # The operator's style ruling: CRT lines are solid; every other
+            # family stays on the uniform dotted hairline.
+            linestyle = "-" if level.family == "crt" else _LEVEL_STYLE
+            band = level.band() if is_zone else None
             if band is not None:
                 lo, hi = sorted(float(v) for v in band)
                 ax.fill_between(
@@ -973,7 +977,7 @@ class Renderer:
                 ax.plot(
                     [x0, x1], [price, price],
                     color=color, alpha=alpha, linewidth=_LEVEL_LINEWIDTH,
-                    linestyle=_LEVEL_STYLE, zorder=3,
+                    linestyle=linestyle, zorder=3,
                 )
                 label_price = price
             if pinned:
