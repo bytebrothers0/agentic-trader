@@ -85,12 +85,11 @@ def _crt_label(level: LevelRecord) -> str:
 # brightness spec. Saturated on a dark ground, which is what the vision stack
 # tokenises reliably.
 
-#: The operator's brightness ruling for the agent's ingest: +50% on every
-#: colour the render paints. The web pixels are mixed for a lit screen and
-#: human contrast adaptation; the agent's own screenshot of the same chart
-#: reads flat and dim, so the palette is raised. Brightness here is plain RGB
-#: multiply toward white, clamped: ``(r,g,b) -> min(255, v * k)``.
-_VISUAL_BRIGHTNESS = 1.5
+#: Brightness ruling history: the operator once asked for +50% on every colour
+#: for the agent's ingest, then reverted it ("it was a mistake") — the spec
+#: value is 1.0, deliberate. ``_bright`` stays as the one dial in case a
+#: brightness figure is ever specified again; identity at 1.0.
+_VISUAL_BRIGHTNESS = 1.0
 
 
 def _bright(hex_color: str) -> str:
