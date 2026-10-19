@@ -40,3 +40,7 @@ Thumbs.db
 # Agentic runtime output (state + rendered PNGs are never source)
 /agentic/state/
 /agentic/renders/
+
+# Backtest runtime output (cached MT5 history is ~25 MB; reports are regenerable)
+/backtest/out*/
+
