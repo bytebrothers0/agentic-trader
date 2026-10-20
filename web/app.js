@@ -609,18 +609,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return idx;
   }
 
-  // TS span: starts at the swept (anchor) wick. Active levels extend 2 bars
-  // past the sweeping candle so the ray visibly crosses its wick; an
-  // invalidated level ends exactly at the close-through bar (its death).
+  // TS span: exactly three steps — the anchor (where the range sat), the
+  // sweeping candle, and ONE bar to its right (the third candle). The ray is
+  // the sweep EVENT, never the outcome — it does not run until the
+  // invalidation/break bar.
   function tsSpan(lvl) {
     const i1 = candleIndexOf(lvl.start_time || lvl.time);
     const i2 = candleIndexOf(lvl.time);
-    let endIdx = Math.min(state.candles.length - 1, i2 + 2);
-    if (lvl.end_kind === "invalidated" && lvl.end_time) {
-      endIdx = Math.max(endIdx, candleIndexOf(lvl.end_time));
-      endIdx = Math.min(state.candles.length - 1, endIdx);
-    }
-    return { startTime: state.candles[i1].time, endTime: state.candles[endIdx].time, extend: lvl.end_kind !== "invalidated" };
+    const endIdx = Math.min(state.candles.length - 1, i2 + 1);
+    return { startTime: state.candles[i1].time, endTime: state.candles[endIdx].time, extend: true };
   }
 
   function findCandleIndexAndSpan(targetTs, spanBars = 8) {
