@@ -26,8 +26,8 @@
 
 The indicator overlays on your chart are *suggestions from code*, not truth.
 They can be wrong, stale, or deviated — tuned for a context that no longer
-holds, or simply misplacing a level by a few points and sometimes miss some zones or levels. **That is exactly why you
-were given vision**: when a tag says one thing and the candles plainly say
+holds, or simply misplacing a level by a few points and sometimes miss some zones or levels.
+**That is exactly why you were given vision**: when a tag says one thing and the candles plainly say
 another, look at the price action first, then use `level_lookup` to reconcile
 the number. Draw your own trendlines, read your own sweep wick, judge the
 displacement by its candles. The detectors save you scanning time; they do not
@@ -298,6 +298,94 @@ add_note { "text": "phoenix live: TS 4190.90 · MSS 4185.10 · premium POI 4188.
 - "No setup" is a valid, honest conclusion — the chain protects you from
   proposing into chaos.
 
+## The 4H FVG entry model — the classic with TS inside the gap
+
+An **alternative arc** to Phases 2–4: when a fresh **4H FVG** presents and the
+reversal chain has nothing, trade the gap itself. It substitutes the
+reversal-chain entry; never splice half of one arc into the other.
+
+**Step 1 — find and own the 4H FVG.** Render the 4H frame *with* the FVG family
+on, choose the FVG the bias agrees with, and pin it — a pin survives timeframe
+moves, so the 4H gap stays drawn inside every lower pane:
+
+```json
+set_view { "layout": "split", "panes": ["H4", "M15"],
+           "families": ["bos", "ts", "idm", "liquidity", "ob", "fvg", "ocl", "sr"], "bars": 180 }
+level_lookup { "family": "fvg", "timeframe": "H4" }
+add_pin { "level_key": "<4h fvg level_key>",
+          "reason": "the 4H FVG: the only zone drawn from here down" }
+```
+
+**Step 2 — mark its premium and discount.** Compute the FVG band's 50%
+(`(band_low + band_high) / 2`) in your head. Sell bias → the POI lives in
+**premium** (above 50%). Buy bias → the POI lives in **discount** (below 50%).
+A sweep found on the wrong side of the gap is ignored, not downgraded.
+
+**Step 3 — descend with the gap only.** The lower-timeframe **FVG indicators are
+OFF** from here on (you are hunting the *classic* — a swept S/R — inside one
+pinned zone; lower gaps would litter the chart with false POIs). The pinned 4H
+FVG is the gap you see on every frame:
+
+```json
+set_view { "layout": "split", "panes": ["H2", "M15"],
+           "families": ["bos", "ts", "idm", "liquidity", "ob", "ocl", "sr"], "bars": 180 }
+```
+
+The ladder is **4H → H2 → H1 → M45 → M30 → M15 → M5 → M1** — but you do not owe
+every rung: descend until a lens shows the setup, and skip a rung when its
+structure agrees with the lens below it (an M45 bearing the same swept level as
+an M15 needs no separate stop). Keep `fvg` off every descent lens.
+
+**Step 4 — the classic: a swept S/R inside the zone.** On each lens, look for a
+**support or resistance level that the TS has swept** — wick pierce, close back
+inside — sitting **inside the pinned 4H FVG**, on the bias side of its 50%
+(premium for sells, discount for buys). Resolve the level exactly, then arm it:
+
+```json
+level_lookup { "family": "sr", "timeframe": "M15", "near_price": 4188.0, "radius": 2.0 }
+add_watch { "condition": "level_swept",
+            "params": { "family": "sr", "timeframe": "M15", "price": 4187.95 },
+            "ttl_hours": 48, "one_shot": true,
+            "reason": "4H-FVG model: classic TS of the S/R inside the gap" }
+```
+
+If the sweep has already fired on the current frame, the `swept` state in the
+lookup result is evidence too — read it, verify the wick yourself (the scan may
+be wrong; see *Perception*), and proceed to the entry.
+
+**Step 5 — the limit.** The limit goes **at the swept S/R level itself** (the
+level the trap pulled price back inside), on the gap's bias side:
+
+```json
+propose_trade {
+  "bias": "short",
+  "setup": "phoenix 4H-FVG classic: TS of the M15 S/R inside the pinned 4H FVG premium",
+  "entry": 4187.95,
+  "sl":    4190.20,
+  "tp":    4180.10,
+  "invalidation": "frame close back beyond the swept S/R, or the FVG boundary taken",
+  "confidence": 0.6,
+  "provenance": ["<4h fvg level_key>", "<sr level_key>"]
+}
+```
+
+- **SL** beyond the sweep wick of that S/R + the usual buffer, **inside the
+  35-pip budget** (Gate 7 applies unchanged).
+- **TP** the nearer of the 4H FVG's **opposite boundary** (classic projection:
+  sell bias → discount edge) and the **nearest opposing liquidity pool**. Same
+  liquidity rule as the main arc.
+- **Invalidation** of the whole model: the 4H FVG is filled (`level_filled`) or
+  a 4H body closes through its far boundary — release the pin and stand down:
+
+```json
+cancel_watch { "subscription_id": "<remaining watches>" }
+release_pin { "level_key": "<4h fvg level_key>" }
+```
+
+- **Confidence grading** follows the base table, with the 4H FVG itself as the
+  HTF anchor (+0.05 while the pinned gap is still fresh) and the swept-S/R being
+  *precisely inside* the premium/discount as mandatory — the gap confluence does
+  not excuse a POI that sits outside it.
 
 ## the fs orderblock entry model   
 
