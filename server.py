@@ -28,7 +28,7 @@ from config.settings import (
     BOS_SWING_TOL_ATR, OB_ENABLED, OB_SWING_LENGTH, OB_SHOW_LAST,
     OB_USE_BODY, OB_REQUIRE_FVG, OB_REQUIRE_SWEEP, OB_DISPLACEMENT_MULT,
     OB_MARK_DECISIONAL,
-    TS_MIN_WICK_BODY_FRAC, TS_MIN_WICK_RANGE_FRAC,
+    TS_MIN_WICK_BODY_FRAC, TS_MIN_WICK_RANGE_FRAC, TS_MAX_BETWEEN,
     TL_ENABLED, TL_PIVOT_LENGTH, TL_PIVOT_WINDOWS, TL_SLOPE_MULT, TL_MAX_LINES,
     TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
@@ -55,7 +55,7 @@ from agentic.store import MAX_OFFSET, MIN_BARS
 # needs hundreds of bars for its normal timeframe windows.
 MAX_CANDLE_BARS = 2000
 from data.mt5_loader import InsufficientHistory, MT5DataLoader
-from indicators.ts_detector import TSDetector
+from indicators.ts_detector import TSDetector, TSState
 from indicators.crt_detector import CRTDetector
 from indicators.idm_detector import IDMDetector
 from indicators.liquidity_detector import LiquidityDetector
@@ -496,28 +496,44 @@ def get_indicators(
                     "desc": f"{'EXTERNAL' if bool(apex.is_external) else 'INTERNAL'} {apex.apex_type.value.upper()}"
                 })
 
-        # 5. Turtle Soup (TS) — new custom logic, works on every timeframe
+        # 5. Turtle Soup (TS) — the full CRT variant taxonomy: the anchor
+        # candle is the range, the manipulation candle sweeps one boundary
+        # within TS_MAX_BETWEEN bars and its body closes back inside.
+        # Variants: two_candle / classic / inside_bar /
+        # multiple_inside_bar / multiple_candle. Invalidation = a LATER bar
+        # body-closing through the swept boundary (terminal).
         if TS_ENABLED and show_ts:
             ts_det = TSDetector(
                 df,
                 min_wick_body_frac=TS_MIN_WICK_BODY_FRAC,
                 min_wick_range_frac=TS_MIN_WICK_RANGE_FRAC,
+                max_between=TS_MAX_BETWEEN,
             )
             ts_levels = list(ts_det.detect_all())
             for ts in ts_levels:
                 t_idx = min(ts.candle_index, len(times_unix) - 1)
                 s_idx = min(ts.sweep_candle_index, len(times_unix) - 1)
+                invalidated = ts.state is TSState.INVALIDATED
                 levels_data.append({
                     "category": "ts",
                     "type": f"{ts.ts_type.value.upper()} ({ts.direction.value.upper()})",
                     "price": round(ts.price, 3),
-                    "state": "FRESH",
+                    "state": "INVALIDATED" if invalidated else "FRESH",
                     "time": int(times_unix[t_idx]),
                     "start_time": int(times_unix[s_idx]),
-                    "end_time": None,
-                    "end_kind": "active",
+                    "end_time": (int(times_unix[ts.invalidated_candle_index])
+                                 if ts.invalidated_candle_index is not None
+                                 else None),
+                    "end_kind": "invalidated" if invalidated else "active",
                     "sweep_amount": round(ts.sweep_amount, 3),
-                    "desc": f"TS: {ts.ts_type.value.upper()} {ts.direction.value.upper()}"
+                    "variant": ts.variant.value,
+                    "inside_bars": ts.inside_bars,
+                    "desc": (
+                        f"TS: {ts.ts_type.value.upper()} {ts.direction.value.upper()}"
+                        f" ({ts.variant.value}"
+                        + (f" x{ts.inside_bars}"
+                           if ts.inside_bars else "") + ")"
+                    ),
                 })
 
         # 5b. CRT (Candle Range Theory): an anchor candle defines the range

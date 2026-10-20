@@ -51,6 +51,8 @@ Let `k = j − i` (all valid: `1 ≤ k ≤ TS_MAX_BETWEEN`):
 Notes
 - An inside bar (`h ≤ CRH and l ≥ CRL`) can never itself be the sweep candle, so "earliest valid sweep" and inside-bar accumulation do not conflict.
 - **One signal per anchor per side**: for each anchor `i` and each side, scan `j` ascending from `i+1`; the **first valid sweep** wins; later re-sweeps of the same anchor side are suppressed (this also lowers duplicate/stacked rays of today's adjacent-only behavior).
+- **Nested containers collapse to the outermost** (added during implementation): when ONE manipulation candle sweeps the boundaries of MANY anchors on the same side, candidates whose range sits fully inside another candidate's range are dropped, keeping the **outermost container** — CRT's "widest range wins" discipline. Non-nested candidates are independent signals and all survive; an exact size tie keeps the earliest anchor. (This suppresses a subset of the legacy adjacent-chain double counts — the intentional chart-cleaning change; the side-dies rule and earliest-sweep rule still hold.)
+- **Both-side tie keeps both**: when a single candle raids one anchor's two boundaries to *exactly* equal depth, the deepest-raid rule cannot discriminate, so both sides fire (the documented legacy behaviour of the doji fixture). Only a *strictly* deeper raid collapses the shallower side.
 - `k == 1` covers the manipulation candle of classic/2-candle/multi-candle CRT forms; the operationalized `TWO_CANDLE` requires the delivery evidence (touch of the opposite boundary in the same candle). This is the honest, checkable reading of "candle 2 manipulates *and* distributes".
 - `MULTIPLE_INSIDE_BAR` requires ≥ 2 inside bars (`INSIDE_BAR` is the `k == 2` count-1 case); probability ranking can be derived downstream from the variant + `inside_bars` count.
 
@@ -95,5 +97,5 @@ Stays untouched: `indicators/crt_detector.py` (detection is perception, not stra
 7. Both-boundary breach in one bar → exactly one signal, the deeper side.
 8. `TS_MAX_BETWEEN = 5`: a valid sweep at `k == 6` is **not** a TS for that anchor.
 9. Earliest-sweep rule: anchor swept twice (valid at `k==1` and again at `k==3`) → one signal.
-10. Legacy parity: any pair the *old* detector emitted still appears with identical `price` / `candle_index` / `sweep_candle_index` (modulo the new variant/inside_bars fields).
+10. Parity: the earliest qualifying adjacent sweep per anchor still appears with identical `price` / `candle_index` / `sweep_candle_index`; linked *nested* anchors swept by the same candle collapse to the outermost container (an intentional, spec'd volume reduction over the legacy adjacent-chain behavior).
 11. `sweep_min`, `min_sweep_atr`, wick-fracs gates retain today's semantics (unit re-runs).

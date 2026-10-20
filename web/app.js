@@ -191,6 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
       borderColor: "#2b313d",
       timeVisible: true,
       secondsVisible: false,
+      rightOffset: 3,
     },
   });
 
@@ -367,7 +368,10 @@ document.addEventListener("DOMContentLoaded", () => {
         `/api/candles?symbol=${encodeURIComponent(state.symbol)}&timeframe=${state.timeframe}&bars=${tfBars()}`,
         { signal: controller.signal }
       );
-      if (!candleRes.ok) throw new Error("Failed to fetch candle data.");
+      if (!candleRes.ok) {
+        const error = await candleRes.json().catch(() => null);
+        throw new Error(error?.detail || "Failed to fetch candle data.");
+      }
       const candleData = await candleRes.json();
       if (controller.signal.aborted || requestId !== refreshSequence) return;
 
@@ -605,13 +609,18 @@ document.addEventListener("DOMContentLoaded", () => {
     return idx;
   }
 
-  // TS span: starts at the swept (candle 1) wick and extends 2 bars past
-  // the sweeping candle so the ray visibly crosses candle 2's wick.
+  // TS span: starts at the swept (anchor) wick. Active levels extend 2 bars
+  // past the sweeping candle so the ray visibly crosses its wick; an
+  // invalidated level ends exactly at the close-through bar (its death).
   function tsSpan(lvl) {
     const i1 = candleIndexOf(lvl.start_time || lvl.time);
     const i2 = candleIndexOf(lvl.time);
-    const endIdx = Math.min(state.candles.length - 1, i2 + 2);
-    return { startTime: state.candles[i1].time, endTime: state.candles[endIdx].time, extend: true };
+    let endIdx = Math.min(state.candles.length - 1, i2 + 2);
+    if (lvl.end_kind === "invalidated" && lvl.end_time) {
+      endIdx = Math.max(endIdx, candleIndexOf(lvl.end_time));
+      endIdx = Math.min(state.candles.length - 1, endIdx);
+    }
+    return { startTime: state.candles[i1].time, endTime: state.candles[endIdx].time, extend: lvl.end_kind !== "invalidated" };
   }
 
   function findCandleIndexAndSpan(targetTs, spanBars = 8) {
@@ -691,7 +700,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (lvl.category === "bos") return (lvl.type || "").split(" ")[0] || "BOS";
       if (lvl.category === "fvg") return "FVG";
       if (lvl.category === "ifvg") return "IFVG";
-      if (lvl.category === "ts") return (lvl.type || "").includes("HIGH") ? "TS-H" : "TS-L";
+      if (lvl.category === "ts") {
+        // Turtle Soup variants: inside-bar accumulation gets the ·IB badge
+        // (the higher-probability read, mirroring CRT·IB).
+        const _base = (lvl.type || "").includes("HIGH") ? "TS-H" : "TS-L";
+        return _base + (lvl.variant && lvl.variant.includes("inside_bar")
+          ? "·IB" : "");
+      }
       if (lvl.category === "crt") return lvl.variant === "inside_bar" ? "CRT·IB" : "CRT";
       if (lvl.category === "trendline") return lvl.flipped ? "BRT" : "TL";
       if (lvl.category === "apex") return t.includes("IAB") ? "IAB" : "APX";
