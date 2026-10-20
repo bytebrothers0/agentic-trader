@@ -36,6 +36,7 @@ from agentic.renderer import (
     Renderer,
     TagEntry,
     _bos_label,
+    _sr_label,
 )
 
 
@@ -193,7 +194,7 @@ def test_crt_levels_paint_the_dashboard_word_with_a_label_bridge(tmp_path):
                end_kind="active", range_high=4175.0, range_low=4165.0),
         _level("crt", type="BULLISH (INSIDE_BAR)", price=4152.0, time=ts(day(16, 12)),
                end_kind="active", variant="inside_bar"),
-        _level("bos", type="INTERNAL CHOCH", price=4160.0, time=ts(day(16, 14)),
+        _level("bos", type="I-CHOCH (BEARISH)", price=4160.0, time=ts(day(16, 14)),
                end_kind="active"),
     ]
     result = _renderer(tmp_path, "crt-labels", FakeClock()).render(
@@ -204,11 +205,11 @@ def test_crt_levels_paint_the_dashboard_word_with_a_label_bridge(tmp_path):
     by_price = {entry.price: entry for entry in result.tags.values()}
     assert by_price[4170.0].label == "CRT"
     assert by_price[4152.0].label == "CRT-IB"
-    # Non-CRT families keep the unique ordinal tag as their image text.
-    assert by_price[4160.0].label == ""
+    # BOS paints its structural kind too — bridged the same way.
+    assert by_price[4160.0].label == "I-CHoCH"
     # ...and the labels ride the manifest dict, not just the typed entry.
     labelled = [e for e in result.manifest["tags"].values() if e.get("label")]
-    assert sorted(e["label"] for e in labelled) == ["CRT", "CRT-IB"]
+    assert sorted(e["label"] for e in labelled) == ["CRT", "CRT-IB", "I-CHoCH"]
 
 
 
@@ -825,6 +826,15 @@ def test_bos_labels_carry_the_structural_kind_name():
     assert _bos_label(bos) == "BOS"
     assert _bos_label(ibos) == "I-BOS"
     assert _bos_label(ichoch) == "I-CHoCH"
+
+
+def test_sr_labels_are_the_dashboard_words():
+    support = _snapshot([_level("sr", desc="SUPPORT (fresh)", price=100.0)]).levels[0]
+    resistance = _snapshot([_level("sr", desc="RESISTANCE (unfresh)", price=102.0)]).levels[0]
+    sbr = _snapshot([_level("sr", desc="SBR (fresh)", price=105.0)]).levels[0]
+    assert _sr_label(support) == "S"
+    assert _sr_label(resistance) == "R"
+    assert _sr_label(sbr) == "SBR"
 
 
 def test_sr_spans_its_full_life_and_fresh_gets_the_dashboard_pose():

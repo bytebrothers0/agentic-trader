@@ -87,6 +87,14 @@ def _bos_label(level: LevelRecord) -> str:
     kind = str((level.attrs or {}).get("kind", "") or "BOS")
     return ("I-" + kind) if (level.attrs or {}).get("internal") else kind
 
+
+def _sr_label(level: LevelRecord) -> str:
+    """The dashboard's own word for an S/R level (``app.js`` levelTag):
+    S / R / SBR / RBS — the payload's ``desc`` encodes it as
+    ``"SUPPORT (fresh)"`` etc., so the leading token carries the kind."""
+    head = (level.origin or "").split(" ")[0].strip().upper()
+    return {"SUPPORT": "S", "RESISTANCE": "R"}.get(head, head or "S")
+
 # Paper theme: white ground, bullish candles white with black borders, bearish
 # candles black, and black indicator ink. Only zones use fills: pale yellow for
 # order blocks and a very light black tint for FVG/IFVG. Family identity comes
@@ -667,6 +675,12 @@ class Renderer:
             entries[tag] = TagEntry.from_dict(view)
             if level.family == "crt":
                 entries[tag].label = _crt_label(level)
+            elif level.family == "bos":
+                # The painted word rides the manifest so the closing digest
+                # knows what the agent actually saw (BOS / I-BOS / CHoCH …).
+                entries[tag].label = _bos_label(level)
+            elif level.family == "sr":
+                entries[tag].label = _sr_label(level)
         return entries
 
     # ----------------------------------------------------------------- drawing
@@ -1019,7 +1033,21 @@ class Renderer:
                 # Same word-not-ordinal parity: BOS / I-BOS / CHoCH / I-CHoCH,
                 # the structural *name* the payload carries.
                 text = _bos_label(level) + ("*" if pinned else "")
+            elif level.family == "sr":
+                # Dashboard word parity too: S / R / SBR / RBS, never the
+                # meaningless "S7" ordinal. The dashboards' levelTag.
+                text = _sr_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
+            linestyle = _LEVEL_STYLE
+            if level.family == "sr":
+                # Dashboard parity (app.js): fresh levels draw solid, touched
+                # (one-use) ones dashed at FULL contrast — the dashboard does
+                # not fade them — and broken ones gray dotted.
+                if level.status is LevelStatus.BROKEN:
+                    linestyle = ":"   # gray picked up from _level_style
+                elif level.status is LevelStatus.FILLED:
+                    linestyle = "--"
+                    alpha = 1.0
             # Family and status use luminance rather than competing hues.
             color = _bright(color)
             x0, x1 = self._span(level, bars)
@@ -1065,7 +1093,7 @@ class Renderer:
                     [x0, x1], [price, price],
                     color=color, alpha=alpha,
                     linewidth=self._line_width(_LEVEL_LINEWIDTH),
-                    linestyle=_LEVEL_STYLE, zorder=3,
+                    linestyle=linestyle, zorder=3,
                 )
                 label_price = price
             if level.family == "crt":
