@@ -15,6 +15,7 @@ from agentic.feed import (
     LevelRecord,
     _show_flags,
     family_of,
+    filter_status,
     parse_level,
     parse_payload,
     status_of,
@@ -101,6 +102,23 @@ def test_ts_start_time_is_carried_for_the_renderer():
     )
     assert lvl.attrs["start_time"] == 1792140300
     assert lvl.formed_at is not None
+
+
+def test_status_filter_keeps_only_live_levels():
+    # The perception dial: "live" drops dead levels *before* the renderer's ray
+    # budget is spent; "all" is a pass-through. The source snapshot stays intact.
+    fresh = dict(CRT_LEVEL, state="FRESH", end_kind=None)
+    dead = dict(CRT_LEVEL, state="BROKEN", end_kind="invalidated")
+    snap = parse_payload(_payload([fresh, dead]), symbol="XAUUSDm", timeframe="M15")
+    live = filter_status(snap, "live")
+
+    assert len(filter_status(snap, "all").levels) == 2     # pass-through
+    assert len(live.levels) == 1                           # the dead one dropped
+    assert live.levels[0].status is LevelStatus.LIVE
+    assert live.current_price == snap.current_price        # the ride-along survives
+    assert len(snap.levels) == 2                           # the source is untouched
+    with pytest.raises(ValueError):
+        filter_status(snap, "fresh")
 
 
 def test_direction_reads_the_type_field():

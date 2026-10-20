@@ -79,8 +79,9 @@ TOOL_NAMES: Tuple[str, ...] = (
 TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
                 "offset (re-render a past window), layout/panes (set layout=split with "
-                "exactly 2 panes for two stacked timeframes), tags, annotations. Unknown "
-                "dials are refused.",
+                "exactly 2 panes for two stacked timeframes), status_filter ('live' "
+                "= fresh/unmitigated/unbroken only — the default; 'all' = dead "
+                "history too), tags, annotations. Unknown dials are refused.",
     "render": "Re-render the store's view + pins after a change; returns image_path, "
               "render_id and manifest.",
     "level_lookup": "Exact numbers for a tag you saw, a level_key from a previous turn, a "
@@ -113,6 +114,12 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "timeframe": {"type": "string", "description": "e.g. M15, H2, D1"},
             "chart_type": {"type": "string", "enum": ["candles", "line"]},
             "families": {"type": "array", "items": {"type": "string"}},
+            "status_filter": {
+                "type": "string",
+                "enum": ["all", "live"],
+                "description": "'live' (default) = only fresh/unmitigated/unbroken "
+                               "levels; 'all' = dead history too",
+            },
             "bars": {"type": "integer", "minimum": MIN_BARS, "maximum": MAX_BARS},
             "offset": {"type": "integer", "minimum": 0, "maximum": MAX_OFFSET},
             "layout": {"type": "string", "enum": ["single", "split"]},
@@ -291,13 +298,14 @@ def _resolve_pin(snapshot: FeedSnapshot, sub: Subscription) -> Optional[LevelRec
     return min(candidates, key=lambda level: abs(level.price - float(price)))
 
 
-def _cache_key(timeframe: str, bars: int, offset: int) -> Tuple[str, int, int]:
+def _cache_key(timeframe: str, bars: int, offset: int, status_filter: str = "all") -> Tuple[str, int, int, str]:
     """The per-turn snapshot cache key.
 
-    Keyed by ``(timeframe, bars, offset)`` so a changed dial — a new timeframe, a
-    different lookback, or a shifted window — can never serve a stale snapshot.
+    Keyed by ``(timeframe, bars, offset, status_filter)`` so a changed dial — a
+    new timeframe, a different lookback, a shifted window, or a fresh-vs-all
+    toggle — can never serve a stale snapshot.
     """
-    return (str(timeframe), int(bars), int(offset))
+    return (str(timeframe), int(bars), int(offset), str(status_filter or "all").lower())
 
 
 def resolve_pins(
@@ -305,24 +313,30 @@ def resolve_pins(
     feed: Feed,
     snapshot: FeedSnapshot,
     *,
-    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]] = None,
+    cache: Optional[Dict[Tuple[str, int, int, str], FeedSnapshot]] = None,
 ) -> List[LevelRecord]:
     """Every open pin resolved to a :class:`LevelRecord` for the render.
 
     A pin from another timeframe is fetched from the feed (once per timeframe at
     the view's ``bars``/``offset``, via ``cache``) and passed to the renderer as a
     pin, which is what makes the 2H level survive the drop to M15.
+
+    Pin identity is resolved against the *view snapshot* first (the normal,
+    single-fetch path); when the view's ``status_filter`` filtered a pinned
+    level out — a pin may deliberately name a now-dead level — one ``"all"``
+    snapshot is fetched and retried. Pins are exempt from the status filter the
+    way they are exempt from the renderer's ray budget.
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
     families = list(view.families) or None
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
+    dial = str(getattr(view, "status_filter", "all") or "all").lower()
     cache = cache if cache is not None else {}
-    resolved: List[LevelRecord] = []
-    for sub in store.open_subscriptions(SubscriptionKind.PIN):
-        timeframe = str((sub.params or {}).get("timeframe") or view.timeframe)
-        key = _cache_key(timeframe, bars_count, offset)
+
+    def _fetch(timeframe: str, status_filter: str) -> FeedSnapshot:
+        key = _cache_key(timeframe, bars_count, offset, status_filter)
         if key not in cache:
             cache[key] = feed.snapshot(
                 symbol,
@@ -330,8 +344,19 @@ def resolve_pins(
                 families=families,
                 bars=bars_count,
                 offset=offset,
+                status_filter=status_filter,
             )
-        level = _resolve_pin(cache[key], sub)
+        return cache[key]
+
+    resolved: List[LevelRecord] = []
+    for sub in store.open_subscriptions(SubscriptionKind.PIN):
+        timeframe = str((sub.params or {}).get("timeframe") or view.timeframe)
+        source = snapshot if timeframe == str(view.timeframe) else None
+        if source is None:
+            source = _fetch(timeframe, dial)
+        level = _resolve_pin(source, sub)
+        if level is None and dial == "live":
+            level = _resolve_pin(_fetch(timeframe, "all"), sub)
         if level is not None:
             resolved.append(level)
     return resolved
@@ -369,6 +394,7 @@ def render_current(
     families = list(view.families) or None
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
+    status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
     thesis = store.data.thesis.levels_of_interest
     pane_timeframes = [str(tf) for tf in (view.panes or [])]
     if view.layout is Layout.SPLIT and len(pane_timeframes) > 1:
@@ -380,16 +406,24 @@ def render_current(
             families=families,
             bars=bars_count,
             offset=offset,
+            status_filter=status_filter,
             pane_timeframes=pane_timeframes,
             thesis=thesis,
             cache=cache,
         )
 
     timeframe = view.timeframe
-    snapshot = feed.snapshot(symbol, timeframe, families=families, bars=bars_count, offset=offset)
+    snapshot = feed.snapshot(
+        symbol,
+        timeframe,
+        families=families,
+        bars=bars_count,
+        offset=offset,
+        status_filter=status_filter,
+    )
     bars = feed.bars(symbol, timeframe, bars=bars_count, offset=offset)
     if cache is not None:
-        cache[_cache_key(timeframe, bars_count, offset)] = snapshot
+        cache[_cache_key(timeframe, bars_count, offset, status_filter)] = snapshot
     pins = resolve_pins(store, feed, snapshot, cache=cache)
     return renderer.render(
         snapshot,
@@ -402,18 +436,21 @@ def render_current(
 
 def _fetch_snapshot(
     feed: Feed,
-    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]],
+    cache: Optional[Dict[Tuple[str, int, int, str], FeedSnapshot]],
     symbol: str,
     timeframe: str,
     families: Optional[List[str]],
     bars: int,
     offset: int,
+    status_filter: str = "all",
 ) -> FeedSnapshot:
-    """A snapshot for ``(timeframe, bars, offset)``, cached within the turn."""
-    key = _cache_key(timeframe, bars, offset)
+    """A snapshot for ``(timeframe, bars, offset, status_filter)``, cached within the turn."""
+    key = _cache_key(timeframe, bars, offset, status_filter)
     if cache is not None and key in cache:
         return cache[key]
-    snapshot = feed.snapshot(symbol, timeframe, families=families, bars=bars, offset=offset)
+    snapshot = feed.snapshot(
+        symbol, timeframe, families=families, bars=bars, offset=offset, status_filter=status_filter
+    )
     if cache is not None:
         cache[key] = snapshot
     return snapshot
@@ -428,14 +465,16 @@ def _render_split(
     families: Optional[List[str]],
     bars: int,
     offset: int,
+    status_filter: str,
     pane_timeframes: List[str],
     thesis: Any,
-    cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]],
+    cache: Optional[Dict[Tuple[str, int, int, str], FeedSnapshot]],
 ) -> RenderResult:
     """The two-pane perception: one snapshot/bars pair per pane, pins per pane."""
     view = store.data.view
+    dial = str(status_filter or "all").lower()
     pane_snapshots = {
-        tf: _fetch_snapshot(feed, cache, symbol, tf, families, bars, offset)
+        tf: _fetch_snapshot(feed, cache, symbol, tf, families, bars, offset, status_filter=dial)
         for tf in pane_timeframes
     }
     pane_bars = {
@@ -447,10 +486,19 @@ def _render_split(
         pin_tf = str((sub.params or {}).get("timeframe") or view.timeframe)
         target = pin_tf if pin_tf in pins_by_tf else primary_tf
         if pin_tf in pane_snapshots:
-            source = pane_snapshots[pin_tf]
+            level = _resolve_pin(pane_snapshots[pin_tf], sub)
         else:
-            source = _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset)
-        level = _resolve_pin(source, sub)
+            level = _resolve_pin(
+                _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset, status_filter=dial),
+                sub,
+            )
+        if level is None and dial == "live":
+            # A pin may deliberately name a dead level; resolve it from the
+            # unfiltered snapshot so the pin never silently vanishes.
+            level = _resolve_pin(
+                _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset, status_filter="all"),
+                sub,
+            )
         if level is not None:
             pins_by_tf[target].append(level)
 
@@ -502,7 +550,7 @@ class ToolRegistry:
         self._notes: List[Dict[str, Any]] = []
         self._renders = 0
         self._render_refusals = 0
-        self._snapshots: Dict[Tuple[str, int, int], FeedSnapshot] = {}
+        self._snapshots: Dict[Tuple[str, int, int, str], FeedSnapshot] = {}
         #: The most recent render (initial or tool), for the loop to show the model.
         self.last_result: Optional[RenderResult] = None
 
@@ -610,16 +658,19 @@ class ToolRegistry:
     def _snapshot_for_timeframe(self, timeframe: str) -> FeedSnapshot:
         """A snapshot for one timeframe of the current view, cached within the turn.
 
-        The cache key is ``(timeframe, bars, offset)``, matching the render path,
-        so a lookup after a ``set_view`` never reads a snapshot fetched for the
-        old dials.
+        The cache key is ``(timeframe, bars, offset, status_filter)``, matching
+        the render path, so a lookup after a ``set_view`` never reads a snapshot
+        fetched for the old dials. The view's status filter applies: the lookup
+        sees the same fresh-only world the render drew (``set_view(
+        status_filter="all")`` is the escape hatch).
         """
         view = self._store.data.view
         symbol = view.symbol or self._store.data.symbol
         bars = int(view.bars)
         offset = int(view.offset or 0)
         tf = str(timeframe)
-        key = _cache_key(tf, bars, offset)
+        status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
+        key = _cache_key(tf, bars, offset, status_filter)
         if key not in self._snapshots:
             self._snapshots[key] = self._feed.snapshot(
                 symbol,
@@ -627,6 +678,7 @@ class ToolRegistry:
                 families=list(view.families) or None,
                 bars=bars,
                 offset=offset,
+                status_filter=status_filter,
             )
         return self._snapshots[key]
 

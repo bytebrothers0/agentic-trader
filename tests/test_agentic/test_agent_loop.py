@@ -649,6 +649,36 @@ def test_render_current_resolves_pins_and_thesis_levels(tmp_path):
     assert call["thesis_level_keys"] == [key]
 
 
+def test_a_pinned_dead_level_still_draws_under_the_fresh_filter(tmp_path):
+    # Spec 2026-10-20: the view's default status_filter="live" hides dead levels,
+    # but a pin may deliberately name one — pins are exempt from the status
+    # filter the way they are exempt from the per-family ray budget.
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)     # view.status_filter is the default "live"
+    dead = _level(
+        "fvg",
+        type="FVG (BULLISH)",
+        price=4160.0,
+        time=ts(at(6, 30)),
+        end_kind="mitigated",
+        box_top=4162.0,
+        box_bottom=4158.0,
+    )
+    key = _snapshot([dead], timeframe="M15").levels[0].level_key
+    stub = FeedStub(price=4155.0, atr=5.0)
+    stub.set_levels([dead], timeframe="M15")
+    stub.set_candles(bars_rows(), timeframe="M15")
+    store.add_subscription("pin", params={"level_key": key}, reason="hold it")
+
+    renderer = _renderer(tmp_path, clock)
+    render_current(store, stub.build(), renderer)
+
+    call = renderer.calls[0]
+    assert [p.level_key for p in call["pins"]] == [key]
+    # and the filtered *view* snapshot genuinely dropped the dead level
+    assert stub.snapshot_calls.count(("XAUUSDm", "M15")) >= 2   # live fetch + the "all" pin retry
+
+
 def test_the_real_renderer_marks_the_pin_and_the_thesis_level(tmp_path):
     # The manifest fields are the *real* renderer's business, so this test uses it
     # (the stub above records the call but synthesises no manifest).

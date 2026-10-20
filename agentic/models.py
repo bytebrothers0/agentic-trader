@@ -43,6 +43,12 @@ DEFAULT_FAMILIES: List[str] = [
 #: reachable with ``set_view(families=...)``; they are off, not gone.
 DEFAULT_VIEW_FAMILIES: List[str] = ["crt"]
 
+#: The life-cycle dial for perception ``("all", "live")``. ``"live"`` — the
+#: default — keeps only fresh / unmitigated / unbroken levels (per family:
+#: TS alive, CRT undistributed, FVG fresh, OB unmitigated, IDM unswept),
+#: which is exactly ``LevelStatus.LIVE``; ``"all"`` shows dead history too.
+STATUS_FILTERS: List[str] = ["all", "live"]
+
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}
 
 #: A level is identified by family + timeframe + direction + price + birth bar.
@@ -220,6 +226,11 @@ class View(Serde):
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_VIEW_FAMILIES))
+    #: Which life-cycle states the agent perceives: ``"live"`` (the default —
+    #: fresh/unmitigated/unbroken, i.e. ``LevelStatus.LIVE``) or ``"all"``.
+    #: Validated by ``Store.set_view``; the renderer's ray budget is spent on
+    #: signal, not history, until the agent asks to see the dead ones.
+    status_filter: str = "live"
     bars: int = 180
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the

@@ -31,6 +31,7 @@ from agentic.models import (
     LevelStatus,
     Proposal,
     ProposalStatus,
+    STATUS_FILTERS,
     StoreState,
     Subscription,
     SubscriptionKind,
@@ -63,11 +64,9 @@ MAX_TURNS_PER_DAY = 60
 MAX_SPEND_PER_DAY_USD = 5.0
 
 MIN_BARS = 20
-#: A *screenshot*'s size, not a history bound: the agent's charts are rendered
-#: for a vision model, and past the ~50-candle mark the tags collapse into
-#: unreadable noise (the replay proved it at 300). Past price action is reached
-#: with ``offset`` — pan the window back — never by widening it.
-MAX_BARS = 100
+#: Maximum bars in one agent screenshot. Past price action is reached with
+#: ``offset`` — pan the window back — rather than widening without a bound.
+MAX_BARS = 180
 #: How far back (in bars, per timeframe) the agent may shift its window. A cap
 #: exists for the same reason the bar cap does: an unbounded lookback asks the
 #: provider for history it may not hold and renders a window nobody asked for.
@@ -282,6 +281,14 @@ class ContextStore:
             changes["bars"] = bars
         if "show_tags" in changes:
             changes["show_tags"] = bool(changes["show_tags"])
+        if "status_filter" in changes:
+            value = str(changes["status_filter"] or "").strip().lower()
+            if value not in STATUS_FILTERS:
+                raise StoreError(
+                    "invalid_status_filter",
+                    f"status_filter must be one of {STATUS_FILTERS}",
+                )
+            changes["status_filter"] = value
         if "offset" in changes:
             try:
                 offset = int(changes["offset"])

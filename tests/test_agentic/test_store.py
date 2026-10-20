@@ -343,6 +343,21 @@ def test_view_offset_is_accepted_and_validated(tmp_path):
     assert exc.value.reason == "invalid_offset"
 
 
+def test_view_status_filter_defaults_to_fresh_and_is_validated(tmp_path):
+    # Spec 2026-10-20: the agent perceives fresh/unmitigated/unbroken levels by
+    # default; "all" is the explicit dead-history escape hatch.
+    store = _store(tmp_path)
+    assert store.data.view.status_filter == "live"
+    assert store.set_view(status_filter="all").status_filter == "all"
+    assert store.set_view(status_filter="LIVE").status_filter == "live"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(status_filter="fresh")
+    assert exc.value.reason == "invalid_status_filter"
+    with pytest.raises(StoreError) as exc:
+        store.set_view(status_filter="")
+    assert exc.value.reason == "invalid_status_filter"
+
+
 def test_split_requires_exactly_two_panes(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(StoreError) as exc:

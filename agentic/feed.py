@@ -27,7 +27,7 @@ is what lets a pin survive a view change.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -422,6 +422,34 @@ def status_of(level: Mapping[str, Any]) -> LevelStatus:
     return _STATUS_BY_STATE.get(state, LevelStatus.LIVE)
 
 
+#: The perception dial values (mirrored from ``agentic.models.STATUS_FILTERS``):
+#: ``"all"`` keeps every life-cycle state, ``"live"`` keeps only fresh /
+#: unmitigated / unbroken levels — the per-family phrase already encoded in
+#: :class:`LevelStatus`.
+FILTER_STATUS_VALUES = ("all", "live")
+
+
+def filter_status(snapshot: "FeedSnapshot", status_filter: str) -> "FeedSnapshot":
+    """A snapshot limited to the requested life-cycle states (post-parse, pure).
+
+    ``"live"`` drops dead levels *before* the renderer's ray budget is spent, so
+    a busy family's history never crowds out its fresh signal. Applied with
+    ``dataclasses.replace`` — the parse itself stays untouched, and
+    ``current_price``/``atr`` ride along unchanged. The watchdog deliberately
+    does NOT use this: subscription evaluation needs state history for edge
+    triggers.
+    """
+    value = str(status_filter or "all").lower()
+    if value == "all":
+        return snapshot
+    if value != "live":
+        raise ValueError("status_filter must be 'all' or 'live'")
+    return replace(
+        snapshot,
+        levels=[rec for rec in snapshot.levels if rec.status is LevelStatus.LIVE],
+    )
+
+
 def parse_payload(
     payload: Mapping[str, Any],
     *,
@@ -509,6 +537,7 @@ class Feed:
         families: Optional[Sequence[str]] = None,
         bars: int = 300,
         offset: int = 0,
+        status_filter: str = "all",
         **provider_kwargs: Any,
     ) -> FeedSnapshot:
         tf = validate_timeframe(str(timeframe))
@@ -522,7 +551,8 @@ class Feed:
         )
         if not isinstance(payload, Mapping):
             raise TypeError(f"provider returned {type(payload).__name__}, expected a mapping")
-        return parse_payload(payload, symbol=symbol, timeframe=tf)
+        snapshot = parse_payload(payload, symbol=symbol, timeframe=tf)
+        return filter_status(snapshot, status_filter)
 
     def snapshots(
         self,
