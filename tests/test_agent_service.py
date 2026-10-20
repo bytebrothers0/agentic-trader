@@ -40,8 +40,10 @@ from agent_service import (  # noqa: E402
     make_transport,
 )
 from agentic.agent_loop import MAX_TOOL_ROUNDS, AgentLoop  # noqa: E402
+from agentic.agent_loop import AgentReply, ScriptedAgent  # noqa: E402
 from agentic.models import SubscriptionKind, SubscriptionState, Trigger  # noqa: E402
 from agentic.store import ContextStore  # noqa: E402
+from agentic.strategy import StrategyError  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +92,78 @@ def _watchdog_threads(symbol: str):
     """Every live watchdog thread for ``symbol`` (its name is unique per symbol)."""
     name = f"agent-watchdog-{symbol}"
     return [t for t in threading.enumerate() if t.name == name]
+
+
+# --------------------------------------------------------------------------- #
+# The strategy file
+# --------------------------------------------------------------------------- #
+
+def test_the_service_loads_the_configured_strategy(tmp_path):
+    """AgentConfig(points at an md) -> the service carries its text and name."""
+    dir_ = tmp_path / "strategies"
+    dir_.mkdir()
+    (dir_ / "s1.md").write_text("STRAT-ONE: buy everything.", encoding="utf-8")
+
+    service = AgentService(
+        _config(tmp_path, strategy_dir=str(dir_), strategy_name="s1"),
+        renderer=FakeRenderer(out_dir=str(tmp_path / "renders"), clock=FakeClock(at(6, 0))),
+        clock=FakeClock(at(6, 0)),
+    )
+
+    assert service._strategy.text == "STRAT-ONE: buy everything."
+    assert service.status()["strategy_name"] == "s1"
+
+
+def test_a_bad_strategy_refuses_the_service(tmp_path):
+    dir_ = tmp_path / "strategies"
+    dir_.mkdir()
+
+    with pytest.raises(StrategyError):
+        AgentService(
+            _config(tmp_path, strategy_dir=str(dir_), strategy_name="missing"),
+            renderer=FakeRenderer(out_dir=str(tmp_path / "renders"), clock=FakeClock(at(6, 0))),
+            clock=FakeClock(at(6, 0)),
+        )
+
+
+def test_blank_strategy_fields_fall_back_to_settings():
+    """Repository defaults: config.settings.STRATEGY_* names the shipped CRT md.
+
+    Resolved lazily inside ``resolve_strategy`` — building a config never has to
+    import config.settings.
+    """
+    directory, name = AgentConfig().resolve_strategy()
+
+    assert name == "default"
+    # The directory must actually hold the default file (loaded successfully below).
+    from agentic.strategy import load_strategy
+    loaded = load_strategy(directory, name)
+    assert "CRT" in loaded.text
+
+
+def test_the_strategy_reaches_the_loop_s_prompt(tmp_path):
+    """strategies/*.md -> config -> service -> AgentLoop().run_turn's prompt."""
+    dir_ = tmp_path / "strategies"
+    dir_.mkdir()
+    (dir_ / "mine.md").write_text("STRAT-MINE: scalp the dragon.", encoding="utf-8")
+
+    clock = FakeClock(at(6, 0))
+    stub = FeedStub(price=4155.0, atr=5.0)
+    stub.set_candles(bars_rows(), timeframe="M15")
+    agent = ScriptedAgent([AgentReply()])
+    service = AgentService(
+        _config(tmp_path, strategy_dir=str(dir_), strategy_name="mine"),
+        feed=stub.build(),
+        renderer=FakeRenderer(out_dir=str(tmp_path / "renders"), clock=clock),
+        client=agent,
+        clock=clock,
+    )
+    service.enable()
+    outcome = service.run_now("what is the read")
+
+    assert outcome.ok is True
+    assert "STRAT-MINE: scalp the dragon." in agent.requests[0].system_prompt
+    assert "PROPOSE-ONLY" in agent.requests[0].system_prompt
 
 
 # --------------------------------------------------------------------------- #
@@ -956,7 +1030,7 @@ def test_the_shipped_output_cap_leaves_room_for_a_reasoning_runaway():
 def test_the_shipped_view_default_is_a_screenshot_within_the_store_cap():
     """The boot view's bar count must fit inside the store's view bounds.
 
-    The operator's spec: the default screenshot is 50 candles, 100 is the hard
+    The operator's spec: the default screenshot is 180 candles, 180 is the hard
     ceiling, and history is reached with ``offset`` — never a wider window. If
     the config and the store drift apart (config wider than the cap) the boot
     turn dies on its first ``set_view`` before any render happens.

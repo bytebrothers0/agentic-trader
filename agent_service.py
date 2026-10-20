@@ -55,6 +55,7 @@ from agentic.llm import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, Transport, VisionClie
 from agentic.prompts import subscription_briefing, turn_conclusion
 from agentic.renderer import DEFAULT_RENDER_DIR, Renderer
 from agentic.store import ContextStore, LeashExceeded
+from agentic.strategy import load_strategy
 from agentic.tools import ToolCall
 from agentic.watchdog import Watchdog
 
@@ -98,7 +99,7 @@ class AgentConfig:
 
     symbol: str = "XAUUSDm"
     timeframe: str = "M15"
-    bars: int = 50
+    bars: int = 180
     mode: str = "mock"
     model: str = "gpt-4o-mini"
     api_base: str = "https://api.openai.com/v1"
@@ -117,6 +118,38 @@ class AgentConfig:
     http_user_agent: str = DEFAULT_USER_AGENT
     state_dir: Optional[str] = None
     out_dir: Optional[str] = None
+    # The strategy (see agentic/strategy.py). A blank field defers to
+    # config.settings.STRATEGY_* at resolve time (see `resolve_strategy`), so
+    # building a config never needs to import config.settings.
+    strategy_dir: str = ""
+    strategy_name: str = ""
+
+    def resolve_strategy(self) -> tuple:
+        """The **(directory, name)** the strategy is loaded from.
+
+        An explicit field wins; a blank falls back, lazily, to
+        ``config.settings.STRATEGY_DIR`` / ``STRATEGY_ACTIVE`` (which ship
+        ``strategies`` / ``default``). A repo-relative directory is resolved
+        against the repo root — the settings file's grandparent — so the default
+        not being cwd-dependent is a property of the resolution, not a habit of
+        whoever launched the process.
+        """
+        directory = str(self.strategy_dir or "").strip()
+        name = str(self.strategy_name or "").strip()
+        if (not directory) or (not name):
+            import config.settings as settings
+            from pathlib import Path
+
+            if not name:
+                name = str(settings.STRATEGY_ACTIVE or "").strip() or "default"
+            if not directory:
+                strategy_dir = str(settings.STRATEGY_DIR or "").strip() or "strategies"
+                if not os.path.isabs(strategy_dir):
+                    strategy_dir = str(
+                        Path(settings.__file__).resolve().parent.parent / strategy_dir
+                    )
+                directory = strategy_dir
+        return directory, name
 
 
 # --------------------------------------------------------------------------- #
@@ -483,6 +516,12 @@ class AgentService:
 
         self._store: Optional[ContextStore] = None
         self._watchdog_obj: Optional[Watchdog] = None
+        # The strategy is loaded once, here: a service cannot exist without its
+        # playbook, so a bad file raises *now* (loud) instead of silently running
+        # a contract with no strategy text. The prompt is frozen per boot —
+        # changing STRATEGY_ACTIVE takes effect on the next build.
+        directory, name = config.resolve_strategy()
+        self._strategy = load_strategy(directory, name)
         self._thread: Optional[threading.Thread] = None
         self._thread_stop: Optional[threading.Event] = None
         self._lock = threading.RLock()        # guards the service's own bookkeeping
@@ -547,6 +586,7 @@ class AgentService:
             self._client,
             clock=self._clock,
             watchdog=self._watchdog(),
+            playbook=self._strategy.text,
         )
 
     def _record_failure(self, where: str, exc: BaseException) -> None:
@@ -799,6 +839,7 @@ class AgentService:
             "mode": str(self.config.mode),
             "model": str(self.config.model),
             "symbol": str(self.config.symbol),
+            "strategy_name": str(self._strategy.name),
             "failures": failures,
         }
 
@@ -851,6 +892,7 @@ class AgentService:
             "autostarted": autostarted,
             "mode": str(self.config.mode),
             "model": str(self.config.model),
+            "strategy_name": str(self._strategy.name),
             "running": self.running(),
             "paused": self.paused(),
             "view": store.data.view.to_dict(),

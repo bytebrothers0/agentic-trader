@@ -45,10 +45,15 @@ from config.settings import (
     AGENT_BARS, AGENT_POLL_S, AGENT_API_BASE, AGENT_API_KEY_ENV,
     AGENT_MAX_TOKENS, AGENT_TEMPERATURE, AGENT_HTTP_TIMEOUT_S,
     AGENT_HTTP_USER_AGENT, AGENT_STATE_DIR, AGENT_RENDER_DIR,
+    STRATEGY_DIR, STRATEGY_ACTIVE,
 )
 from agent_service import AgentConfig, AgentService
 from agentic.llm import DEFAULT_MODEL as AGENT_DEFAULT_MODEL
-from agentic.store import MAX_BARS, MAX_OFFSET, MIN_BARS
+from agentic.store import MAX_OFFSET, MIN_BARS
+
+# The vision agent's screenshot limit is deliberately small, but the web chart
+# needs hundreds of bars for its normal timeframe windows.
+MAX_CANDLE_BARS = 2000
 from data.mt5_loader import InsufficientHistory, MT5DataLoader
 from indicators.ts_detector import TSDetector
 from indicators.crt_detector import CRTDetector
@@ -222,6 +227,8 @@ def get_agent_service() -> AgentService:
                     http_user_agent=AGENT_HTTP_USER_AGENT,
                     state_dir=(AGENT_STATE_DIR or None),
                     out_dir=(AGENT_RENDER_DIR or None),
+                    strategy_dir=STRATEGY_DIR,
+                    strategy_name=STRATEGY_ACTIVE,
                 )
                 _agent_service = AgentService(config)
     return _agent_service
@@ -267,7 +274,7 @@ def get_symbols():
 def get_candles(
     symbol: str = Query("XAUUSD"),
     timeframe: str = Query("D1"),
-    bars: int = Query(300, ge=MIN_BARS, le=MAX_BARS),
+    bars: int = Query(300, ge=MIN_BARS, le=MAX_CANDLE_BARS),
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ):
     """
@@ -312,7 +319,7 @@ def get_candles(
 def get_indicators(
     symbol: str = Query("XAUUSD"),
     timeframe: str = Query("D1"),
-    bars: int = Query(300, ge=MIN_BARS, le=MAX_BARS),
+    bars: int = Query(300, ge=MIN_BARS, le=MAX_CANDLE_BARS),
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
     show_sr: bool = Query(True),
     freshness_filter: str = Query("all"),  # 'all', 'fresh_only', 'unfresh_only'
@@ -832,28 +839,6 @@ def get_indicators(
         # A window the feed does not hold (offset past the oldest bar) is a
         # fixable client error: 422, not the blanket 500.
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/agent/crt")
-def get_agent_crt(
-    symbol: str = Query("XAUUSD"),
-    ltf: str = Query("H1"),
-    bars: int = Query(400, ge=30, le=1500),
-):
-    """Read-only top-down CRT read for the agent.
-
-    HTF bias from D1/W1/MN1 CRT, LTF confirmation, and a propose-only plan.
-    Deliberately read-only: no store mutation, no orders. The agent loop, panel
-    and LLM live in a later phase — this is the perception+policy seam only.
-    """
-    try:
-        from agentic.crt_strategy import analyze
-        from agentic.feed import Feed
-
-        result = analyze(Feed(), symbol, ltf_timeframe=ltf.upper(), bars=bars)
-        return {"ok": True, "analysis": result.to_dict()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
