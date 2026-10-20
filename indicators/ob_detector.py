@@ -13,6 +13,20 @@ ob_detector.py — Order Blocks + Breaker Blocks (web Alchemist math).
     bearish breaker and mirror). Wick dips without close-through only
     mitigate. A close back beyond the near edge removes it.
   Display: last `show_last` zones per side.
+
+  Sweep-family classification (metadata only — never gates existence):
+    TS   "Turtle Soup" origin: a standing range's boundary was wick-swept
+         with the sweeping candle's BODY closing back inside (the TSDetector
+         verdict), and that manipulation candle is one of the zone's forming
+         candles with the swept pool inside the zone band. A TS level whose
+         boundary was body-closed-through BEFORE the zone's birth (state
+         invalidated) does not count — the fakeout had already gone real.
+    FS   "False Sweep" origin: the origin candle's body CLOSED THROUGH the
+         preceding `sweep_window`-bar standing extreme, and a later candle's
+         body reclaimed back inside at or before the birth bar. Both reads
+         use only bars up to `birth` — nothing the market had not yet shown.
+    (OS  wick-grab of the previous bar's extreme remains the base
+         `_has_sweep` validity check; TS/FS layer on top of it.)
 """
 
 from __future__ import annotations
@@ -41,6 +55,9 @@ class OBLevel:
     break_index: Optional[int] = None
     mitigated: bool = False
     ob_type: str = ""              # Luap: "EXTREME" | "DECISIONAL" | ""
+    sweep_class: str = ""          # "" | "TS" (Turtle Soup) | "FS" (False Sweep)
+    sweep_price: Optional[float] = None   # the swept pool / boundary level
+    sweep_variant: str = ""        # TS: detector variant; FS: "body_reclaim"
     forming_candle_indices: List[int] = field(default_factory=list)
 
     @property
@@ -95,14 +112,26 @@ class OBDetector:
     mark_decisional : bool
         Tag zones near same-side IDM as DECISIONAL, else EXTREME.
         Default True (metadata only).
+    classify_sweeps : bool
+        Tag each zone's origin with its sweep family: "TS" (Turtle Soup —
+        wick-swept pool via TSDetector) or "FS" (False Sweep — body close
+        through a standing pool reclaimed by the birth bar). Metadata only.
+        Default True.
+    sweep_window : int
+        Bars before the origin candle that define the "standing pool" a
+        False Sweep body-closes through. Default 10.
     """
 
     def __init__(self, df: pd.DataFrame, swing_length: int = 10,
                  use_body: bool = False, show_last: int = 3,
                  require_fvg: bool = False, require_sweep: bool = True,
                  displacement_mult: float = 1.5,
-                 mark_decisional: bool = True):
+                 mark_decisional: bool = True,
+                 classify_sweeps: bool = True,
+                 sweep_window: int = 10):
         self._validate(df)
+        if sweep_window < 1:
+            raise ValueError("sweep_window must be >= 1")
         self.df = df.copy()
         self.swing_length = swing_length
         self.use_body = use_body
@@ -111,6 +140,8 @@ class OBDetector:
         self.require_sweep = require_sweep
         self.displacement_mult = displacement_mult
         self.mark_decisional = mark_decisional
+        self.classify_sweeps = classify_sweeps
+        self.sweep_window = sweep_window
         self._levels: List[OBLevel] = []
         rng = (self.df["high"] - self.df["low"]).astype(float)
         self._med_range = rng.rolling(20, min_periods=1).median().tolist()
@@ -208,6 +239,8 @@ class OBDetector:
             bear = [z for z in bear if not z.get("dead")]
 
         self._mark_types(bull, bear)
+        if self.classify_sweeps and (bull or bear):
+            self._classify_sweep_families(bull, bear)
         for z in bull[-self.show_last:]:
             self._levels.append(OBLevel(
                 direction=(OBDirection.BEARISH if z["breaker"] else OBDirection.BULLISH),
@@ -215,6 +248,9 @@ class OBDetector:
                 candle_time=times[z["birth"]], birth_index=z["birth"],
                 is_breaker=z["breaker"], break_index=z["break_loc"],
                 mitigated=z["mitigated"], ob_type=z.get("ob_type", ""),
+                sweep_class=z.get("sweep_class", ""),
+                sweep_price=z.get("sweep_price"),
+                sweep_variant=z.get("sweep_variant", ""),
                 forming_candle_indices=[z["loc"], z["birth"]],
             ))
         for z in bear[-self.show_last:]:
@@ -224,6 +260,9 @@ class OBDetector:
                 candle_time=times[z["birth"]], birth_index=z["birth"],
                 is_breaker=z["breaker"], break_index=z["break_loc"],
                 mitigated=z["mitigated"], ob_type=z.get("ob_type", ""),
+                sweep_class=z.get("sweep_class", ""),
+                sweep_price=z.get("sweep_price"),
+                sweep_variant=z.get("sweep_variant", ""),
                 forming_candle_indices=[z["loc"], z["birth"]],
             ))
         self._levels.sort(key=lambda lv: lv.birth_index)
@@ -313,6 +352,108 @@ class OBDetector:
             if zbtm <= z.top and z.bottom <= ztop:
                 return True
         return False
+
+    def _classify_sweep_families(self, bull: list, bear: list) -> None:
+        """Tag each zone's origin with its sweep family (metadata only).
+
+        TS — bridged from TSDetector: a standing range whose boundary was
+             wick-swept with the sweeping candle's BODY back inside, and
+             whose manipulation candle is one of the zone's forming candles
+             with the swept pool inside the zone band. A TS level whose
+             boundary was body-closed-through before the zone's birth (state
+             invalidated) does not count — the fakeout had gone real.
+        FS — local: the origin candle's body CLOSED THROUGH the standing
+             extreme of the `sweep_window` bars before it, and a later
+             candle's body reclaimed back inside at or before the birth bar.
+        TS wins when both shapes exist. Every read uses bars <= birth —
+        nothing the market had not yet shown when the zone was born.
+        """
+        try:
+            from indicators.ts_detector import TSDetector
+            ts_events = TSDetector(self.df).detect_all()
+        except Exception:
+            ts_events = []
+        for z in bull:
+            self._tag_sweep(z, bullish=True, ts_events=ts_events)
+        for z in bear:
+            self._tag_sweep(z, bullish=False, ts_events=ts_events)
+
+    def _tag_sweep(self, z: dict, bullish: bool, ts_events: list) -> None:
+        hit = self._ts_origin(z["loc"], z["birth"], bullish, ts_events,
+                              float(z["top"]), float(z["btm"]))
+        if hit:
+            z["sweep_class"], z["sweep_price"], z["sweep_variant"] = (
+                "TS", hit[0], hit[1])
+            return
+        fs = self._false_sweep(z["loc"], z["birth"], bullish)
+        if fs is not None:
+            z["sweep_class"], z["sweep_price"], z["sweep_variant"] = (
+                "FS", fs, "body_reclaim")
+
+    def _ts_origin(self, loc: int, birth: int, bullish: bool,
+                   ts_events, ztop: float, zbtm: float):
+        """A direction-matched TS level shaping the zone's origin.
+
+        Direction: a bullish zone is born from a swept LOW (TS_LOW); a
+        bearish one from a swept HIGH (TS_HIGH). The manipulation candle
+        must lie within the zone's forming window [loc, birth], the swept
+        boundary must sit inside the zone band (zbtm < boundary < ztop in
+        the textbook shape — the wick tip under, the body over), and no
+        later body-close-through may have killed the level before birth.
+        Earliest matching event wins. Returns (price, variant) or None.
+        """
+        if not ts_events:
+            return None
+        from indicators.ts_detector import TSType
+        want = TSType.TS_LOW if bullish else TSType.TS_HIGH
+        best = None
+        for t in ts_events:
+            if t.ts_type is not want:
+                continue
+            if not (loc <= t.candle_index <= birth):
+                continue
+            if not (zbtm <= t.price <= ztop):
+                continue
+            if (t.invalidated_candle_index is not None
+                    and t.invalidated_candle_index < birth):
+                continue
+            if best is None or t.candle_index < best.candle_index:
+                best = t
+        if best is None:
+            return None
+        return (float(best.price), best.variant.value)
+
+    def _false_sweep(self, loc: int, birth: int, bullish: bool):
+        """False-sweep origin: the origin candle's body closed through the
+        standing extreme of the bars before it (a 'breakout' body), then a
+        candle by the birth bar reclaimed with its body back inside.
+        Returns the swept pool level, or None. The standing level comes
+        strictly from bars before the origin candle, and the reclaim from
+        bars at/before birth — no look-ahead."""
+        o = self.df["open"].values
+        h = self.df["high"].values
+        l = self.df["low"].values
+        c = self.df["close"].values
+        if loc <= 0:
+            return None
+        start = max(0, loc - self.sweep_window)
+        if start == loc:
+            return None
+        if bullish:
+            standing = float(min(l[start:loc]))
+            if not (min(o[loc], c[loc]) < standing):
+                return None
+            for k in range(loc + 1, birth + 1):
+                if min(o[k], c[k]) > standing:
+                    return standing
+            return None
+        standing = float(max(h[start:loc]))
+        if not (max(o[loc], c[loc]) > standing):
+            return None
+        for k in range(loc + 1, birth + 1):
+            if max(o[k], c[k]) < standing:
+                return standing
+        return None
 
     def _mark_types(self, bull: list, bear: list) -> None:
         """Luap decision point: zones near same-side IDM liquidity are

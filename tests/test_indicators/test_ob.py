@@ -188,3 +188,131 @@ def test_decisional_marking_near_idm(monkeypatch):
                                 show_last=10).detect_all()
           if x.direction == OBDirection.BULLISH]
     assert len(lv) == 1 and lv[0].ob_type == "EXTREME"
+
+
+# ------------------------------------------------------------------
+# Sweep-family classification: TS (Turtle Soup) and FS (False Sweep).
+# ------------------------------------------------------------------
+
+def _mirror(rows):
+    """Exact bearish mirror of a synthetic fixture. Negating open/close
+    flips every candle's colour (so 'last opposite-colour candle' picks
+    the mirrored origin), and swapping+negating high/low keeps the wicks
+    outside the body. Guarantees the detector's symmetric branches see
+    the mirrored shape instead of hand-transcribed approximations."""
+    return [{"open": 200 - x["open"], "close": 200 - x["close"],
+             "high": 200 - x["low"], "low": 200 - x["high"]}
+            for x in rows]
+
+
+def test_ts_origin_from_turtle_soup_wick_sweep():
+    # SWEEP_FVG_BASE: the origin candle (idx 2) wick-sweeps the standing
+    # low at 98 (anchor idx 1, body back above) — the TSDetector verdict
+    # — then displaces up. The zone carries the TS family with the swept
+    # pool as metadata.
+    lv = [x for x in OBDetector(_df(SWEEP_FVG_BASE), swing_length=2,
+                                show_last=10).detect_all()
+          if x.direction == OBDirection.BULLISH]
+    assert len(lv) == 1
+    assert lv[0].sweep_class == "TS"
+    assert lv[0].sweep_price == 98.0
+    assert lv[0].sweep_variant in ("classic", "two_candle")
+
+
+# Standing pool 98.2 = bar 1's low. Origin (bar 4, bearish) body-closes
+# below it (body min 98.1), and bar 5's body reclaims (body min 98.3)
+# by the birth bar (bar 6 closes above the swing high 100.5). The
+# displacement also births a mid-leg zone that flips to a breaker on
+# bar 6 — filtered in these tests.
+FS_BULL_BASE = [
+    {"open": 100.0, "high": 101.0, "low": 99.0, "close": 99.6},
+    {"open": 99.6, "high": 99.8, "low": 98.2, "close": 98.6},
+    {"open": 98.6, "high": 99.4, "low": 98.4, "close": 99.2},
+    {"open": 99.2, "high": 100.5, "low": 99.0, "close": 100.2},
+    {"open": 100.0, "high": 100.3, "low": 98.0, "close": 98.1},
+    {"open": 98.3, "high": 100.0, "low": 98.25, "close": 99.8},
+    {"open": 99.8, "high": 101.4, "low": 99.7, "close": 101.2},
+]
+
+
+def test_fs_origin_from_body_close_through_then_reclaim():
+    lv = [x for x in _bull(_df(FS_BULL_BASE)) if not x.is_breaker]
+    assert len(lv) == 1
+    assert lv[0].formation_index == 4
+    assert lv[0].sweep_class == "FS"
+    assert lv[0].sweep_price == 98.2
+    assert lv[0].sweep_variant == "body_reclaim"
+
+
+def test_fs_origin_mirrored_bearish():
+    lv = [x for x in _bear(_df(_mirror(FS_BULL_BASE)))
+          if not x.is_breaker]
+    assert len(lv) == 1
+    assert lv[0].formation_index == 4
+    assert lv[0].sweep_class == "FS"
+    assert round(lv[0].sweep_price, 4) == 101.8
+
+
+def test_fs_needs_the_body_reclaim_by_birth():
+    # Same shape, but the pool is never body-reclaimed by the birth bar:
+    # bar 5 stays under (body max 99.2 with its open 98.15 below the
+    # pool), and the birth bar (bar 6) STRADDLES the pool (open 98.0,
+    # close 101.2) — the market never showed a closed-back body, so the
+    # false-sweep credit is withheld (TS discipline: straddles don't
+    # count). Untagged.
+    df = _df([
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 99.6},
+        {"open": 99.6, "high": 99.8, "low": 98.2, "close": 98.6},
+        {"open": 98.6, "high": 99.4, "low": 98.4, "close": 99.2},
+        {"open": 99.2, "high": 100.5, "low": 99.0, "close": 100.2},
+        {"open": 100.0, "high": 100.3, "low": 98.0, "close": 98.1},
+        {"open": 98.15, "high": 100.0, "low": 98.0, "close": 99.2},
+        {"open": 98.0, "high": 101.5, "low": 97.9, "close": 101.2},
+    ])
+    lv_bull = [x for x in _bull(df) if not x.is_breaker]
+    assert len(lv_bull) == 1
+    assert lv_bull[0].formation_index == 4
+    assert lv_bull[0].sweep_class == ""
+
+
+def test_plain_grab_origin_gets_no_family():
+    # BULL_BASE: a clean displacement OB with no TS event and no body
+    # through any standing pool — untagged, classification adds nothing.
+    lv = _bull(_df(BULL_BASE))
+    assert len(lv) == 1
+    assert lv[0].sweep_class == ""
+    assert lv[0].sweep_price is None
+
+
+def test_classify_sweeps_can_be_turned_off():
+    lv = [x for x in OBDetector(_df(SWEEP_FVG_BASE), swing_length=2,
+                                show_last=10,
+                                classify_sweeps=False).detect_all()
+          if x.direction == OBDirection.BULLISH]
+    assert len(lv) == 1
+    assert lv[0].sweep_class == ""
+
+
+def test_invalidated_ts_before_birth_does_not_count(monkeypatch):
+    # A direction-matched TS event exists on the zone's forming window,
+    # but its boundary was body-closed-through BEFORE the zone's birth
+    # (real breakout in between) -> no TS tag. The local FS check also
+    # fails: the origin body stayed inside its pool.
+    import indicators.ts_detector as ts_mod
+    from indicators.ts_detector import TSDirection, TSType, TSLevel, TSVariant
+    fake = TSLevel(
+        ts_type=TSType.TS_LOW,
+        direction=TSDirection.BULLISH,
+        price=98.0,
+        candle_index=3,               # within [origin 2, birth 3]
+        candle_time=pd.Timestamp("2024-01-04"),
+        variant=TSVariant.CLASSIC,
+        invalidated_candle_index=2,   # settled dead before birth
+    )
+    monkeypatch.setattr(ts_mod.TSDetector, "detect_all",
+                        lambda self: [fake])
+    lv = [x for x in OBDetector(_df(SWEEP_FVG_BASE), swing_length=2,
+                                show_last=10).detect_all()
+          if x.direction == OBDirection.BULLISH]
+    assert len(lv) == 1
+    assert lv[0].sweep_class == ""

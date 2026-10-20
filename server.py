@@ -399,14 +399,28 @@ def get_indicators(
             i = min(max(int(candle_idx), 0), len(times_unix) - 1)
             return int(times_unix[i])
 
+        def _sweep_desc(ob) -> str:
+            """Sweep-family tag: " (TS/classic)" / " (FS)" — the family
+            and (for TS) the detector variant ride in the level desc so
+            the agent can grade OB confluence without a second lookup."""
+            if not ob.sweep_class:
+                return ""
+            tag = ob.sweep_class
+            if ob.sweep_variant:
+                tag += f"/{ob.sweep_variant}"
+            if ob.sweep_price is not None:
+                tag += f" @{ob.sweep_price:.3f}"
+            return f" ({tag})"
+
         # 1. Base S/R, SBR, RBS (enabled via SR_ENABLED for the new strategy)
         if sr_on:
             analyzer = CandleAnalyzer(df)
             base_levels = analyzer.detect_all()
             tracker = FreshnessTracker(df)
             base_levels = tracker.update(base_levels)
+            renderable = sr_render_levels(base_levels)
 
-            for lvl in base_levels:
+            for lvl in renderable:
                 # Apply freshness filter
                 if freshness_filter == "fresh_only" and lvl.state != LevelState.FRESH:
                     continue
@@ -778,7 +792,8 @@ def get_indicators(
                     "box_top": round(ob.top, 3),
                     "box_bottom": round(ob.bottom, 3),
                     "desc": (f"{ob.kind}: {ob.direction.value.upper()}"
-                             + (f" [{ob.ob_type}]" if ob.ob_type else ""))
+                             + (f" [{ob.ob_type}]" if ob.ob_type else "")
+                             + _sweep_desc(ob))
                 }
                 if ob.is_breaker and ob.break_index is not None:
                     payload["break_time"] = int(times_unix[min(ob.break_index, last_idx)])
