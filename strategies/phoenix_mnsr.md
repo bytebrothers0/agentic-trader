@@ -22,6 +22,34 @@
 > is fragile: when in doubt, watch instead of act — a passing trade is worth
 > more than a chased one.
 
+## Perception: your eyes outrank the tags
+
+The indicator overlays on your chart are *suggestions from code*, not truth.
+They can be wrong, stale, or deviated — tuned for a context that no longer
+holds, or simply misplacing a level by a few points. **That is exactly why you
+were given vision**: when a tag says one thing and the candles plainly say
+another, look at the price action first, then use `level_lookup` to reconcile
+the number. Draw your own trendlines, read your own sweep wick, judge the
+displacement by its candles. The detectors save you scanning time; they do not
+overrule what you can see.
+
+**Labels are descriptions, not truth.** The chart tags structure events with
+different names — `BOS`, `IBOS`, `CHoCH`, `ICoCH` — but context, not the label,
+decides what a break is:
+
+- **Every CHoCH is a CHoCH.** Internal or external, the tag `ichoch` and the
+  tag `choch` describe the same event — a close against the prevailing
+  structure. Treat them identically.
+- **Every BOS is a BOS.** `ibos` vs `bos` is scope (internal vs external
+  swing), not substance — a break is a break; count it for Gate 1 either way.
+- The same applies across families: internal/minor/major are *where* a level
+  lives, not whether it matters. Judge a break by the body that closed through
+  it and where it sits in the phases of this playbook — not by which initials
+  the renderer printed on it.
+
+In short: the chain counts **breaks, sweeps, closes, and locations**. If a tag's
+name makes it sound weaker, that does not make the break smaller.
+
 ## Units
 
 - **1 pip = 0.10** of XAUUSD price. "35 pips" = **3.50** in chart units.
@@ -64,7 +92,6 @@
    distance exceeds **35 pips (3.50)**, **skip the setup** — do not widen the
    stop, do not move the entry; skip. Target stop ≈ 35 pips or less, sized by
    the sweep's wick, not by the entry.
-
 ## Phase 0 — Orient (every fresh turn)
 
 Open the working view before reasoning about anything. **Single pane, the
@@ -246,7 +273,6 @@ propose_trade {
 }
 add_note { "text": "phoenix live: TS 4190.90 · MSS 4185.10 · premium POI 4188.05 ±0.20 · SL 4191.60 (32 pips ≤ 35) · TP first SSL 4178.40" }
 ```
-
 - **SL** ≈ 35 pips budget: just beyond the TS wick tip (the pinned pin), plus a
   small spread buffer. Gate 7 is absolute: > 35 pips → skip.
 - **TP** at the **nearest opposing liquidity pool** (sell setups: the sell-side
@@ -271,3 +297,12 @@ add_note { "text": "phoenix live: TS 4190.90 · MSS 4185.10 · premium POI 4188.
   evidence about the past, not a green light.
 - "No setup" is a valid, honest conclusion — the chain protects you from
   proposing into chaos.
+
+
+## the 4H fvg entry model
+
+when you see  a 4H fvg, mark the premium and discount so that we take entry form them based on the bias, thus we take poi from premium when looking for sells and discount when looking for buys,  inside that 4H fvg drop down from 4H to 2H-1H-45m-30m-15m-5m and 1m (make sure that only the 4H fvg is the one to be drawn on all these fvg, meaning these lower timeframes fvg indicator must be turned off while looking for the classic with ts), in all these timeframes, look for a support or resistance level with ts, and we set a limit from the support or resistance level with the ts, make sure that the s/r level with ts is in the premium of the 4H fvg when looking sells, and discount when looking for buys
+
+
+## the fs orderblock entry model   
+
