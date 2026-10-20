@@ -26,7 +26,7 @@
 
 The indicator overlays on your chart are *suggestions from code*, not truth.
 They can be wrong, stale, or deviated — tuned for a context that no longer
-holds, or simply misplacing a level by a few points. **That is exactly why you
+holds, or simply misplacing a level by a few points and sometimes miss some zones or levels. **That is exactly why you
 were given vision**: when a tag says one thing and the candles plainly say
 another, look at the price action first, then use `level_lookup` to reconcile
 the number. Draw your own trendlines, read your own sweep wick, judge the
@@ -297,11 +297,6 @@ add_note { "text": "phoenix live: TS 4190.90 · MSS 4185.10 · premium POI 4188.
   evidence about the past, not a green light.
 - "No setup" is a valid, honest conclusion — the chain protects you from
   proposing into chaos.
-
-
-## the 4H fvg entry model
-
-when you see  a 4H fvg, mark the premium and discount so that we take entry form them based on the bias, thus we take poi from premium when looking for sells and discount when looking for buys,  inside that 4H fvg drop down from 4H to 2H-1H-45m-30m-15m-5m and 1m (make sure that only the 4H fvg is the one to be drawn on all these fvg, meaning these lower timeframes fvg indicator must be turned off while looking for the classic with ts), in all these timeframes, look for a support or resistance level with ts, and we set a limit from the support or resistance level with the ts, make sure that the s/r level with ts is in the premium of the 4H fvg when looking sells, and discount when looking for buys
 
 
 ## the fs orderblock entry model   
