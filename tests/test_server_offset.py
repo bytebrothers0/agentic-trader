@@ -75,16 +75,15 @@ def test_candles_offset_is_validated(monkeypatch):
     assert fake.calls == []  # refused before the loader is touched
 
 
-def test_candles_bars_bounds_match_the_store_limits(monkeypatch):
-    from agentic.store import MAX_BARS, MIN_BARS
+def test_candles_accept_chart_history_above_agent_window_limit(monkeypatch):
+    from server import MAX_CANDLE_BARS
 
     fake = _FakeLoader()
     client = _client(monkeypatch, fake)
 
-    assert client.get("/api/candles", params={"bars": MIN_BARS}).status_code == 200
-    assert client.get("/api/candles", params={"bars": MAX_BARS}).status_code == 200
-    assert client.get("/api/candles", params={"bars": MIN_BARS - 1}).status_code == 422
-    assert client.get("/api/candles", params={"bars": MAX_BARS + 1}).status_code == 422
+    assert client.get("/api/candles", params={"bars": 300}).status_code == 200
+    assert client.get("/api/candles", params={"bars": MAX_CANDLE_BARS}).status_code == 200
+    assert client.get("/api/candles", params={"bars": MAX_CANDLE_BARS + 1}).status_code == 422
 
 
 class _HistorylessLoader:
@@ -117,7 +116,7 @@ def test_indicators_past_history_is_422_not_500(monkeypatch):
     assert "requested 40 M15" in resp.json()["detail"]
 
 
-def test_import_server_keeps_38_routes():
+def test_import_server_keeps_37_routes():
     import server
 
-    assert len(server.app.routes) == 38
+    assert len(server.app.routes) == 37
