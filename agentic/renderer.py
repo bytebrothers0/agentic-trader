@@ -79,6 +79,14 @@ def _crt_label(level: LevelRecord) -> str:
     """The dashboard's own word for a CRT level: ``CRT`` or ``CRT-IB``."""
     return "CRT-IB" if level.variant == "inside_bar" else "CRT"
 
+
+def _bos_label(level: LevelRecord) -> str:
+    """The dashboard's word for a BOS level — the structural *kind* the feed
+    already parsed into attrs: BOS / I-BOS / CHoCH / I-CHoCH (``kind``, with
+    ``internal`` building the I- prefix)."""
+    kind = str((level.attrs or {}).get("kind", "") or "BOS")
+    return ("I-" + kind) if (level.attrs or {}).get("internal") else kind
+
 # Paper theme: white ground, bullish candles white with black borders, bearish
 # candles black, and black indicator ink. Only zones use fills: pale yellow for
 # order blocks and a very light black tint for FVG/IFVG. Family identity comes
@@ -699,20 +707,29 @@ class Renderer:
     def _span(level: LevelRecord, bars: Bars) -> Tuple[int, int]:
         """The bar-index x-span a level is drawn across — never full-width.
 
-        Most rays use the dashboard's short-ray pose: a dead level ends one step
-        past its life-event bar, capped at ``_SPAN_BARS`` from formation; a live
-        one spans the same cap. BOS reaches its close-through candle. Zone boxes
-        keep their full formation→fill span.
+        Family rules (the operator's 2026-10-20 span rules + dashboard parity):
+        TS and CRT are sweep-event rays — anchor → sweep → +4 bars right (the
+        original three-step pose plus the operator's +3 expansion; for CRT the
+        payload convention is INVERTED: ``time`` is the anchor, ``start_time``
+        the manipulation bar). IDM dead levels draw the full formation →
+        swept/broken bar, uncapped (dashboard parity); fresh ones keep the
+        open span plus the +3 expansion. QM gets the same +3 expansion past
+        its dashboard pose. Trendlines run pivot → end bar exactly — a sloped
+        segment, never capped. BOS reaches its close-through candle; zone
+        boxes keep their full formation→fill span.
         """
         count = max(len(bars.times), 1)
-        start = bars.index_at_or_before(level.formed_at)
-        start = max(start, 0)
+
+        def _idx(when) -> int:
+            return bars.index_at_or_before(when) if when is not None else -1
+
+        start = max(_idx(level.formed_at), 0)
         if level.family in _ZONE_FAMILIES:
             # Zone boxes: formation -> life-cycle end (or a short open span).
             if level.changed_at is not None and level.changed_at > (
                 level.formed_at or _EPOCH
             ):
-                end = bars.index_at_or_before(level.changed_at)
+                end = _idx(level.changed_at)
                 if end < 0:
                     end = min(start + _SPAN_BARS + 1, count - 1)
             else:
@@ -723,29 +740,73 @@ class Renderer:
             # BOS payloads carry the close-through candle in ``end_time``.
             # Draw the structural level from its swing origin all the way to
             # that candle so the break is visually connected to its body.
-            event = bars.index_at_or_before(level.changed_at)
+            event = _idx(level.changed_at)
             end = event if event >= 0 else min(start + _SPAN_BARS, count - 1)
+        elif level.family == "trendline":
+            # A trendline's life IS its sloped segment: pivot bar -> the
+            # detector's end bar, exactly (the dashboard draws the same two
+            # points), never capped at the generic dead-ray length. The end
+            # bar's price rides in ``price_end``.
+            if level.changed_at is not None and level.changed_at > (
+                level.formed_at or _EPOCH
+            ):
+                event = _idx(level.changed_at)
+                if event >= 0:
+                    return start, max(event, min(start + 1, count - 1))
+            end = min(start + 8, count - 1)
         elif level.family == "ts":
-            # The TS event is exactly three steps: the anchor (``start_time``,
-            # the range candle), the sweeping candle (``formed_at``), and one
-            # bar to its right — never to the invalidation bar (dashboard
-            # parity: ``app.js`` draws the same three steps). The payload's
-            # ``time`` is the SWEEP bar for ts, so without the anchor the ray
-            # would start detached from the candle it belongs to.
+            # The TS event: the anchor (``start_time``, the range candle), the
+            # sweeping candle (``formed_at``), one bar right, plus the
+            # operator's +3 expansion to the right — never to the invalidation
+            # bar. NOTE the payload convention is family-INVERTED: TS's
+            # ``time`` is the SWEEP bar, ``start_time`` the anchor.
             anchor_ts = (level.attrs or {}).get("start_time")
-            sweep = bars.index_at_or_before(level.formed_at)
-            anchor = bars.index_at_or_before(anchor_ts) if anchor_ts else sweep
-            anchor = max(anchor, 0)
+            sweep = _idx(level.formed_at)
+            anchor = max(_idx(anchor_ts), 0) if anchor_ts else sweep
             if sweep >= 0 and sweep >= anchor:
-                end = min(sweep + 1, count - 1)
+                base = sweep
             else:
-                end = min(anchor + 1, count - 1)
+                base = anchor
+            end = min(base + 4, count - 1)
             return anchor, max(end, min(anchor + 1, count - 1))
+        elif level.family == "crt":
+            # The CRT sweep-event ray, on the anchor's both boundaries: the
+            # payload's ``time`` is the ANCHOR (where the level was formed)
+            # and ``start_time`` is the manipulation (sweep) bar — the
+            # inversion of the TS convention.
+            sweep_ts = (level.attrs or {}).get("start_time")
+            sweep = _idx(sweep_ts) if sweep_ts else -1
+            base = sweep if sweep >= 0 else start
+            end = min(base + 4, count - 1)
+            return start, max(end, min(start + 1, count - 1))
+        elif level.family == "idm":
+            # Dashboard parity: a swept/broken IDM draws formation -> its
+            # sweep/break bar, uncapped. A fresh (unswept) IDM keeps the
+            # default open span, plus the operator's +3 expansion.
+            if level.changed_at is not None and level.changed_at > (
+                level.formed_at or _EPOCH
+            ):
+                event = _idx(level.changed_at)
+                if event >= 0:
+                    return start, min(event, count - 1)
+            end = min(start + _SPAN_BARS + 3, count - 1)
+        elif level.family == "qm":
+            # QM: the same +3 expansion past its dashboard pose. Dead:
+            # one step past the event bar, then +3. Live: the default open
+            # span, then +3.
+            if level.changed_at is not None and level.changed_at > (
+                level.formed_at or _EPOCH
+            ):
+                event = _idx(level.changed_at)
+                end = (min(event + 4, count - 1) if event >= 0
+                       else min(start + _SPAN_BARS + 3, count - 1))
+            else:
+                end = min(start + _SPAN_BARS + 3, count - 1)
         elif level.changed_at is not None and level.changed_at > (
             level.formed_at or _EPOCH
         ):
             # Dead: one step past the event bar, never more than the cap.
-            event = bars.index_at_or_before(level.changed_at)
+            event = _idx(level.changed_at)
             end = min(event + 1, count - 1) if event >= 0 else start + _SPAN_BARS
             end = min(end, start + _SPAN_BARS, count - 1)
         else:
@@ -792,17 +853,16 @@ class Renderer:
         """The drawn price range: candle extremes, level prices, and zone bands.
 
         Level *rays* extend the range (the dashboard's autoscale includes every
-        price series a ray is drawn at), and band extents only for the
-        **zone** families actually painted as boxes — a ``crt`` or ``qm`` range
-        is information the ray does not show, and including it here used to zoom
-        the whole chart out to fit rectangles that were never drawn.
+        price series a ray is drawn at), and band extents for the zone families
+        painted as boxes **and for CRT — both range boundaries are now drawn**.
+        QM's untainted range stays information-only.
         """
         lows: List[float] = [float(v) for v in bars.low]
         highs: List[float] = [float(v) for v in bars.high]
         for level in levels:
             lows.append(float(level.price))
             highs.append(float(level.price))
-            if level.family in _ZONE_FAMILIES:
+            if level.family in _ZONE_FAMILIES or level.family == "crt":
                 band = level.band()
                 if band is not None:
                     lows.append(min(float(band[0]), float(band[1])))
@@ -931,6 +991,10 @@ class Renderer:
                 # every line. The manifest tag stays unique and lives in the
                 # entry's ``label`` bridge for the closing digest.
                 text = _crt_label(level) + ("*" if pinned else "")
+            elif level.family == "bos":
+                # Same word-not-ordinal parity: BOS / I-BOS / CHoCH / I-CHoCH,
+                # the structural *name* the payload carries.
+                text = _bos_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
             # Family and status use luminance rather than competing hues.
             color = _bright(color)
@@ -938,7 +1002,20 @@ class Renderer:
             price = float(level.price)
             is_zone = level.family in _ZONE_FAMILIES
             band = level.band() if is_zone else None
-            if band is not None:
+            if level.family == "trendline":
+                # A trendline is a SLOPED segment: pivot price at the pivot
+                # bar to ``price_end`` at the end bar. The old generic ray
+                # drew it as a horizontal stub — the line vanished and only
+                # the tag stayed visible.
+                end_price = float((level.attrs or {}).get("price_end", price))
+                ax.plot(
+                    [x0, x1], [price, end_price],
+                    color=color, alpha=alpha,
+                    linewidth=self._line_width(_LEVEL_LINEWIDTH),
+                    linestyle=_LEVEL_STYLE, zorder=3,
+                )
+                label_price = (price + end_price) / 2.0
+            elif band is not None:
                 lo, hi = sorted(float(v) for v in band)
                 fill, fill_alpha, edge, edge_alpha = self._zone_style(level.family)
                 ax.fill_between(
@@ -967,6 +1044,23 @@ class Renderer:
                     linestyle=_LEVEL_STYLE, zorder=3,
                 )
                 label_price = price
+            if level.family == "crt":
+                # The anchor range has TWO boundaries — the level price is the
+                # swept one. Draw the other (the range high or low it did not
+                # sweep) on the same span, faded, so the agent sees the full
+                # CRT range and both the boundary and its target.
+                crt_band = level.band()
+                if crt_band is not None:
+                    edges = sorted(float(v) for v in crt_band)
+                    opposite = (edges[1] if abs(price - edges[1]) > abs(price - edges[0])
+                                else edges[0])
+                    if abs(opposite - price) > 1e-9:
+                        ax.plot(
+                            [x0, x1], [opposite, opposite],
+                            color=color, alpha=alpha * 0.45,
+                            linewidth=self._line_width(_LEVEL_LINEWIDTH),
+                            linestyle=_LEVEL_STYLE, zorder=3,
+                        )
             if pinned:
                 # A pin must survive every status fade — it is the agent's own marker.
                 color, alpha = _PINNED, 1.0

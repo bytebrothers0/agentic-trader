@@ -949,8 +949,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Broken levels are history: thin gray dotted, no emphasis.
       // A CRT whose body closed through the swept boundary is the same story:
-      // the sweep was a real break, so the setup is void.
-      if (lvl.end_kind === "broken" || lvl.end_kind === "invalidated") {
+      // the sweep was a real break, so the setup is void. Mitigated FVG/IFVG
+      // zones (emitted as history since 2026-10-20) draw the same way.
+      if (lvl.end_kind === "broken" || lvl.end_kind === "invalidated"
+          || (lvl.end_kind === "mitigated"
+              && (lvl.category === "fvg" || lvl.category === "ifvg" || lvl.category === "ob"))) {
         color = "#5a6b7a";
         lineStyle = LightweightCharts.LineStyle.Dotted;
         lineWidth = 1;

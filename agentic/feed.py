@@ -132,6 +132,9 @@ _ATTR_KEYS: tuple = (
     "inside_bars",
     "start_time",
     "sweep_amount",
+    # Trendline slope truth: the segment's end-bar price, so the renderer can
+    # draw the pivoted sloped line instead of a horizontal stub.
+    "price_end",
     "range_high",
     "range_low",
     "target",

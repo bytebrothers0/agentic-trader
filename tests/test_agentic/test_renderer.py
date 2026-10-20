@@ -29,7 +29,14 @@ from _fixtures import (
     ts,
 )
 from agentic.feed import KNOWN_FAMILIES, Bars
-from agentic.renderer import FAMILY_INITIALS, Pane, RenderResult, Renderer, TagEntry
+from agentic.renderer import (
+    FAMILY_INITIALS,
+    Pane,
+    RenderResult,
+    Renderer,
+    TagEntry,
+    _bos_label,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -689,8 +696,9 @@ def test_a_pinned_level_is_never_hidden(tmp_path):
 
 def test_ts_ray_starts_at_the_anchor_and_never_reaches_the_break():
     """The ts payload's ``time`` is the sweep bar and ``start_time`` the anchor;
-    the agent's PNG must draw anchor -> sweep -> one bar right — NOT from the
-    sweep bar, and never out to the invalidation bar (dashboard parity)."""
+    the agent's PNG must draw anchor -> sweep -> one bar right, PLUS the
+    operator's +3 expansion — NOT from the sweep bar, and never out to the
+    invalidation bar."""
     start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
     anchor = ts(start + timedelta(minutes=15 * 5))
     sweep = ts(start + timedelta(minutes=15 * 7))
@@ -707,13 +715,13 @@ def test_ts_ray_starts_at_the_anchor_and_never_reaches_the_break():
     ray_start, ray_end = Renderer._span(record, bars)
 
     assert ray_start == 5                          # the anchor candle
-    assert ray_end == 8                            # sweep (idx 7) + one bar
+    assert ray_end == 11                           # sweep (idx 7) + 1 + the +3 expansion
     assert ray_end < bars.index_at_or_before(far_break)   # never the break
 
 
 def test_ts_ray_survives_an_anchor_that_fell_off_the_window():
     """An anchor older than the visible window degrades to the window's left
-    edge; the sweep segment still draws to sweep + one bar."""
+    edge; the sweep segment still draws to sweep + four bars."""
     start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
     ghost_anchor = ts(start - timedelta(minutes=15 * 10))   # before the window
     sweep = ts(start + timedelta(minutes=15 * 4))
@@ -726,7 +734,87 @@ def test_ts_ray_survives_an_anchor_that_fell_off_the_window():
     ray_start, ray_end = Renderer._span(record, bars)
 
     assert ray_start == 0                          # clamped to the left edge
-    assert ray_end == bars.index_at_or_before(sweep) + 1
+    assert ray_end == bars.index_at_or_before(sweep) + 4   # the +3 expansion included
+
+
+# --------------------------------------------------------------------------- #
+# The 2026-10-20 span & naming rules: CRT's both boundaries + the event +3,
+# IDM's full life, QM's +3, the trendline's sloped truth, BOS's real names
+# --------------------------------------------------------------------------- #
+
+def test_crt_ray_spans_anchor_to_sweep_plus_four_and_shows_both_boundaries():
+    # CRT payload convention is family-INVERTED: ``time`` is the anchor (where
+    # the level was formed) and ``start_time`` is the manipulation bar.
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    anchor_at = ts(start + timedelta(minutes=15 * 5))
+    sweep_at = ts(start + timedelta(minutes=15 * 7))
+    record = _snapshot([
+        _level("crt", type="BEARISH (INSIDE_BAR)", price=105.0,
+               time=anchor_at, start_time=sweep_at,
+               range_high=105.0, range_low=99.0),
+    ]).levels[0]
+    bars = _series(bars_rows(40, start=ts(start)))
+    ray_start, ray_end = Renderer._span(record, bars)
+
+    assert ray_start == 5                          # the anchor candle
+    assert ray_end == 11                           # sweep (idx 7) + 4
+    lo, hi = Renderer._price_range(bars, [record])
+    assert lo <= 99.0 and hi >= 105.0              # both boundaries autoscale
+
+
+def test_idm_draws_its_full_life_and_fresh_ids_get_the_plus3():
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    formed = ts(start + timedelta(minutes=15 * 5))
+    swept = ts(start + timedelta(minutes=15 * 20))
+    bars = _series(bars_rows(40, start=ts(start)))
+
+    dead = _snapshot([_level("idm", type="IDM (BULLISH)", price=100.0,
+                             time=formed, end_time=swept, end_kind="swept")]).levels[0]
+    assert Renderer._span(dead, bars) == (5, 20)   # formation -> the sweep bar
+
+    fresh = _snapshot([_level("idm", type="IDM (BULLISH)", price=101.0,
+                              time=formed, end_kind="active")]).levels[0]
+    assert Renderer._span(fresh, bars) == (5, 11)  # default span (3) + the +3
+
+
+def test_qm_rays_get_the_plus3_expansion():
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    formed = ts(start + timedelta(minutes=15 * 5))
+    broke = ts(start + timedelta(minutes=15 * 20))
+    bars = _series(bars_rows(40, start=ts(start)))
+
+    dead = _snapshot([_level("qm", type="QM (BULLISH)", price=100.0,
+                             time=formed, end_time=broke, end_kind="mitigated")]).levels[0]
+    assert Renderer._span(dead, bars) == (5, 24)   # event bar (20) + 4
+
+    fresh = _snapshot([_level("qm", type="QM (BULLISH)", price=101.0,
+                              time=formed, end_kind="active")]).levels[0]
+    assert Renderer._span(fresh, bars) == (5, 11)  # default span (3) + the +3
+
+
+def test_trendline_runs_pivot_to_end_uncapped_with_its_sloped_price():
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    pivot = ts(start + timedelta(minutes=15 * 5))
+    end_bar = ts(start + timedelta(minutes=15 * 25))
+    record = _snapshot([
+        _level("trendline", type="TL_SUPPORT", price=100.0,
+               time=pivot, end_time=end_bar, end_kind="broken",
+               price_end=95.0),
+    ]).levels[0]
+
+    assert record.attrs["price_end"] == 95.0       # the slope rides the feed
+    bars = _series(bars_rows(40, start=ts(start)))
+    assert Renderer._span(record, bars) == (5, 25) # pivot -> end bar, never capped
+
+
+def test_bos_labels_carry_the_structural_kind_name():
+    bos = _snapshot([_level("bos", type="BOS (BULLISH)", price=100.0)]).levels[0]
+    ichoch = _snapshot([_level("bos", type="I-CHOCH (BEARISH)", price=100.0)]).levels[0]
+    ibos = _snapshot([_level("bos", type="I-BOS (BULLISH)", price=100.0)]).levels[0]
+
+    assert _bos_label(bos) == "BOS"
+    assert _bos_label(ibos) == "I-BOS"
+    assert _bos_label(ichoch) == "I-CHoCH"
 
 
 # --------------------------------------------------------------------------- #

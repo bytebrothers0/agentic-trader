@@ -697,27 +697,34 @@ def get_indicators(
                     "desc": f"{kind}: {bo.direction.value.upper()}"
                 })
 
-        # 8. FVG zones (LuxAlgo port). Only UNMITIGATED (fresh) zones are
-        # shown; mitigated zones are dropped. Computed once and shared with
-        # the IFVG block below.
+        # 8. FVG zones (LuxAlgo port). Fresh AND mitigated zones are shown:
+        # mitigated ones ride as history (state UNFRESH, end_time = the first
+        # wick into the zone, end_kind 'mitigated') so the perception dial's
+        # 'all'/'default' views and the dashboard can draw the played-out
+        # zones the way other families' history is drawn. Computed once and
+        # shared with the IFVG block below.
         fvg_det = FVGDetector(df, min_atr_mult=FVG_MIN_ATR_MULT,
                               max_gap_bars=IFVG_MAX_GAP_BARS,
                               min_overlap_frac=IFVG_MIN_OVERLAP_FRAC)
         fvg_levels = fvg_det.detect_all() if (fvg_on or ifvg_on) else []
         ifvg_levels = fvg_det.detect_ifvg(fvg_levels) if ifvg_on else []
         if fvg_on:
+            last_fvg = len(times_unix) - 1
             for fv in fvg_levels:
-                if not fv.fresh:
-                    continue  # mitigated zones are hidden
-                t_idx = min(fv.formation_index, len(times_unix) - 1)
+                t_idx = min(fv.formation_index, last_fvg)
+                if fv.mitigated and fv.mitigation_index is not None:
+                    e_idx, state, end_kind = min(fv.mitigation_index, last_fvg), \
+                        "UNFRESH", "mitigated"
+                else:
+                    e_idx, state, end_kind = None, "FRESH", "active"
                 levels_data.append({
                     "category": "fvg",
                     "type": f"FVG ({fv.direction.value.upper()})",
                     "price": round(fv.mid, 3),
-                    "state": "FRESH",
+                    "state": state,
                     "time": int(times_unix[t_idx]),
-                    "end_time": None,
-                    "end_kind": "active",
+                    "end_time": (int(times_unix[e_idx]) if e_idx is not None else None),
+                    "end_kind": end_kind,
                     "box_top": round(fv.top, 3),
                     "box_bottom": round(fv.bottom, 3),
                     "desc": f"FVG: {fv.direction.value.upper()}"
@@ -763,7 +770,11 @@ def get_indicators(
                     "state": ob.status,
                     "time": int(times_unix[t_idx]),
                     "end_time": int(times_unix[last_idx]),
-                    "end_kind": "active",
+                    # A mitigated block is played-out history (the state's word
+                    # must reach the agent's life-cycle map) — but a breaker is
+                    # not dead, it flipped.
+                    "end_kind": ("mitigated" if ob.status == "MITIGATED"
+                                 else "active"),
                     "box_top": round(ob.top, 3),
                     "box_bottom": round(ob.bottom, 3),
                     "desc": (f"{ob.kind}: {ob.direction.value.upper()}"
