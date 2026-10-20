@@ -25,13 +25,14 @@ SPEC_VERSION = "0.1.0"
 #: monthly form is spelled out rather than folded into ``M\d{1,2}``.
 _TIMEFRAME_RE = re.compile(r"^(M\d{1,2}|MN\d{0,2}|H\d{1,2}|D\d{1,2}|W\d{1,2})$")
 
-#: The *default view* families. This is the CRT playbook's own ``REQUIRED_FAMILIES``
-#: (``crt_strategy`` documents "the agent's view defaults to it") — the set the
-#: top-down read cannot reason without — not "every detector that exists". The
-#: heavier overlays (`sr`, `qm`, `idm`, `trendline`) stay one ``set_view`` away:
-#: a fresh M15/300-bar render carrying all ten families measured **639 levels ≈
-#: 49k token** of manifest, resent every round of a turn, versus ~15k for these
-#: six — enough to lose the turn under a token cap before the model said anything.
+#: The *default view* families — one family each for the boxes, structure,
+#: zones and liquidity the top-down read needs, deliberately NOT "every
+#: detector that exists". The heavier overlays (`sr`, `qm`, `idm`, `trendline`)
+#: stay one ``set_view`` away: a fresh M15/300-bar render carrying all ten
+#: families measured **639 levels ≈ 49k token** of manifest, resent every round
+#: of a turn, versus ~15k for these six — enough to lose the turn under a token
+#: cap before the model said anything. A strategy .md may instruct other
+#: defaults; the agent can also change its own view mid-turn.
 DEFAULT_FAMILIES: List[str] = [
     "crt", "bos", "fvg", "ob", "liquidity", "ts",
 ]
@@ -219,7 +220,7 @@ class View(Serde):
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_VIEW_FAMILIES))
-    bars: int = 50
+    bars: int = 180
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the
     #: default) is the live/latest window, so ``offset`` alone re-renders a *past*

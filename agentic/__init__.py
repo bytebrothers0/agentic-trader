@@ -4,8 +4,9 @@ Spec: docs/specs/2026-10-17-agentic-chart-agent-design.md
 
 Phase 0: the schemas and the durable context store (``models`` + ``store``).
 Phase 1: ``feed.py``, the read-only bridge to the indicator suite, and
-``crt_strategy.py``, the top-down CRT playbook the agent runs (HTF bias from
-D1/W1/MN1 CRT, LTF confirmation, a propose-only plan).
+``strategy.py``, the strategy-file loader — the agent's playbook is an
+operator-owned markdown file (``strategies/<active>.md``), not hard-coded
+policy.
 Phase 2 (part A): OHLC ``Bars`` on the feed, and ``subscriptions.py``, the
 deterministic, edge-triggered condition evaluator the Watchdog will drive.
 Phase 2 (part B): ``watchdog.py``, the LLM-free loop that drives the evaluator,
@@ -19,7 +20,7 @@ Phase 5: ``llm.py``, the OpenAI-compatible vision client — the request builder
 a tolerant reply parser over an **injected transport**, so a live HTTP call is
 wired by the caller and the pure core still touches no network.
 
-The pure core — ``models``, ``conditions``, ``store``, ``crt_strategy``,
+The pure core — ``models``, ``conditions``, ``store``, ``strategy``,
 ``subscriptions``, ``watchdog``, ``lookup``, ``tools``, ``prompts``,
 ``agent_loop``, ``llm`` — imports nothing from the running system. ``feed`` is the single
 sanctioned bridge, and it reaches the indicator layer only lazily, so importing
@@ -32,19 +33,11 @@ recomputed on every read. The panel and the real vision model remain later phase
 from __future__ import annotations
 
 from agentic.conditions import Condition, ConditionError, ConditionSpec, spec_for, validate
-from agentic.crt_strategy import (
-    HTF_BIAS_TIMEFRAMES,
-    LTF_EXECUTION_TIMEFRAMES,
-    OPTIONAL_FAMILIES,
-    REQUIRED_FAMILIES,
-    Confirmation,
-    CrtAnalysis,
-    CrtPlan,
-    HtfBias,
-    analyze,
-    build_plan,
-    derive_htf_bias,
-    find_confirmation,
+from agentic.strategy import (
+    MAX_STRATEGY_CHARS,
+    Strategy,
+    StrategyError,
+    load_strategy,
 )
 from agentic.feed import (
     KNOWN_FAMILIES,
@@ -148,29 +141,24 @@ __all__ = [
     "Condition",
     "ConditionError",
     "ConditionSpec",
-    "Confirmation",
+    "MAX_STRATEGY_CHARS",
+    "Strategy",
+    "StrategyError",
     "ContextStore",
-    "CrtAnalysis",
-    "CrtPlan",
     "FAMILY_INITIALS",
     "Feed",
     "FeedSnapshot",
     "FireResult",
-    "HTF_BIAS_TIMEFRAMES",
-    "HtfBias",
     "KNOWN_FAMILIES",
-    "LTF_EXECUTION_TIMEFRAMES",
     "Layout",
     "LeashExceeded",
     "LevelRecord",
     "LevelStatus",
     "LookupRecord",
     "LookupResult",
-    "OPTIONAL_FAMILIES",
     "PRICE_CHECK_S",
     "Proposal",
     "ProposalStatus",
-    "REQUIRED_FAMILIES",
     "RenderResult",
     "Renderer",
     "ScanResult",
@@ -186,16 +174,12 @@ __all__ = [
     "TurnRequest",
     "View",
     "Watchdog",
-    "analyze",
     "bar_seconds",
-    "build_plan",
     "default_candles_provider",
     "default_provider",
-    "derive_htf_bias",
     "evaluate",
     "event_time",
     "family_of",
-    "find_confirmation",
     "level_lookup",
     "parse_candles",
     "parse_level",

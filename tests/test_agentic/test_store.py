@@ -314,7 +314,7 @@ def test_view_validates_its_values(tmp_path):
     assert exc.value.reason == "invalid_bars"
 
     with pytest.raises(StoreError) as exc:
-        store.set_view(bars=101)  # a view is a screenshot; MAX_BARS is the ceiling
+        store.set_view(bars=181)  # a view is a screenshot; MAX_BARS is the ceiling
     assert exc.value.reason == "invalid_bars"
 
 
@@ -404,19 +404,17 @@ def test_view_symbol_defaults_to_the_store_symbol(tmp_path):
     assert _store(tmp_path).data.view.symbol == "XAUUSDm"
 
 
-def test_the_default_view_families_are_the_playbooks_own_set():
+def test_the_default_view_families_are_not_every_detector():
     """The drift that lost the backtest's turns to a token cap.
 
-    `crt_strategy.REQUIRED_FAMILIES` documents "the agent's view defaults to
-    it", but the view defaulted to *every* detector family instead — a fresh
-    M15/300-bar render measured 639 levels (≈49k tokens of manifest, re-sent
-    every round) against ≈15k for the playbook's six. A default the strategy
-    names must actually be what the strategy names.
+    The view once defaulted to *every* detector family instead of the top-down
+    set a strategy needs — a fresh M15/300-bar render measured 639 levels
+    (≈49k tokens of manifest, re-sent every round) against ≈15k for the six.
+    The shipped strategy (strategies/default.md) runs on these six.
     """
-    from agentic.crt_strategy import REQUIRED_FAMILIES
     from agentic.models import DEFAULT_FAMILIES
 
-    assert list(DEFAULT_FAMILIES) == list(REQUIRED_FAMILIES)
+    assert list(DEFAULT_FAMILIES) == ["crt", "bos", "fvg", "ob", "liquidity", "ts"]
 
 
 def test_the_default_view_is_the_dashboards_crt_toggle():

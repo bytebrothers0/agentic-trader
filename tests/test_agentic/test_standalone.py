@@ -5,7 +5,7 @@ bridge — :mod:`agentic.feed` — because the user asked for the agent to be wi
 to the CRT indicator. That bridge is **read-only** and **lazy**: it reaches into
 ``server``/``indicators`` only from inside a function, so importing ``agentic``
 (or ``agentic.feed``) never drags in FastAPI or the MT5 loader, and the pure core
-(``models``/``conditions``/``store``/``crt_strategy``) still imports nothing from
+(``models``/``conditions``/``store``/``strategy``) still imports nothing from
 the running system.
 
 If this test fails, either the pure core has started reaching out, or the bridge
@@ -42,7 +42,7 @@ PURE_MODULES = (
     "models.py",
     "conditions.py",
     "store.py",
-    "crt_strategy.py",
+    "strategy.py",
     "subscriptions.py",
     "watchdog.py",
     "lookup.py",
@@ -124,10 +124,11 @@ def test_the_package_exposes_its_surface():
     assert agentic.SPEC_VERSION == "0.1.0"
     assert agentic.ContextStore is not None
     assert agentic.Condition.LEVEL_FORMS.value == "level_forms"
-    # phase 1 wiring: the feed adapter and the CRT playbook are part of the API.
+    # phase 1 wiring: the feed adapter and the strategy loader are part of the API.
     assert agentic.Feed is not None
     assert agentic.LevelRecord is not None
-    assert "crt" in agentic.REQUIRED_FAMILIES
+    assert "crt" in agentic.models.DEFAULT_FAMILIES
+    assert agentic.load_strategy is not None and agentic.Strategy is not None
     # phase 3 wiring: the renderer + manifest and the numeric lookup are public.
     assert agentic.Renderer is not None
     assert agentic.TagEntry is not None
