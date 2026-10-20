@@ -116,6 +116,73 @@ def test_indicators_past_history_is_422_not_500(monkeypatch):
     assert "requested 40 M15" in resp.json()["detail"]
 
 
+class _TSShapedLoader:
+    """Bars shaped so the TS detector fires a MULTIPLE_CANDLE signal: the
+    variant path whose ``inside_bars`` used to leak a numpy scalar (which
+    FastAPI could not serialize — the endpoint 500'd on the logger's exact
+    request)."""
+
+    _SETUP = (
+        {"open": 100, "high": 105, "low": 99, "close": 103},      # anchor
+        {"open": 103, "high": 104.5, "low": 99.5, "close": 102},  # inside bar
+        {"open": 103, "high": 103.5, "low": 98, "close": 103},    # drift: NOT inside
+        {"open": 104, "high": 107, "low": 100, "close": 102},     # sweep
+    )
+
+    def __init__(self, symbol="XAUUSDm"):
+        self.resolved_symbol = symbol
+
+    def fetch_timeframe(self, tf_key, count=None, start=0):
+        count = max(int(count or 0), 4)
+        setup = [dict(b, time=1_799_999_996 + i * 900)
+                 for i, b in enumerate(self._SETUP)]
+        calm = [dict(open=100, high=101, low=99, close=100,
+                     time=1_799_999_996 - (n + 1) * 900)
+                for n in range(count - 4)]
+        rows = sorted(calm + setup, key=lambda r: r["time"])
+        df = pd.DataFrame(rows)
+        df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        df = df.set_index("datetime")
+        df["volume"] = 3.0
+        return df[["time", "open", "high", "low", "close", "volume"]]
+
+
+def test_indicators_ts_payload_is_json_clean(monkeypatch):
+    import json as _json
+
+    import server
+    monkeypatch.setattr(server, "get_loader", lambda symbol: _TSShapedLoader())
+    # Only TS on: isolates the ts payload block exactly like the live failing
+    # request from the log (show_ts=true, every other category false).
+    for flag in ("SR_ENABLED", "QM_ENABLED", "OCL_ENABLED", "APEX_ENABLED",
+                 "IDM_ENABLED", "BOS_ENABLED", "FVG_ENABLED", "IFVG_ENABLED",
+                 "OB_ENABLED", "TL_ENABLED"):
+        try:
+            monkeypatch.setattr(server, flag, False)
+        except AttributeError:
+            pass
+    monkeypatch.setattr(server, "TS_ENABLED", True)
+    client = _client(monkeypatch, _TSShapedLoader())
+
+    resp = client.get(
+        "/api/indicators",
+        params={"symbol": "XAUUSDm", "timeframe": "M15", "bars": 40,
+                "show_ts": "true", "show_sr": "false",
+                "freshness_filter": "all"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()          # jsonable_encoder survived
+    _json.dumps(body)           # plain stdlib round-trip too
+
+    ts_levels = [l for l in body["levels"] if l["category"] == "ts"]
+    assert any(l.get("variant") == "multiple_candle" for l in ts_levels)
+    for level in ts_levels:
+        assert isinstance(level["inside_bars"], int)
+        assert isinstance(level["state"], str)
+        assert level["end_kind"] in ("active", "invalidated")
+
+
 def test_import_server_keeps_37_routes():
     import server
 

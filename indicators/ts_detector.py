@@ -300,14 +300,17 @@ class TSDetector:
             return ((TSVariant.TWO_CANDLE, 0) if delivered
                     else (TSVariant.CLASSIC, 0))
         between = [b for b in range(anchor + 1, j)]
-        inside_flags = [h[b] <= crh and l[b] >= crl for b in between]
+        # bool(): numpy h/l comparisons yield numpy.bool_, and sum() over
+        # those is numpy.int32 — a scalar FastAPI/jsonable_encoder cannot
+        # serialize (a bare np.int32 in the payload 500s the endpoint).
+        inside_flags = [bool(h[b] <= crh and l[b] >= crl) for b in between]
         if k == 2:
             if inside_flags[0]:
                 return TSVariant.INSIDE_BAR, 1
             return TSVariant.MULTIPLE_CANDLE, 0
         if all(inside_flags):
-            return TSVariant.MULTIPLE_INSIDE_BAR, k - 1
-        return TSVariant.MULTIPLE_CANDLE, sum(inside_flags)
+            return TSVariant.MULTIPLE_INSIDE_BAR, int(k - 1)
+        return TSVariant.MULTIPLE_CANDLE, int(sum(inside_flags))
 
     @property
     def levels(self) -> List[TSLevel]:

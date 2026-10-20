@@ -64,6 +64,38 @@ def check_deps():
         sys.exit(1)
 
 
+def _silence_accept_noise():
+    """Windows IOCP proactor noise: when a client aborts its connection
+    during the TCP accept (typical on browser refresh / keep-alive churn),
+    asyncio's accept coroutine raises WinError 64 ("The specified network
+    name is no longer available") and logs it from inside stdlib's asyncio
+    and proactor-event machinery — uvicorn keeps accepting, nothing is
+    broken. Filter ONLY that one error; everything else still logs."""
+    import logging
+
+    class _WinErr64Filter(logging.Filter):
+        def filter(self, record):
+            # Fast path: the accept-failure tracebacks print their context
+            # inside the message text itself.
+            text = record.getMessage()
+            if ("The specified network name is no longer available" in text
+                    or "WinError 64" in text
+                    or "Accept failed on a socket" in text):
+                return False
+            # Slow path: records logged with exc_info carry the OSError
+            # there; walk the chain, only WinError 64 is silenced.
+            exc = record.exc_info[1] if record.exc_info else None
+            while exc is not None:
+                if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 64:
+                    return False
+                exc = exc.__cause__ or exc.__context__
+            return True
+
+    noise = _WinErr64Filter()
+    for name in ("asyncio", "uvicorn.error", "uvicorn"):
+        logging.getLogger(name).addFilter(noise)
+
+
 def main():
     parser = argparse.ArgumentParser(description="MSNR live web terminal")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
@@ -72,6 +104,7 @@ def main():
     args = parser.parse_args()
 
     check_deps()
+    _silence_accept_noise()
 
     import webbrowser
     import threading
