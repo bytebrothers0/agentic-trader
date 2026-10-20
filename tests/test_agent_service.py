@@ -127,18 +127,21 @@ def test_a_bad_strategy_refuses_the_service(tmp_path):
 
 
 def test_blank_strategy_fields_fall_back_to_settings():
-    """Repository defaults: config.settings.STRATEGY_* names the shipped CRT md.
+    """Repository defaults: config.settings.STRATEGY_* names the active playbook.
 
     Resolved lazily inside ``resolve_strategy`` — building a config never has to
-    import config.settings.
+    import config.settings. The test reads the setting rather than hard-coding a
+    name, so the operator can swap the active strategy freely.
     """
+    from config.settings import STRATEGY_ACTIVE
+
     directory, name = AgentConfig().resolve_strategy()
 
-    assert name == "default"
-    # The directory must actually hold the default file (loaded successfully below).
+    assert name == STRATEGY_ACTIVE
+    # The directory must actually hold the active file (loaded successfully below).
     from agentic.strategy import load_strategy
     loaded = load_strategy(directory, name)
-    assert "CRT" in loaded.text
+    assert loaded.text.strip()
 
 
 def test_the_strategy_reaches_the_loop_s_prompt(tmp_path):

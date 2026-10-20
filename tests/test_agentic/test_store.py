@@ -410,7 +410,7 @@ def test_the_default_view_families_are_not_every_detector():
     The view once defaulted to *every* detector family instead of the top-down
     set a strategy needs — a fresh M15/300-bar render measured 639 levels
     (≈49k tokens of manifest, re-sent every round) against ≈15k for the six.
-    The shipped strategy (strategies/default.md) runs on these six.
+    The active strategy (strategies/, STRATEGY_ACTIVE) runs on these six.
     """
     from agentic.models import DEFAULT_FAMILIES
 

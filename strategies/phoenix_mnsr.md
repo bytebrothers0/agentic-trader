@@ -9,6 +9,18 @@
 >
 > This is a propose-only playbook: every trade idea is a `propose_trade` plan,
 > never an order. Prices come from `level_lookup`, never off the image.
+>
+> **The spirit of these rules.** Read the gates as a *filter, not a cage*. No
+> strategy wins 100% of the time; losses are normal, expected, survivable — the
+> chain exists to keep you out of chaos, not to promise outcomes. When a setup
+> *almost* meets a gate (one clean BOS short of two, an MSS with the trigger
+> level a wick's width from an H1 zone), you may reason it through: name the
+> miss in the proposal's `reason`, drop `confidence` one grade (about 0.10), and
+> propose smaller sooner rather than bigger later. That is discipline, not
+> defiance. What is *never* flexible: the propose-only boundary, the stop
+> budget (35 pips), and honesty about what the evidence does not show. An edge
+> is fragile: when in doubt, watch instead of act — a passing trade is worth
+> more than a chased one.
 
 ## Units
 

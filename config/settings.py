@@ -237,6 +237,10 @@ TL_GAP_ATR_MULT = 0.1
 # 0.10 -> 170 TS, 0.05 -> 188, 0.00 -> 192 (dust already dead elsewhere).
 TS_MIN_WICK_BODY_FRAC = 0.10
 TS_MIN_WICK_RANGE_FRAC = 0.05
+# Anchor -> sweep window (bars). The variant taxonomy requires the range
+# candle and the manipulation candle within this many bars of each other;
+# inside-bar accumulation and multi-candle windows live inside it.
+TS_MAX_BETWEEN = 5
 
 # CRT (Candle Range Theory) — enabled. One candle defines the range (CRH/CRL);
 # a later candle sweeps one boundary and closes back inside; the projection is
@@ -313,10 +317,10 @@ AGENT_MODE = "live"            # "mock" (scripted agent, zero spend) | "live" (v
 AGENT_MODEL = ""               # "" = inherit the LLM_PROVIDER model (e.g. qwen/qwen3.8-27b)
 AGENT_SYMBOL = "XAUUSDm"
 AGENT_TIMEFRAME = "M15"
-#: A *screenshot*: 50 candles is the default view and MAX_BARS (100) the hard
+#: A *screenshot*: 180 candles is the default view and MAX_BARS (180) the hard
 #: ceiling — past price action is reached with `offset`, never by widening the
 #: window beyond what the agent can actually parse.
-AGENT_BARS = 50
+AGENT_BARS = 180
 AGENT_POLL_S = 15.0            # watchdog poll cadence
 AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
 AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name
@@ -326,6 +330,12 @@ AGENT_HTTP_TIMEOUT_S = 120.0   # per-request timeout for the live transport
 AGENT_HTTP_USER_AGENT = "trading-bot-agent/1.0"  # must match agent_service.DEFAULT_USER_AGENT (Cloudflare 1010 blocks urllib's default)
 AGENT_STATE_DIR = ""           # "" -> agentic/state (gitignored default)
 AGENT_RENDER_DIR = ""          # "" -> agentic/renders (gitignored default)
+
+# The agent's strategy: one markdown playbook per strategy, whole-file injected
+# into the system prompt (see agentic/strategy.py). Changing STRATEGY_ACTIVE
+# takes effect on the next service boot — a turn never mixes strategies.
+STRATEGY_DIR = "strategies"    # repo-relative (absolute also accepted)
+STRATEGY_ACTIVE = "phoenix_mnsr"   # the .md (no extension) the agent runs
 
 # =============================================================================
 # LOGGING

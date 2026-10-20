@@ -2,8 +2,8 @@
 
 The agent's playbook is a markdown file owned by the operator, not code a
 developer ships: one ``.md`` per strategy in the strategies directory, the
-active one named by ``config.settings.STRATEGY_ACTIVE`` (default
-``strategies/default.md``, the ported CRT model). The loaded text is injected
+active one named by ``config.settings.STRATEGY_ACTIVE`` (currently
+``strategies/phoenix_mnsr.md``). The loaded text is injected
 into the system prompt whole — ``prompts.build_system_prompt(playbook=...)`` —
 so a strategy is whatever the file says, and nothing here parses, validates or
 executes it beyond the safety checks below.

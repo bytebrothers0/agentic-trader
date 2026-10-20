@@ -1,22 +1,23 @@
 """Tests for the strategy file loader (`agentic/strategy.py`)."""
 from __future__ import annotations
 
-import pathlib
-
 import pytest
 
 from agentic.strategy import MAX_STRATEGY_CHARS, StrategyError, load_strategy
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-STRATEGIES = ROOT / "strategies"
+def test_it_loads_the_shipped_active_strategy():
+    """Whatever STRATEGY_ACTIVE names must load from the shipped strategies dir.
 
+    Reads the setting instead of hard-coding a name, so the operator can swap
+    the active playbook without touching this test.
+    """
+    from config.settings import STRATEGY_DIR, STRATEGY_ACTIVE
 
-def test_it_loads_the_shipped_default_strategy():
-    strat = load_strategy(str(STRATEGIES), "default")
+    strat = load_strategy(str(STRATEGY_DIR), STRATEGY_ACTIVE)
 
-    assert strat.name == "default"
-    assert strat.text.strip(), "the shippped strategy must not be empty"
+    assert strat.name == STRATEGY_ACTIVE
+    assert strat.text.strip(), "the active strategy must not be empty"
     assert len(strat.text) <= MAX_STRATEGY_CHARS
 
 
