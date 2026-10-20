@@ -89,6 +89,20 @@ def test_family_aliases_are_rewritten():
     assert family_of({"category": "crt"}) == "crt"
 
 
+def test_ts_start_time_is_carried_for_the_renderer():
+    # The ts payload's ``time`` is the SWEEP candle; ``start_time`` is the
+    # anchor (range) candle. The renderer needs the anchor or the drawn ray
+    # starts detached from the candle the level belongs to (the live bug this
+    # pins: the agent's PNG drew ts rays from the sweep bar).
+    lvl = parse_level(
+        {"category": "ts", "type": "TS_HIGH (BEARISH)", "price": 4191.0,
+         "state": "FRESH", "time": 1792141200, "start_time": 1792140300},
+        timeframe="M15",
+    )
+    assert lvl.attrs["start_time"] == 1792140300
+    assert lvl.formed_at is not None
+
+
 def test_direction_reads_the_type_field():
     assert parse_level({"category": "bos", "type": "CHoCH (BULLISH)", "price": 1.0}).direction == "bullish"
     assert parse_level({"category": "bos", "type": "BOS (BEARISH)", "price": 1.0}).direction == "bearish"

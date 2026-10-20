@@ -79,17 +79,10 @@ def _crt_label(level: LevelRecord) -> str:
     """The dashboard's own word for a CRT level: ``CRT`` or ``CRT-IB``."""
     return "CRT-IB" if level.variant == "inside_bar" else "CRT"
 
-# Paper theme (the operator's phase-7 ruling, research-backed): a white
-# ground, bull candles as white bodies with black borders, bear candles solid
-# black, every indicator in the black ink — with ONE accent. Deep red
-# ``#c1121f`` is reserved exclusively for the CRT levels: 6.2:1 contrast on
-# white (WCAG luminance, the strongest red that still reads as red), and the
-# research line behind the choice is deliberate — vision encoders recover
-# *colour encoding* from charts poorly, so colour carries exactly ONE meaning
-# here and everything else rides on luminance (black ≠ white bodies) plus the
-# word labels the digest bridges. No other inks: no direction colours, no
-# family hues, no amber — status speaks through geometry (the nub span), the
-# visible grays, and the manifest.
+# Paper theme: white ground, bullish candles white with black borders, bearish
+# candles black, and black indicator ink. Only zones use fills: pale yellow for
+# order blocks and a very light black tint for FVG/IFVG. Family identity comes
+# from plain labels and the manifest rather than bright colors.
 
 #: Brightness ruling history: the operator once asked for +50% on every colour
 #: for the agent's ingest, then reverted it ("it was a mistake") — the spec
@@ -109,25 +102,26 @@ def _bright(hex_color: str) -> str:
 
 
 _BG = "#ffffff"
-_INK = "#2a2f3a"
+_INK = "#000000"
 _GRID = "#e9ebef"
 #: The paper candle look: white bull bodies with a black border, solid black
 #: bear bodies — direction lives in the fill, not in a hue.
 _UP = "#ffffff"
-_DOWN = "#111111"
-_CANDLE_EDGE = "#111111"
-_PINNED = "#b45309"
-#: The current price is a dotted hairline with a black chip on the scale —
-#: neutral ink, so the deep red stays CRT's alone.
-_PRICE = "#16181d"
+_DOWN = "#000000"
+_CANDLE_EDGE = "#000000"
+_PINNED = "#000000"
+_PRICE = "#000000"
 #: Broken levels are history — a gray that stays visible on white (3.9:1).
 _BROKEN = "#7a828e"
 #: Swept/taken/distributed levels keep their family ink at the history's
 #: 35% fade — readable mid-red/mid-gray on white, where the same fade on the
 #: old dark panel was near-invisible (the complaint that started phase 7).
 _HISTORY_ALPHA = 0.35
-#: The zone fill's quietness: 8% of the ink.
+#: The FVG/IFVG fill's quietness; order blocks use their own pale yellow.
 _ZONE_FILL_ALPHA = 0.08
+_OB_FILL = "#ffe56b"
+_OB_FILL_ALPHA = 0.22
+_OB_EDGE_ALPHA = 0.16
 
 #: Families drawn as zones (edges + a quiet fill) rather than a single ray —
 #: the dashboard's ``isZoneLevel`` set. Every other family's band is *information*
@@ -139,24 +133,20 @@ _ZONE_FAMILIES = frozenset({"fvg", "ifvg", "ob"})
 #: newest rays win, quieter families can never be starved by a busy one.
 MAX_RAYS_PER_FAMILY = 80
 
-#: The screenshot's ray rule: a ray is a *nub*, never a wall. A still-live
-#: level spans 3 bars from formation; a dead one ends ONE STEP PAST its
-#: life-event bar (the dashboard's CRT pose — the dotted line pokes one candle
-#: beyond the sweep), capped at the same 3 steps. Zone *boxes* (fvg/ifvg/ob)
-#: are exempt: a zone's fill is the information, so it keeps its full
-#: formation→fill span.
+#: Most levels are short rays: a live level spans 3 bars from formation; a dead
+#: one ends one step past its life event, capped at the same 3 steps. BOS rays
+#: reach the close-through candle; zone boxes keep their full formation→fill span.
 _SPAN_BARS = 3
+_RIGHT_GAP_BARS = 8
 
 _CANDLE_WIDTH = 0.6
-_WICK_LINEWIDTH = 1.1
-#: Every level is a 1px dotted hairline — the dashboard's ray look. Colour and
-#: fade carry the family/status; weight is uniform by design.
-_LEVEL_LINEWIDTH = 0.9
-_LEVEL_STYLE = (0, (1, 2))
+_WICK_LINEWIDTH = 1.0
+#: Matplotlib linewidths are points; Renderer converts these pixel targets using
+#: its DPI so lines stay one pixel wide in every agent image.
+_LEVEL_LINEWIDTH = 1.0
+_LEVEL_STYLE = "-"
 
-#: Type sizes are dashboard-sized: tags are *small plain text* next to their
-#: dotted line (bold 12pt tags in bubble boxes turned the dense right cluster
-#: into a wall of chips), and the header chip replaces a big title.
+#: Tags are small, plain 8pt text with no bubble or bold styling.
 _TAG_FONTSIZE = 8
 _HEADER_FONTSIZE = 9
 _TICK_FONTSIZE = 9
@@ -353,7 +343,7 @@ class Renderer:
         dpi: int = 100,
         clock: Optional[Callable[[], datetime]] = None,
         out_dir: Optional[str] = None,
-        max_bars_per_pane: int = 100,
+        max_bars_per_pane: int = 180,
     ):
         self.width = int(width)
         self.height = int(height)
@@ -709,12 +699,10 @@ class Renderer:
     def _span(level: LevelRecord, bars: Bars) -> Tuple[int, int]:
         """The bar-index x-span a level is drawn across — never full-width.
 
-        The dashboard's ray pose, per the operator's screenshot: every ray is a
-        ~3-step nub. A dead level ends ONE STEP PAST its life-event bar (the
-        dotted line pokes one candle beyond the sweep it records), capped at
-        ``_SPAN_BARS`` from formation; a still-live one spans the same cap. Only
-        zone boxes keep their full formation→fill span — a zone's extent is the
-        information the box carries.
+        Most rays use the dashboard's short-ray pose: a dead level ends one step
+        past its life-event bar, capped at ``_SPAN_BARS`` from formation; a live
+        one spans the same cap. BOS reaches its close-through candle. Zone boxes
+        keep their full formation→fill span.
         """
         count = max(len(bars.times), 1)
         start = bars.index_at_or_before(level.formed_at)
@@ -729,6 +717,30 @@ class Renderer:
                     end = min(start + _SPAN_BARS + 1, count - 1)
             else:
                 end = min(start + _SPAN_BARS + 1, count - 1)
+        elif level.family == "bos" and level.changed_at is not None and level.changed_at > (
+            level.formed_at or _EPOCH
+        ):
+            # BOS payloads carry the close-through candle in ``end_time``.
+            # Draw the structural level from its swing origin all the way to
+            # that candle so the break is visually connected to its body.
+            event = bars.index_at_or_before(level.changed_at)
+            end = event if event >= 0 else min(start + _SPAN_BARS, count - 1)
+        elif level.family == "ts":
+            # The TS event is exactly three steps: the anchor (``start_time``,
+            # the range candle), the sweeping candle (``formed_at``), and one
+            # bar to its right — never to the invalidation bar (dashboard
+            # parity: ``app.js`` draws the same three steps). The payload's
+            # ``time`` is the SWEEP bar for ts, so without the anchor the ray
+            # would start detached from the candle it belongs to.
+            anchor_ts = (level.attrs or {}).get("start_time")
+            sweep = bars.index_at_or_before(level.formed_at)
+            anchor = bars.index_at_or_before(anchor_ts) if anchor_ts else sweep
+            anchor = max(anchor, 0)
+            if sweep >= 0 and sweep >= anchor:
+                end = min(sweep + 1, count - 1)
+            else:
+                end = min(anchor + 1, count - 1)
+            return anchor, max(end, min(anchor + 1, count - 1))
         elif level.changed_at is not None and level.changed_at > (
             level.formed_at or _EPOCH
         ):
@@ -746,34 +758,32 @@ class Renderer:
     def _level_style(
         level: LevelRecord, pinned: bool, price: float
     ) -> Tuple[str, float]:
-        """``(color, alpha)`` — the paper theme's ink rules.
-
-        Deep red ``#c1121f`` is reserved exclusively for the CRT family; every
-        other level paints in the black ink ``#16181d``, so the accent is
-        unclaimed by anything else on the chart. Status still speaks: broken
-        levels fade to the visible gray, settled CRT/IDM/liquidity levels keep
-        their ink at the 35% history alpha, live levels run full strength.
-        ``pinned`` overrides colour (the agent's own marker must never be
-        mistaken for a level's ink) and never fades. Direction is deliberately
-        NOT an ink — the digest words carry it.
-        """
+        """Return monochrome ink and status opacity for a level."""
         _ = price
         status = level.status
-        family = level.family
         if status is LevelStatus.BROKEN and not pinned:
-            # Raw — the paint site applies the one-shot dial.
             return "#7a828e", 1.0
-        if family == "crt":
-            return (
-                "#c1121f",
-                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
-            )
-        if family in ("liquidity", "idm"):
-            return (
-                "#16181d",
-                _HISTORY_ALPHA if status is not LevelStatus.LIVE else 1.0,
-            )
-        return "#16181d", 1.0
+        return "#000000", 1.0 if status is LevelStatus.LIVE else _HISTORY_ALPHA
+
+    @staticmethod
+    def _zone_style(family: str) -> Tuple[str, float, Optional[str], float]:
+        """Return ``(fill, fill_alpha, edge, edge_alpha)`` for a mapped zone."""
+        if family == "ob":
+            return _OB_FILL, _OB_FILL_ALPHA, "#000000", _OB_EDGE_ALPHA
+        if family in {"fvg", "ifvg"}:
+            return "#000000", _ZONE_FILL_ALPHA, None, 0.0
+        return "#000000", 0.0, None, 0.0
+
+    @staticmethod
+    def _x_limits(count: int) -> Tuple[float, float]:
+        """Keep eight empty bar slots between the latest candle and price rail."""
+        if count <= 0:
+            return -1.0, 1.0
+        return -1.0, float(count - 1 + _RIGHT_GAP_BARS)
+
+    def _line_width(self, pixels: float = 1.0) -> float:
+        """Convert a target pixel width to matplotlib points for this renderer."""
+        return float(pixels) * 72.0 / self.dpi
 
     @staticmethod
     def _price_range(
@@ -880,13 +890,13 @@ class Renderer:
             c = float(bars.close[i])
             body = _UP if c >= o else _DOWN
             ax.plot([i, i], [low, h], color=_CANDLE_EDGE,
-                    linewidth=_WICK_LINEWIDTH, zorder=2)
+                    linewidth=self._line_width(_WICK_LINEWIDTH), zorder=2)
             if c == o:
                 ax.plot(
                     [i - _CANDLE_WIDTH / 2, i + _CANDLE_WIDTH / 2],
                     [c, c],
                     color=_CANDLE_EDGE,
-                    linewidth=_WICK_LINEWIDTH,
+                    linewidth=self._line_width(_WICK_LINEWIDTH),
                     zorder=3,
                 )
             else:
@@ -897,7 +907,7 @@ class Renderer:
                         abs(c - o),
                         facecolor=body,
                         edgecolor=_CANDLE_EDGE,
-                        linewidth=0.6,
+                        linewidth=self._line_width(1.0),
                         zorder=3,
                     )
                 )
@@ -910,14 +920,7 @@ class Renderer:
         display_tags: Dict[str, str],
         pinned_keys: Set[str],
     ) -> None:
-        """Dashboard parity: bounded rays, zone boxes, per-family ink, mid tags.
-
-        Nothing here paints a full-width band: a level draws from its formation
-        bar to its life-cycle end (or a short open span while still live), zones
-        draw as quiet 8%-alpha boxes with dotted edges, and each drawn level gets
-        its tag at the **middle** of its span — a right-edge pile-up of 190 tags
-        is exactly the unreadable column this rewrite replaces.
-        """
+        """Draw bounded solid rays, restrained zones, and plain 8pt tags."""
         current_price = float(bars.close[-1]) if len(bars.close) else 0.0
         for level in levels:
             pinned = level.level_key in pinned_keys
@@ -929,42 +932,46 @@ class Renderer:
                 # entry's ``label`` bridge for the closing digest.
                 text = _crt_label(level) + ("*" if pinned else "")
             color, alpha = self._level_style(level, pinned, current_price)
-            # The brightness dial applies at the paint site: family inks too.
+            # Family and status use luminance rather than competing hues.
             color = _bright(color)
             x0, x1 = self._span(level, bars)
             price = float(level.price)
             is_zone = level.family in _ZONE_FAMILIES
-            # The operator's style ruling: CRT lines are solid; every other
-            # family stays on the uniform dotted hairline.
-            linestyle = "-" if level.family == "crt" else _LEVEL_STYLE
             band = level.band() if is_zone else None
             if band is not None:
                 lo, hi = sorted(float(v) for v in band)
+                fill, fill_alpha, edge, edge_alpha = self._zone_style(level.family)
                 ax.fill_between(
-                    [x0, x1], lo, hi, color=color, alpha=_ZONE_FILL_ALPHA,
+                    [x0, x1], lo, hi, color=fill, alpha=fill_alpha,
                     linewidth=0, zorder=1,
                 )
-                for edge_price in (lo, hi):
-                    ax.plot(
-                        [x0, x1], [edge_price, edge_price],
-                        color=color, alpha=alpha, linewidth=_LEVEL_LINEWIDTH,
-                        linestyle=_LEVEL_STYLE, zorder=2,
+                if edge is not None:
+                    outline = (
+                        ([x0, x1], [lo, lo]),
+                        ([x0, x1], [hi, hi]),
+                        ([x0, x0], [lo, hi]),
+                        ([x1, x1], [lo, hi]),
                     )
+                    for xs, ys in outline:
+                        ax.plot(
+                            xs, ys, color=edge, alpha=edge_alpha * alpha,
+                            linewidth=self._line_width(_LEVEL_LINEWIDTH),
+                            linestyle=_LEVEL_STYLE, zorder=2,
+                        )
                 label_price = (lo + hi) / 2.0
             else:
                 ax.plot(
                     [x0, x1], [price, price],
-                    color=color, alpha=alpha, linewidth=_LEVEL_LINEWIDTH,
-                    linestyle=linestyle, zorder=3,
+                    color=color, alpha=alpha,
+                    linewidth=self._line_width(_LEVEL_LINEWIDTH),
+                    linestyle=_LEVEL_STYLE, zorder=3,
                 )
                 label_price = price
             if pinned:
                 # A pin must survive every status fade — it is the agent's own marker.
                 color, alpha = _PINNED, 1.0
-            # The dashboard's label pose: tiny plain family-coloured text sitting
-            # on its own dotted line — no bold, no bubble box. A manifest tag
-            # still always has its exact text on the image (the label bridge and
-            # the digest carry the mapping), so the lookup never points at air.
+            # Plain, non-bold 8pt text has no bubble or outline. The manifest
+            # retains the unique tag-to-level mapping for exact lookups.
             ax.text(
                 (x0 + x1) / 2.0,
                 label_price,
@@ -972,6 +979,7 @@ class Renderer:
                 color=color,
                 alpha=alpha,
                 fontsize=_TAG_FONTSIZE,
+                fontweight="normal",
                 ha="center",
                 va="bottom",
                 zorder=6,
@@ -986,13 +994,10 @@ class Renderer:
         drawn_count: int = 0,
         hidden_count: int = 0,
     ) -> None:
-        """The dashboard's chrome: header chip, price rail, dates — nothing else.
+        """Draw the header, price rail, scale, and date axis.
 
-        The header chip is the web panel's ("``XAUUSDm  TF: D1  LEVELS DRAWN: 13``"),
-        telling the agent at a glance what it is looking at and *that some levels
-        are off-picture* when the ray budget hid any. The current price is a
-        dotted hairline with a black chip on the right scale — neutral ink, so
-        the deep red stays the CRT family's alone.
+        The header reports hidden levels when the ray budget applies. Eight blank
+        bar slots remain between the latest candle and the price scale.
         """
         from matplotlib.ticker import FuncFormatter
 
@@ -1001,18 +1006,21 @@ class Renderer:
         pad = (y_hi - y_lo) * 0.05 if y_hi != y_lo else 1.0
 
         current_price = float(snapshot.current_price)
-        ax.axhline(current_price, color=_PRICE, linewidth=_LEVEL_LINEWIDTH,
-                   linestyle=_LEVEL_STYLE, zorder=5)
+        ax.axhline(current_price, color=_PRICE, alpha=0.45,
+                   linewidth=self._line_width(_LEVEL_LINEWIDTH),
+                   linestyle="-", zorder=5)
         if count:
             ax.text(
-                count - 1 + 0.4,
+                1.0,
                 current_price,
                 f"{current_price:.2f}",
+                transform=ax.get_yaxis_transform(),
                 color=_BG,
                 fontsize=_TICK_FONTSIZE,
                 ha="left",
                 va="center",
-                zorder=7,
+                zorder=10,
+                clip_on=False,
                 bbox=dict(facecolor=_PRICE, edgecolor="none", alpha=1.0, pad=1.5),
             )
 
@@ -1035,7 +1043,7 @@ class Renderer:
             ),
         )
 
-        ax.set_xlim(-1, count if count else 1)
+        ax.set_xlim(*self._x_limits(count))
         ax.set_ylim(y_lo - pad, y_hi + pad)
         ax.grid(True, color=_GRID, linewidth=0.6, alpha=0.9)
         ax.set_axisbelow(True)
@@ -1065,7 +1073,18 @@ class Renderer:
         ax.spines["right"].set_color(_GRID)
         ax.spines["bottom"].set_color(_GRID)
         ax.yaxis.tick_right()
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v:.2f}"))
+        ticks = ax.get_yticks()
+        gaps = [b - a for a, b in zip(ticks, ticks[1:]) if b > a]
+        badge_clearance = (min(gaps) * 0.55) if gaps else 0.0
+
+        def _price_tick(v: float, _pos: Any) -> str:
+            # The live-price badge occupies the price scale at this y-position;
+            # hide a colliding tick label as TradingView does.
+            if abs(float(v) - current_price) <= badge_clearance:
+                return ""
+            return f"{v:.2f}"
+
+        ax.yaxis.set_major_formatter(FuncFormatter(_price_tick))
         ax.tick_params(axis="y", labelsize=_TICK_FONTSIZE, colors=_INK, length=3)
         ax.tick_params(axis="x", colors=_INK, length=3)
 

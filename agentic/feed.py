@@ -118,9 +118,13 @@ _STATUS_BY_STATE: Dict[str, LevelStatus] = {
 }
 
 #: Family-specific payload fields worth carrying onto the record verbatim.
+#: ``start_time`` is family-specific in meaning — TS: the anchor (range)
+#: candle; CRT: the manipulation candle — and the renderer needs the TS one
+#: to draw the ray from the anchor instead of the sweep bar.
 _ATTR_KEYS: tuple = (
     "variant",
     "inside_bars",
+    "start_time",
     "sweep_amount",
     "range_high",
     "range_low",

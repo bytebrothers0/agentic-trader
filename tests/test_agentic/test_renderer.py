@@ -177,7 +177,7 @@ def test_crt_levels_paint_the_dashboard_word_with_a_label_bridge(tmp_path):
     """The image text for a CRT level is the dashboard's own word.
 
     The operator's screenshot shows plain ``CRT``/``CRT-IB`` text on each
-    dotted line — no ordinals. The manifest tag stays the *unique* lookup key,
+    solid line — no ordinals. The manifest tag stays the *unique* lookup key,
     and the entry's ``label`` bridges the (possibly repeated) image word back
     to exactly one level for the closing digest.
     """
@@ -620,9 +620,8 @@ def test_split_render_draws_into_each_pane_band(tmp_path):
         def dark_ink(lo, hi):
             # The paper theme draws candles in black/white only: bear bodies,
             # wicks and borders are near-black ink on the white ground, while
-            # the grid/spines stay light gray and the CRT accent is deep red
-            # (max channel 193 — not dark ink). So a band carrying dark pixels
-            # is a band the renderer actually drew candles into.
+            # the grid/spines stay light gray. Every family now uses black or
+            # gray ink, so dark pixels mark candles and active indicator lines.
             return sum(
                 1
                 for y in range(lo, hi)
@@ -685,8 +684,53 @@ def test_a_pinned_level_is_never_hidden(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# The paper theme (phase 7): a black/white chart with ONE accent — deep red
-# for the CRT levels and nothing else
+# The TS ray: a three-step event drawn from the anchor, never to the break
+# --------------------------------------------------------------------------- #
+
+def test_ts_ray_starts_at_the_anchor_and_never_reaches_the_break():
+    """The ts payload's ``time`` is the sweep bar and ``start_time`` the anchor;
+    the agent's PNG must draw anchor -> sweep -> one bar right — NOT from the
+    sweep bar, and never out to the invalidation bar (dashboard parity)."""
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    anchor = ts(start + timedelta(minutes=15 * 5))
+    sweep = ts(start + timedelta(minutes=15 * 7))
+    far_break = ts(start + timedelta(minutes=15 * 30))
+
+    record = _snapshot([
+        _level("ts", type="TS HIGH (BEARISH)", price=105.0,
+               time=sweep, start_time=anchor, end_time=far_break,
+               end_kind="invalidated"),
+    ]).levels[0]
+    assert record.attrs.get("start_time") == anchor
+
+    bars = _series(bars_rows(40, start=ts(start)))
+    ray_start, ray_end = Renderer._span(record, bars)
+
+    assert ray_start == 5                          # the anchor candle
+    assert ray_end == 8                            # sweep (idx 7) + one bar
+    assert ray_end < bars.index_at_or_before(far_break)   # never the break
+
+
+def test_ts_ray_survives_an_anchor_that_fell_off_the_window():
+    """An anchor older than the visible window degrades to the window's left
+    edge; the sweep segment still draws to sweep + one bar."""
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    ghost_anchor = ts(start - timedelta(minutes=15 * 10))   # before the window
+    sweep = ts(start + timedelta(minutes=15 * 4))
+
+    record = _snapshot([
+        _level("ts", type="TS LOW (BULLISH)", price=98.0,
+               time=sweep, start_time=ghost_anchor),
+    ]).levels[0]
+    bars = _series(bars_rows(40, start=ts(start)))
+    ray_start, ray_end = Renderer._span(record, bars)
+
+    assert ray_start == 0                          # clamped to the left edge
+    assert ray_end == bars.index_at_or_before(sweep) + 1
+
+
+# --------------------------------------------------------------------------- #
+# The paper theme: monochrome candles and lines, with restrained zone fills.
 # --------------------------------------------------------------------------- #
 
 def _style_of(family, *, type="BULLISH", status=None):
@@ -699,23 +743,43 @@ def _style_of(family, *, type="BULLISH", status=None):
     return Renderer._level_style(lv, False, 4150.0)
 
 
-def test_the_paper_theme_reserves_red_for_crt_alone():
+def test_paper_theme_uses_monochrome_candles_and_indicator_lines():
     from agentic.models import LevelStatus
 
     import agentic.renderer as paper
 
     assert paper._BG == "#ffffff"
-    assert paper._UP == "#ffffff" and paper._DOWN == "#111111"
-    # The price hairline/chip is neutral ink — nothing else claims red.
-    assert paper._PRICE == "#16181d"
-    # The one accent, full strength while live; settled at the history alpha.
-    assert _style_of("crt", type="BEARISH (CLASSIC)") == ("#c1121f", 1.0)
-    assert _style_of("crt", type="BEARISH (CLASSIC)",
-                     status=LevelStatus.FILLED) == ("#c1121f", 0.35)
-    # Every other family — zones included — paints in the black ink.
-    for family in ("bos", "ts", "liquidity", "fvg", "ob", "ifvg"):
+    assert paper._UP == "#ffffff" and paper._DOWN == "#000000"
+    assert paper._CANDLE_EDGE == "#000000"
+    assert paper._PRICE == "#000000"
+    assert paper._LEVEL_LINEWIDTH == 1.0  # pixel target, converted using renderer DPI
+    assert paper._WICK_LINEWIDTH == 1.0
+    assert paper._LEVEL_STYLE == "-"
+    assert paper._TAG_FONTSIZE == 8
+    assert Renderer(dpi=100)._line_width(1.0) == approx(0.72)
+    assert Renderer(dpi=200)._line_width(1.0) == approx(0.36)
+    for family in ("crt", "bos", "ts", "liquidity", "fvg", "ob", "ifvg"):
         color, alpha = _style_of(family)
-        assert (color, alpha) == ("#16181d", 1.0), family
-    # Broken is the visible gray, never a hue.
-    assert _style_of("crt", type="BEARISH (CLASSIC)",
-                     status=LevelStatus.BROKEN) == ("#7a828e", 1.0)
+        assert (color, alpha) == ("#000000", 1.0), family
+    assert _style_of("bos", status=LevelStatus.BROKEN) == ("#7a828e", 1.0)
+    assert _style_of("crt", status=LevelStatus.FILLED) == ("#000000", 0.35)
+
+
+def test_zone_styles_match_the_requested_paper_chart():
+    import agentic.renderer as paper
+
+    assert paper.Renderer._zone_style("ob") == (
+        "#ffe56b", 0.22, "#000000", 0.16,
+    )
+    assert paper.Renderer._zone_style("fvg") == (
+        "#000000", 0.08, None, 0.0,
+    )
+    assert paper.Renderer._zone_style("ifvg") == (
+        "#000000", 0.08, None, 0.0,
+    )
+
+
+def test_agent_chart_keeps_eight_bars_of_clear_space_on_the_right():
+    from agentic.renderer import Renderer
+
+    assert Renderer._x_limits(50) == (-1, 57)
