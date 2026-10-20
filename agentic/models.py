@@ -43,11 +43,18 @@ DEFAULT_FAMILIES: List[str] = [
 #: reachable with ``set_view(families=...)``; they are off, not gone.
 DEFAULT_VIEW_FAMILIES: List[str] = ["crt"]
 
-#: The life-cycle dial for perception ``("all", "live")``. ``"live"`` — the
-#: default — keeps only fresh / unmitigated / unbroken levels (per family:
-#: TS alive, CRT undistributed, FVG fresh, OB unmitigated, IDM unswept),
-#: which is exactly ``LevelStatus.LIVE``; ``"all"`` shows dead history too.
-STATUS_FILTERS: List[str] = ["all", "live"]
+#: The life-cycle dial for perception ``("default", "all", "live")``.
+#: ``"default"`` — the shipped default — hides dead levels **only** for the
+#: :data:`FRESH_ONLY_FAMILIES` (``ts``/``crt``) and keeps every state for every
+#: other family; ``"live"`` keeps only fresh / unmitigated / unbroken levels
+#: everywhere (per family: TS alive, CRT undistributed, FVG fresh, OB
+#: unmitigated, IDM unswept); ``"all"`` shows dead history too.
+STATUS_FILTERS: List[str] = ["default", "all", "live"]
+
+#: The families whose dead history the *default* perception hides — exactly
+#: ``"live"`` for them, and pass-through for everyone else (2026-10-20 spec
+#: amendment: fresh-only-at-default is a TS/CRT policy, not a global one).
+FRESH_ONLY_FAMILIES: List[str] = ["ts", "crt"]
 
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}
 
@@ -226,11 +233,12 @@ class View(Serde):
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_VIEW_FAMILIES))
-    #: Which life-cycle states the agent perceives: ``"live"`` (the default —
-    #: fresh/unmitigated/unbroken, i.e. ``LevelStatus.LIVE``) or ``"all"``.
+    #: Which life-cycle states the agent perceives: ``"default"`` (fresh-only
+    #: for TS/CRT via ``FRESH_ONLY_FAMILIES``, everything for the rest),
+    #: ``"live"`` (strictly fresh/unmitigated/unbroken everywhere) or ``"all"``.
     #: Validated by ``Store.set_view``; the renderer's ray budget is spent on
     #: signal, not history, until the agent asks to see the dead ones.
-    status_filter: str = "live"
+    status_filter: str = "default"
     bars: int = 180
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the

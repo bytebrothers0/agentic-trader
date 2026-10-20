@@ -79,9 +79,10 @@ TOOL_NAMES: Tuple[str, ...] = (
 TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
                 "offset (re-render a past window), layout/panes (set layout=split with "
-                "exactly 2 panes for two stacked timeframes), status_filter ('live' "
-                "= fresh/unmitigated/unbroken only — the default; 'all' = dead "
-                "history too), tags, annotations. Unknown dials are refused.",
+                "exactly 2 panes for two stacked timeframes), status_filter ('default' "
+                "= fresh TS/CRT only, all states for other families; 'live' = strictly "
+                "fresh everywhere; 'all' = dead history too), tags, annotations. "
+                "Unknown dials are refused.",
     "render": "Re-render the store's view + pins after a change; returns image_path, "
               "render_id and manifest.",
     "level_lookup": "Exact numbers for a tag you saw, a level_key from a previous turn, a "
@@ -116,9 +117,10 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "families": {"type": "array", "items": {"type": "string"}},
             "status_filter": {
                 "type": "string",
-                "enum": ["all", "live"],
-                "description": "'live' (default) = only fresh/unmitigated/unbroken "
-                               "levels; 'all' = dead history too",
+                "enum": ["default", "all", "live"],
+                "description": "'default' (fresh TS/CRT only, everything for other "
+                               "families), 'live' (strictly fresh/unmitigated/"
+                               "unbroken everywhere), 'all' (dead history too)",
             },
             "bars": {"type": "integer", "minimum": MIN_BARS, "maximum": MAX_BARS},
             "offset": {"type": "integer", "minimum": 0, "maximum": MAX_OFFSET},
@@ -332,7 +334,7 @@ def resolve_pins(
     families = list(view.families) or None
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
-    dial = str(getattr(view, "status_filter", "all") or "all").lower()
+    dial = str(getattr(view, "status_filter", "default") or "default").lower()
     cache = cache if cache is not None else {}
 
     def _fetch(timeframe: str, status_filter: str) -> FeedSnapshot:
@@ -355,7 +357,10 @@ def resolve_pins(
         if source is None:
             source = _fetch(timeframe, dial)
         level = _resolve_pin(source, sub)
-        if level is None and dial == "live":
+        if level is None and dial != "all":
+            # A pin may deliberately name a level the filter hides (dead ts/crt
+            # under "default", anything dead under "live"); resolve it from the
+            # unfiltered snapshot so the pin never silently vanishes.
             level = _resolve_pin(_fetch(timeframe, "all"), sub)
         if level is not None:
             resolved.append(level)
@@ -394,7 +399,7 @@ def render_current(
     families = list(view.families) or None
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
-    status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
+    status_filter = str(getattr(view, "status_filter", "default") or "default").lower()
     thesis = store.data.thesis.levels_of_interest
     pane_timeframes = [str(tf) for tf in (view.panes or [])]
     if view.layout is Layout.SPLIT and len(pane_timeframes) > 1:
@@ -472,7 +477,7 @@ def _render_split(
 ) -> RenderResult:
     """The two-pane perception: one snapshot/bars pair per pane, pins per pane."""
     view = store.data.view
-    dial = str(status_filter or "all").lower()
+    dial = str(status_filter or "default").lower()
     pane_snapshots = {
         tf: _fetch_snapshot(feed, cache, symbol, tf, families, bars, offset, status_filter=dial)
         for tf in pane_timeframes
@@ -492,8 +497,9 @@ def _render_split(
                 _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset, status_filter=dial),
                 sub,
             )
-        if level is None and dial == "live":
-            # A pin may deliberately name a dead level; resolve it from the
+        if level is None and dial != "all":
+            # A pin may deliberately name a level the filter hides (dead ts/crt
+            # under "default", anything dead under "live"); resolve it from the
             # unfiltered snapshot so the pin never silently vanishes.
             level = _resolve_pin(
                 _fetch_snapshot(feed, cache, symbol, pin_tf, families, bars, offset, status_filter="all"),
@@ -669,7 +675,7 @@ class ToolRegistry:
         bars = int(view.bars)
         offset = int(view.offset or 0)
         tf = str(timeframe)
-        status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
+        status_filter = str(getattr(view, "status_filter", "default") or "default").lower()
         key = _cache_key(tf, bars, offset, status_filter)
         if key not in self._snapshots:
             self._snapshots[key] = self._feed.snapshot(

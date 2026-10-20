@@ -650,19 +650,18 @@ def test_render_current_resolves_pins_and_thesis_levels(tmp_path):
 
 
 def test_a_pinned_dead_level_still_draws_under_the_fresh_filter(tmp_path):
-    # Spec 2026-10-20: the view's default status_filter="live" hides dead levels,
-    # but a pin may deliberately name one — pins are exempt from the status
-    # filter the way they are exempt from the per-family ray budget.
+    # Spec 2026-10-20: the default perception hides dead TS/CRT levels, but a
+    # pin may deliberately name one — pins are exempt from the status filter
+    # the way they are exempt from the per-family ray budget. A dead *ts* level
+    # is exactly what "default" hides, so the "all" retry must fire.
     clock = FakeClock(at(6, 0))
-    store = _store(tmp_path, clock)     # view.status_filter is the default "live"
+    store = _store(tmp_path, clock)     # view.status_filter is the default "default"
     dead = _level(
-        "fvg",
-        type="FVG (BULLISH)",
+        "ts",
+        type="TS HIGH (BEARISH)",
         price=4160.0,
         time=ts(at(6, 30)),
-        end_kind="mitigated",
-        box_top=4162.0,
-        box_bottom=4158.0,
+        end_kind="invalidated",
     )
     key = _snapshot([dead], timeframe="M15").levels[0].level_key
     stub = FeedStub(price=4155.0, atr=5.0)

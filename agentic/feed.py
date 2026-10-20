@@ -31,7 +31,13 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from agentic.models import LevelStatus, Serde, make_level_key, validate_timeframe
+from agentic.models import (
+    FRESH_ONLY_FAMILIES,
+    LevelStatus,
+    Serde,
+    make_level_key,
+    validate_timeframe,
+)
 
 # --------------------------------------------------------------------------- #
 # Family vocabulary
@@ -425,28 +431,45 @@ def status_of(level: Mapping[str, Any]) -> LevelStatus:
 #: The perception dial values (mirrored from ``agentic.models.STATUS_FILTERS``):
 #: ``"all"`` keeps every life-cycle state, ``"live"`` keeps only fresh /
 #: unmitigated / unbroken levels — the per-family phrase already encoded in
-#: :class:`LevelStatus`.
-FILTER_STATUS_VALUES = ("all", "live")
+#: :class:`LevelStatus` — and ``"default"`` is family-aware: live-only for the
+#: :data:`FRESH_ONLY_FAMILIES`, pass-through for everyone else.
+FILTER_STATUS_VALUES = ("default", "all", "live")
+
+#: Mirrored from ``agentic.models.FRESH_ONLY_FAMILIES``: the families whose dead
+#: history the *default* perception hides (2026-10-20 spec amendment — the
+#: fresh-only-at-default policy is TS/CRT, not global).
+_FRESH_ONLY_FAMILIES = frozenset(FRESH_ONLY_FAMILIES)
 
 
 def filter_status(snapshot: "FeedSnapshot", status_filter: str) -> "FeedSnapshot":
     """A snapshot limited to the requested life-cycle states (post-parse, pure).
 
-    ``"live"`` drops dead levels *before* the renderer's ray budget is spent, so
-    a busy family's history never crowds out its fresh signal. Applied with
-    ``dataclasses.replace`` — the parse itself stays untouched, and
-    ``current_price``/``atr`` ride along unchanged. The watchdog deliberately
-    does NOT use this: subscription evaluation needs state history for edge
-    triggers.
+    ``"all"`` is a pass-through. ``"live"`` drops dead levels *before* the
+    renderer's ray budget is spent, so a busy family's history never crowds out
+    its fresh signal. ``"default"`` does that only for TS and CRT — the
+    gravedust-heavy sweep detectors — and keeps every state (fresh *and* dead)
+    for all other families. Applied with ``dataclasses.replace`` — the parse
+    itself stays untouched, and ``current_price``/``atr`` ride along unchanged.
+    The watchdog deliberately does NOT use this: subscription evaluation needs
+    state history for edge triggers.
     """
-    value = str(status_filter or "all").lower()
+    value = str(status_filter or "default").lower() or "default"
+    if value not in FILTER_STATUS_VALUES:
+        raise ValueError("status_filter must be 'default', 'all' or 'live'")
     if value == "all":
         return snapshot
-    if value != "live":
-        raise ValueError("status_filter must be 'all' or 'live'")
+    if value == "live":
+        return replace(
+            snapshot,
+            levels=[rec for rec in snapshot.levels if rec.status is LevelStatus.LIVE],
+        )
     return replace(
         snapshot,
-        levels=[rec for rec in snapshot.levels if rec.status is LevelStatus.LIVE],
+        levels=[
+            rec
+            for rec in snapshot.levels
+            if rec.family not in _FRESH_ONLY_FAMILIES or rec.status is LevelStatus.LIVE
+        ],
     )
 
 

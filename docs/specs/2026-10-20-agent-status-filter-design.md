@@ -43,3 +43,23 @@ vision surface were consumed by history, not signal.
 Per-render `status=` param (weaker: a preference that doesn't persist, chosen
 against); store root schema change (the dial lives inside `View`, precedent
 `offset`); any change to the propose-only discipline.
+
+## Amendment (same day, user correction)
+
+The shipped default is **not** a fresh-only policy for every family — it is
+**TS/CRT-only**. The user's correction: *"these indicators should be set to
+fresh only — that's the TS and CRT indicators only."* So:
+
+- A third dial value **`"default"`** (the new shipped `View.status_filter`)
+  hides dead levels **only** for `FRESH_ONLY_FAMILIES = ("ts", "crt")` and
+  keeps every state for every other family — on the live XAUUSDm M15 window
+  that day: 443 levels under `"all"` → 323 under `"default"` (108 dead TS +
+  12 dead CRT dropped; sr/qm/idm/bos/fvg/ob deads all kept).
+- `"live"` keeps its original meaning — strictly fresh everywhere — as the
+  agent's full-control option.
+- The pin retry fires whenever the dial can hide a level (`dial != "all"`),
+  not only under `"live"`: a pinned dead TS must survive the default too.
+- Legacy stores that hold the one-commit-old shipped `"live"` keep that value
+  on load — persisted agent settings are never silently rewritten; one
+  `set_view(status_filter="default")` restores the operator's intended
+  default.
