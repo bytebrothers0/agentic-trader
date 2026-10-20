@@ -777,19 +777,29 @@ def test_idm_draws_its_full_life_and_fresh_ids_get_the_plus3():
     assert Renderer._span(fresh, bars) == (5, 11)  # default span (3) + the +3
 
 
-def test_qm_rays_get_the_plus3_expansion():
+def test_qm_draws_the_broken_twice_arc_plus_five():
     start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
     formed = ts(start + timedelta(minutes=15 * 5))
-    broke = ts(start + timedelta(minutes=15 * 20))
+    broke = ts(start + timedelta(minutes=15 * 10))     # the QM birth candle
     bars = _series(bars_rows(40, start=ts(start)))
 
-    dead = _snapshot([_level("qm", type="QM (BULLISH)", price=100.0,
-                             time=formed, end_time=broke, end_kind="mitigated")]).levels[0]
-    assert Renderer._span(dead, bars) == (5, 24)   # event bar (20) + 4
+    # Primary payload form: break_time = the second break. The arc is
+    # origin -> second break -> +5, whatever the lifecycle did after.
+    live = _snapshot([_level("qm", type="FTQM (BULLISH)", price=100.0,
+                             time=formed, break_time=broke,
+                             end_kind="active")]).levels[0]
+    assert Renderer._span(live, bars) == (5, 15)       # break (10) + 5
 
-    fresh = _snapshot([_level("qm", type="QM (BULLISH)", price=101.0,
-                              time=formed, end_kind="active")]).levels[0]
-    assert Renderer._span(fresh, bars) == (5, 11)  # default span (3) + the +3
+    # Older stores without break_time fall back to the lifecycle event +5.
+    legacy = _snapshot([_level("qm", type="FTQM (BULLISH)", price=100.0,
+                               time=formed, end_time=ts(start + timedelta(minutes=15 * 20)),
+                               end_kind="mitigated")]).levels[0]
+    assert Renderer._span(legacy, bars) == (5, 25)     # event (20) + 5
+
+    # Neither -> the open span (+3).
+    bare = _snapshot([_level("qm", type="FTQM (BULLISH)", price=100.0,
+                             time=formed, end_kind="active")]).levels[0]
+    assert Renderer._span(bare, bars) == (5, 11)
 
 
 def test_trendline_runs_pivot_to_end_uncapped_with_its_sloped_price():
@@ -815,6 +825,21 @@ def test_bos_labels_carry_the_structural_kind_name():
     assert _bos_label(bos) == "BOS"
     assert _bos_label(ibos) == "I-BOS"
     assert _bos_label(ichoch) == "I-CHoCH"
+
+
+def test_sr_spans_its_full_life_and_fresh_gets_the_dashboard_pose():
+    start = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+    formed = ts(start + timedelta(minutes=15 * 5))
+    broke = ts(start + timedelta(minutes=15 * 20))
+    bars = _series(bars_rows(40, start=ts(start)))
+
+    dead = _snapshot([_level("sr", type="SUPPORT", price=100.0,
+                             time=formed, end_time=broke, end_kind="broken")]).levels[0]
+    assert Renderer._span(dead, bars) == (5, 20)   # held until the break bar
+
+    fresh = _snapshot([_level("sr", type="RESISTANCE", price=102.0,
+                              time=formed, end_kind="active")]).levels[0]
+    assert Renderer._span(fresh, bars) == (5, 13)  # the dashboard's open +8 pose
 
 
 # --------------------------------------------------------------------------- #

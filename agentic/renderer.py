@@ -711,12 +711,14 @@ class Renderer:
         TS and CRT are sweep-event rays — anchor → sweep → +4 bars right (the
         original three-step pose plus the operator's +3 expansion; for CRT the
         payload convention is INVERTED: ``time`` is the anchor, ``start_time``
-        the manipulation bar). IDM dead levels draw the full formation →
-        swept/broken bar, uncapped (dashboard parity); fresh ones keep the
-        open span plus the +3 expansion. QM gets the same +3 expansion past
-        its dashboard pose. Trendlines run pivot → end bar exactly — a sloped
-        segment, never capped. BOS reaches its close-through candle; zone
-        boxes keep their full formation→fill span.
+        the manipulation bar). QM is the broken-twice arc: origin (left
+        shoulder) → the second break → +5 bars right. IDM dead levels draw the
+        full formation → swept/broken bar, uncapped (dashboard parity); fresh
+        ones keep the open span plus the +3 expansion. S/R holds until it
+        dies: dead levels run formation → their life-event bar exactly, fresh
+        ones the dashboard's open 8-bar pose. Trendlines run pivot → end bar
+        exactly — a sloped segment, never capped. BOS reaches its
+        close-through candle; zone boxes keep their full formation→fill span.
         """
         count = max(len(bars.times), 1)
 
@@ -791,17 +793,39 @@ class Renderer:
                     return start, min(event, count - 1)
             end = min(start + _SPAN_BARS + 3, count - 1)
         elif level.family == "qm":
-            # QM: the same +3 expansion past its dashboard pose. Dead:
-            # one step past the event bar, then +3. Live: the default open
-            # span, then +3.
+            # The QM story (the operator's rule): a support/resistance that
+            # was broken TWICE. The ray tells that arc — from where the
+            # original S/R formed (payload ``time`` = the origin/left
+            # shoulder) to the second break (``break_time`` = the QM birth
+            # candle), then +5 bars right. Older stores without ``break_time``
+            # fall back to the lifecycle event bar +5; a level with neither
+            # keeps the open span (+3).
+            break_ts = (level.attrs or {}).get("break_time")
+            event = _idx(break_ts)
+            if event < 0 and level.changed_at is not None and level.changed_at > (
+                level.formed_at or _EPOCH
+            ):
+                event = _idx(level.changed_at)
+            if event >= start:
+                end = min(event + 5, count - 1)
+            else:
+                end = min(start + _SPAN_BARS + 3, count - 1)
+        elif level.family == "sr":
+            # Dashboard parity, IDM-style: a dead S/R draws formation -> its
+            # life-event bar exactly (the body break, or the first wick touch
+            # for a merely touched level), uncapped — an S/R is a line that
+            # HELD until it didn't. A fresh one keeps the dashboard's open
+            # 8-bar pose.
             if level.changed_at is not None and level.changed_at > (
                 level.formed_at or _EPOCH
             ):
                 event = _idx(level.changed_at)
-                end = (min(event + 4, count - 1) if event >= 0
-                       else min(start + _SPAN_BARS + 3, count - 1))
+                if event >= 0:
+                    end = min(max(event, start + 1), count - 1)
+                else:
+                    end = min(start + 8, count - 1)
             else:
-                end = min(start + _SPAN_BARS + 3, count - 1)
+                end = min(start + 8, count - 1)
         elif level.changed_at is not None and level.changed_at > (
             level.formed_at or _EPOCH
         ):

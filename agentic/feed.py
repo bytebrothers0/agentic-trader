@@ -135,6 +135,9 @@ _ATTR_KEYS: tuple = (
     # Trendline slope truth: the segment's end-bar price, so the renderer can
     # draw the pivoted sloped line instead of a horizontal stub.
     "price_end",
+    # QM's second break (the QM birth candle): the level broken twice. The
+    # render's story arc runs origin -> this bar -> +5 bars right.
+    "break_time",
     "range_high",
     "range_low",
     "target",

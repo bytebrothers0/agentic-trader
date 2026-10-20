@@ -249,6 +249,51 @@ def _start_agent_service():
         print(f"Agent service not started: {exc}")
 
 
+def sr_render_levels(base_levels):
+    """Reduce the CandleAnalyzer output to the levels worth DRAWING.
+
+    The raw detector emits every V/A candle pair (≈ one level per candle),
+    which floods the chart's ray budget with ordinary body closes. Three
+    rules select the real walls:
+
+      1. GAP SNR are hidden zones (the methodology's own words) — never drawn.
+      2. The web 2-use rule: a level with two wick touches is used up — retire it.
+      3. A broken S/R whose body-close ALSO spawned its SBR/RBS successor at
+         the same price is already redrawn by that successor — skip the corpse.
+
+    What remains is then *clustered* by price proximity (0.05% relative, the
+    same join tolerance QM uses): many V-pair closes land pennies apart, and
+    seven copies of one wall draws as seven meaningless lines. Each cluster
+    sends one representative — an alive level over a dead one, newest first.
+    Pure: detectors stay untouched for their other consumers (the QM block
+    re-runs ``detect_all`` unfiltered).
+    """
+    flipped_sources = {
+        id(c.derived_from) for c in base_levels if c.derived_from is not None
+    }
+    kept = [
+        lv for lv in base_levels
+        if not lv.is_gap
+        and lv.touch_count < 2
+        and id(lv) not in flipped_sources
+    ]
+
+    clusters: list = []
+    for lv in sorted(kept, key=lambda x: (x.price, x.candle_index)):
+        if clusters and abs(lv.price - clusters[-1][0].price) <= (
+            0.0005 * max(abs(lv.price), abs(clusters[-1][0].price), 1e-9)
+        ):
+            clusters[-1].append(lv)
+        else:
+            clusters.append([lv])
+
+    representatives = []
+    for cluster in clusters:
+        alive = [x for x in cluster if x.state != LevelState.BROKEN]
+        representatives.append(max(alive or cluster, key=lambda x: x.candle_index))
+    return representatives
+
+
 @app.get("/api/symbols")
 def get_symbols():
     """Return all available MT5 broker symbols."""
@@ -485,6 +530,10 @@ def get_indicators(
                     "price": round(qm.price, 3),
                     "state": qm.state.value.upper(),
                     "time": int(times_unix[t_idx]),
+                    # Where the level was broken the SECOND time (the QM birth
+                    # candle): the render's story arc is origin -> this bar
+                    # (+5 bars right), per the operator's span rule.
+                    "break_time": int(times_unix[min(qm.break_candle_index, len(times_unix) - 1)]),
                     "box_high": round(qm.box_high, 3),
                     "box_low": round(qm.box_low, 3),
                     "end_time": _end_time(qm.end_candle_index),

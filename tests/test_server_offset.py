@@ -187,3 +187,43 @@ def test_import_server_keeps_37_routes():
     import server
 
     assert len(server.app.routes) == 37
+
+
+def test_sr_render_levels_keeps_real_walls_only():
+    """The V/A detector emits ~one level per candle. The render layer reduces
+    that to real walls: no gap/hidden zones, no used-up (2-touch) levels, no
+    broken corpse alongside its own SBR/RBS successor, and one representative
+    per 0.05% price cluster (alive wins, then newest)."""
+    from indicators.candle_analyzer import CandleLevel, LevelState, LevelType
+    import server
+
+    def _lv(kind, idx, price, state=LevelState.FRESH, gap=False, touches=0,
+            derived_from=None):
+        return CandleLevel(
+            level_type=kind, price=price, candle_index=idx,
+            candle_time=pd.Timestamp("2026-10-19 10:00", tz="UTC")
+            + pd.Timedelta(minutes=15 * idx),
+            state=state, is_gap=gap, touch_count=touches,
+            derived_from=derived_from,
+        )
+
+    corpse = _lv(LevelType.SUPPORT, 0, 100.0, LevelState.BROKEN)
+    flip = _lv(LevelType.SBR, 2, 100.0, derived_from=corpse)            # redraws it
+    hidden = _lv(LevelType.SUPPORT, 3, 101.0, gap=True)                 # hidden zone
+    used_up = _lv(LevelType.RESISTANCE, 4, 105.0, touches=2)            # web 2-use
+    wall_a = _lv(LevelType.RESISTANCE, 6, 110.000)
+    wall_b = _lv(LevelType.RESISTANCE, 8, 110.005)                      # same wall
+    wall_c = _lv(LevelType.RESISTANCE, 9, 110.008, LevelState.UNFRESH)  # alive twin
+    far = _lv(LevelType.SUPPORT, 11, 105.0)                             # distinct wall
+
+    got = server.sr_render_levels(
+        [corpse, flip, hidden, used_up, wall_a, wall_b, wall_c, far])
+    # The corpse/hidden/used-up drop; the flip survives (it IS the redrawn
+    # wall); 110.000/110.005/110.008 cluster to one alive representative.
+    # Representatives come back in cluster (price) order.
+    assert got == [flip, far, wall_c]
+
+    # An all-dead cluster sends the newest member.
+    d1 = _lv(LevelType.SUPPORT, 1, 90.0, LevelState.BROKEN)
+    d2 = _lv(LevelType.RBS, 5, 90.000, LevelState.BROKEN)
+    assert server.sr_render_levels([d1, d2]) == [d2]
