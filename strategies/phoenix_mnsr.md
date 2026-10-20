@@ -27,20 +27,39 @@
 - **1 pip = 0.10** of XAUUSD price. "35 pips" = **3.50** in chart units.
 - All tolerances below are in chart units; convert pips where stated.
 
-## The hard gates (skip the setup if ANY fails)
+## Timeframes & layout defaults
 
-1. Fewer than **2 consecutive same-direction BOS** on M15 → no reversal hunt.
+- **Recommended ladder: H1 (context) → M15 (setup engine) → M5/M1 (execution).**
+- These are **defaults, not law.** This strategy is timeframe-agnostic in kind:
+  the *chain* (BOS sequence → sweep → shift → premium retracement → trigger)
+  must hold on **whichever timeframe you are reading** — everything else
+  (the literal numbers, the watch params' `timeframe` fields, the pane count)
+  adapts to the market's rhythm. A slow day may need H4 for context; a fast one
+  may finish its sweep-and-shift inside M15 and want M1 for the trigger. When
+  you move off the recommended ladder, say why in a note.
+- **Prefer the single layout.** One pane is your default perception; it keeps
+  the token budget lean and the reading honest. Go `split` only when a two-frame
+  view genuinely answers the question at hand (checking the setup frame's zone
+  against the execution frame's trigger), and return to single as soon as it
+  can.
+
+## The hard gates (skip the setup if ANY fails — and yes, they are judgment calls when marginal)
+
+1. Fewer than **2 consecutive same-direction BOS** on your setup timeframe
+   (recommended: M15) → no reversal hunt.
 2. **No sweep**: the liquidity pool beyond the trend was not pierced-and-rejected
    (a body close beyond the pool is a breakout, not a sweep — cancel).
-3. **No MSS**: no M15 CHoCH **body close** through the swing that preceded the
-   sweep. A wick through is retest evidence, not a shift.
-4. **MSS in the middle of nowhere**: the MSS must sit at/near an H1-level zone
-   (an H1 SR/OB/OCL/liquidity extreme). Otherwise it is noise — overrule it.
+3. **No MSS**: no CHoCH **body close** through the swing that preceded the sweep.
+   A wick through is retest evidence, not a shift.
+4. **MSS in the middle of nowhere**: the MSS must sit at/near a context-timeframe
+   zone (an H1-level SR/OB/OCL/liquidity extreme). Otherwise it is noise —
+   overrule it.
 5. **Wrong side of the range**: the entry POI must sit in **premium** (beyond 50%
    of the sweep→MSS range, short-side) or **discount** (below 50%, long-side).
    A trigger inside the equilibrium band (45%–55%) is skipped.
-6. **M1/M5 without M15**: an M1/M5 trigger while M15 still trends against it is a
-   false signal — overrule it, always.
+6. **Execution frame disagreement**: a trigger on a lower frame (M5/M1) while
+   your setup frame still trends against it is a false signal — overrule it.
+   This is about the *frames' agreement*, not their names.
 7. **SL budget**: stop goes just beyond the sweep wick tip. If the required
    distance exceeds **35 pips (3.50)**, **skip the setup** — do not widen the
    stop, do not move the entry; skip. Target stop ≈ 35 pips or less, sized by
@@ -48,26 +67,35 @@
 
 ## Phase 0 — Orient (every fresh turn)
 
-Open the working cockpit before reasoning about anything:
+Open the working view before reasoning about anything. **Single pane, the
+recommended setup timeframe (M15); switch frames freely as the market dictates:**
 
 ```json
-set_view { "timeframe": "M15", "layout": "split", "panes": ["M15", "M5"],
+set_view { "timeframe": "M15", "layout": "single",
            "families": ["bos", "ts", "idm", "liquidity", "ob", "fvg", "ocl", "sr"],
            "bars": 160 }
 ```
 
-M15 is your setup engine (top pane); M5 is clearance/execution (bottom pane). If
-the story needs a wider lens, look at H1 with an offset window before judging:
+When you need the two-frame check (Phase 5 requires it for the trigger's frame
+agreement), borrow a split briefly and give it back:
 
 ```json
-set_view { "layout": "split", "panes": ["H1", "M15"], "bars": 180 }
+set_view { "layout": "split", "panes": ["M15", "M5"] }
 ```
 
-Then orient the HTF context (Phase 1) before touching any M-numbered bar.
+For the wider HTF lens this is honestly a single `M15`→`H1` swap away — a
+context read does not usually need both frames on screen at once:
 
-## Phase 1 — H1 bias & pools (context, not the setup)
+```json
+set_view { "timeframe": "H1", "layout": "single", "bars": 180 }
+```
 
-On H1: the trend, the unmitigated zones, and the pools the day owes:
+Then orient the HTF context (Phase 1) before touching any lower-timeframe bar.
+
+## Phase 1 — context timeframe bias & pools (H1 recommended; context, not the setup)
+
+On the context frame: the trend, the unmitigated zones, and the pools the day
+owes. This keeps H1 as the recommended lens, not a rule:
 
 - `level_lookup { "family": "liquidity", "timeframe": "H1" }` — buy-side pools
   above, sell-side pools below. **Pin the relevant pool** so it survives
@@ -90,10 +118,11 @@ buy-side pool at 4194.30; hunting the sweep-then-shift",
              "confidence": 0.4 }
 ```
 
-## Phase 2 — M15: trend established, then the sweep
+## Phase 2 — Setup frame: trend established, then the sweep (M15 recommended)
 
-**Gate 1 — continuous BOS.** Count consecutive same-direction BOS levels on the
-M15 pane. 2–3 in a row = the trend to fade is established; momentum on the last
+**Gate 1 — continuous BOS.** Count consecutive same-direction BOS levels on your
+setup frame (M15 recommended — use whatever frame the trend is actually playing
+out on). 2–3 in a row = the trend to fade is established; momentum on the last
 breakout candle (body well above average) strengthens the read. If fewer than 2:
 
 ```json
@@ -108,20 +137,24 @@ wick tip, because it becomes your entire risk anchor:
 
 ```json
 add_watch { "condition": "level_swept",
-            "params": { "family": "liquidity", "price": 4194.30, "timeframe": "M15" },
+            "params": { "family": "liquidity", "price": 4194.30 },
             "ttl_hours": 36, "one_shot": true,
-            "reason": "phoenix gate 2: TS of the pinned buy-side pool" }
+            "reason": "phoenix gate 2: TS of the pinned buy-side pool (any frame)" }
 ```
+
+(Leaving `timeframe` off the watch params lets the detector's own sweep verdict
+on any frame count — pin the frame you're reading into the params only when you
+want to be frame-specific.)
 
 When the sweep fires: `level_lookup { "level_key": "<ts level_key>" }` → read the
 exact wick extreme → `add_pin` it ("sweep wick tip = invalidation"). If instead
 a candle **closed** beyond the pool and drove on — that is a breakout, not a
 trap: champion the opposite of nothing, cancel the watch, thesis "no setup".
 
-## Phase 3 — M15: the MSS (structure shift)
+## Phase 3 — the MSS (structure shift)
 
 Only a **body close** (CHoCH) through the **most recent swing** that preceded the
-TS kills the defense. Watch for it:
+TS kills the defense — on the same frame the setup lives on. Watch for it:
 
 ```json
 add_watch { "condition": "choch_forms", "params": { "timeframe": "M15", "direction": "bearish" },
@@ -153,30 +186,33 @@ range); you only sell the retracement side of it. Compute the 50% in your head:
 Resolve the POI's exact band, then pin and arm:
 
 ```json
-level_lookup { "family": "ob", "timeframe": "M15" }
+level_lookup { "family": "ob" }
 add_pin { "family": "ob", "level_key": "<poi level_key>",
           "reason": "premium POI: displacement OB at 4188.05, short-side" }
 add_watch { "condition": "price_enters_zone",
             "params": { "low": 4187.85, "high": 4188.25 },
             "ttl_hours": 48, "one_shot": true,
-            "reason": "phoenix gate 4: tap of the premium POI (±2 pips band)" }
+            "reason": "phoenix gate 4: tap of the premium POI (±2 pips band, any frame)" }
 ```
 
-**Inducement clearance (Gate for quality, not existence):** on the M5 pane, an
-`idm` or a minor swing **within reach of the POI must be swept *before* the tap**.
-Without it the POI may still work; with it the setup grades A+. Arm it:
+**Inducement clearance (Gate for quality, not existence):** on your clearance
+frame (M5 recommended), an `idm` or a minor swing **within reach of the POI must
+be swept *before* the tap**. Without it the POI may still work; with it the setup
+grades A+. Arm it:
 
 ```json
 add_watch { "condition": "idm_swept", "params": { "timeframe": "M5" },
-            "ttl_hours": 48, "reason": "phoenix: M5 IDM cleared before the POI tap" }
+            "ttl_hours": 48, "reason": "phoenix: clearance-frame IDM swept before the POI tap" }
 ```
 
-## Phase 5 — Execution: M1/M5 trigger
+## Phase 5 — Execution: the trigger (M1/M5 recommended)
 
-Slide the cockpit to execution when price is near the POI:
+When price is near the POI, slide the view to your execution frame — **single
+pane is fine here**; the frame-agreement check (Gate 6) against the setup frame
+is the one moment a split earns its tokens:
 
 ```json
-set_view { "layout": "split", "panes": ["M5", "M1"],
+set_view { "timeframe": "M1", "layout": "single",
            "families": ["bos", "ts", "idm", "ob", "fvg", "ocl", "sr"], "bars": 180 }
 ```
 
@@ -185,10 +221,10 @@ Valid triggers at the POI (any one):
 1. **Doji at the tap** — entry candle body < **15%** of its range
    (body/range < 0.15), sitting in the premium POI band. Enter at the doji's
    close, or a stop-order plan just beyond the doji's wick.
-2. **Limit at the micro zone** — the bottom edge of a fresh M1 FVG or the OCL of
-   an M1 OB **after** the M5 IDM cleared.
-3. **Squeeze passes** — the last ~5 M1 candles show shrinking ranges into the
-   POI (compression = go; range blasting wider = stand down and re-arm).
+2. **Limit at the micro zone** — the bottom edge of a fresh FVG or the OCL of an
+   OB on the execution frame, **after** the clearance-frame IDM was swept.
+3. **Squeeze passes** — the last ~5 candles show shrinking ranges into the POI
+   (compression = go; range blasting wider = stand down and re-arm).
 
 Anti-overprecision: express the trigger as a **±0.20 (2 pips) band**, not an
 exact touch — "try not to be too accurate, you might miss the ride."
@@ -204,7 +240,7 @@ propose_trade {
   "entry": 4188.05,
   "sl":    4191.60,
   "tp":    4178.40,
-  "invalidation": "M15 close back above the TS wick tip 4190.90",
+  "invalidation": "a setup-frame close back above the TS wick tip 4190.90",
   "confidence": 0.65,
   "provenance": ["<ts level_key>", "<choch level_key>", "<ob level_key>"]
 }
@@ -218,7 +254,8 @@ add_note { "text": "phoenix live: TS 4190.90 · MSS 4185.10 · premium POI 4188.
   pool exists within sane distance, the setup has no reason to exist — skip.
 - **Management plan** (state it in the proposal's `invalidation`/`reason`):
   close 50% at the first major opposing pool → move the remainder to
-  breakeven → trail the runner behind M15 fractal (lower highs / higher lows).
+  breakeven → trail the runner behind the setup frame's fractals (lower
+  highs / higher lows).
 - **Confidence grading**: base 0.45; +0.10 MSS impulse (a displaced body close,
   not a slow grind); +0.10 IDM cleared before the tap; +0.05 per extra confluence
   on the POI (flip, OCL overlap, 50%-wick, TL touch); −0.10 if the POI is the
