@@ -104,11 +104,11 @@ def test_ts_start_time_is_carried_for_the_renderer():
     assert lvl.formed_at is not None
 
 
-def test_status_filter_hides_ts_crt_dead_only_by_default():
-    # The perception dial (2026-10-20 + amendment): "default" drops dead levels
-    # only for TS/CRT — the gravedust-heavy sweep detectors — and keeps every
-    # state for the other families; "live" is strictly fresh everywhere; "all"
-    # is a pass-through. The source snapshot stays intact throughout.
+def test_status_filter_hides_ts_crt_qm_dead_only_by_default():
+    # The perception dial (2026-10-20 + amendments): "default" drops dead levels
+    # only for TS/CRT/QM — the gravedust-heavy sweep/setup detectors — and keeps
+    # every state for the other families; "live" is strictly fresh everywhere;
+    # "all" is a pass-through. The source snapshot stays intact throughout.
     crt_fresh = dict(CRT_LEVEL, type="BEARISH", state="FRESH", end_kind=None)
     crt_dead = dict(CRT_LEVEL, type="BEARISH", state="INVALIDATED", end_kind="invalidated")
     ts_fresh = {"category": "ts", "type": "TS_HIGH (BEARISH)", "price": 4195.0,
@@ -117,8 +117,10 @@ def test_status_filter_hides_ts_crt_dead_only_by_default():
                "state": "INVALIDATED", "end_time": 1792143000, "time": 1792141200}
     fvg_dead = {"category": "fvg", "type": "FVG (BULLISH)", "price": 4186.0,
                 "state": "BROKEN", "time": 1792141200}
+    qm_dead = {"category": "qm", "type": "QM (BULLISH)", "price": 4180.0,
+               "state": "BROKEN", "time": 1792141200}
     snap = parse_payload(
-        _payload([crt_fresh, crt_dead, ts_fresh, ts_dead, fvg_dead]),
+        _payload([crt_fresh, crt_dead, ts_fresh, ts_dead, fvg_dead, qm_dead]),
         symbol="XAUUSDm", timeframe="M15",
     )
 
@@ -126,20 +128,18 @@ def test_status_filter_hides_ts_crt_dead_only_by_default():
     fresh_default = filter_status(snap, "default")
     strictly_live = filter_status(snap, "live")
 
-    assert len(everything.levels) == 5                     # pass-through
-    # "default": the dead CRT and TS dropped, the dead FVG kept
+    assert len(everything.levels) == 6                     # pass-through
+    # "default": the dead CRT, TS and QM dropped, the dead FVG kept
     assert len(fresh_default.levels) == 3
-    assert [l.family for l in fresh_default.levels if l.family in ("ts", "crt")] \
-        == sorted(l.family for l in fresh_default.levels if l.family in ("ts", "crt"))
-    assert all(l.family != "ts" or l.status is LevelStatus.LIVE for l in fresh_default.levels)
-    assert all(l.family != "crt" or l.status is LevelStatus.LIVE for l in fresh_default.levels)
+    assert not any(l.family in ("ts", "crt", "qm") and l.status is not LevelStatus.LIVE
+                   for l in fresh_default.levels)
     assert any(l.family == "fvg" and l.status is LevelStatus.BROKEN for l in fresh_default.levels)
     # "live": a dead level is gone for every family — even the dead FVG
     assert len(strictly_live.levels) == 2
     assert all(l.status is LevelStatus.LIVE for l in strictly_live.levels)
     assert not any(l.family == "fvg" for l in strictly_live.levels)   # the dead fvg dropped
 
-    assert len(snap.levels) == 5                           # the source is untouched
+    assert len(snap.levels) == 6                           # the source is untouched
     assert snap.current_price == everything.current_price == fresh_default.current_price
     with pytest.raises(ValueError):
         filter_status(snap, "fresh")

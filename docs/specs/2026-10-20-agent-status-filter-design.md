@@ -57,9 +57,16 @@ fresh only — that's the TS and CRT indicators only."* So:
   12 dead CRT dropped; sr/qm/idm/bos/fvg/ob deads all kept).
 - `"live"` keeps its original meaning — strictly fresh everywhere — as the
   agent's full-control option.
+- **Second amendment (same day, operator):** QM is added to
+  `FRESH_ONLY_FAMILIES` — `("ts", "crt", "qm")`. Live XAUUSDm M15 all-families
+  window that day: 442 under `"all"` → **263** under `"default"` (59 dead QM —
+  53 broken + 6 filled — now dropped alongside the 108 dead TS and 12 dead
+  CRT; every other family's deads still kept).
 - The pin retry fires whenever the dial can hide a level (`dial != "all"`),
   not only under `"live"`: a pinned dead TS must survive the default too.
 - Legacy stores that hold the one-commit-old shipped `"live"` keep that value
   on load — persisted agent settings are never silently rewritten; one
   `set_view(status_filter="default")` restores the operator's intended
   default.
+- **Third entry in `FRESH_ONLY_FAMILIES` (same day, operator):** **QM** — the
+  shipped `"default"` now drops dead QM alongside dead TS and CRT.

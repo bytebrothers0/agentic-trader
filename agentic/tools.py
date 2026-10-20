@@ -80,9 +80,9 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
                 "offset (re-render a past window), layout/panes (set layout=split with "
                 "exactly 2 panes for two stacked timeframes), status_filter ('default' "
-                "= fresh TS/CRT only, all states for other families; 'live' = strictly "
-                "fresh everywhere; 'all' = dead history too), tags, annotations. "
-                "Unknown dials are refused.",
+                "= fresh TS/CRT/QM only, all states for other families; 'live' = "
+                "strictly fresh everywhere; 'all' = dead history too), tags, "
+                "annotations. Unknown dials are refused.",
     "render": "Re-render the store's view + pins after a change; returns image_path, "
               "render_id and manifest.",
     "level_lookup": "Exact numbers for a tag you saw, a level_key from a previous turn, a "
@@ -118,7 +118,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "status_filter": {
                 "type": "string",
                 "enum": ["default", "all", "live"],
-                "description": "'default' (fresh TS/CRT only, everything for other "
+                "description": "'default' (fresh TS/CRT/QM only, everything for other "
                                "families), 'live' (strictly fresh/unmitigated/"
                                "unbroken everywhere), 'all' (dead history too)",
             },

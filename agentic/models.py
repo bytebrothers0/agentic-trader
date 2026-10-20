@@ -52,9 +52,10 @@ DEFAULT_VIEW_FAMILIES: List[str] = ["crt"]
 STATUS_FILTERS: List[str] = ["default", "all", "live"]
 
 #: The families whose dead history the *default* perception hides — exactly
-#: ``"live"`` for them, and pass-through for everyone else (2026-10-20 spec
-#: amendment: fresh-only-at-default is a TS/CRT policy, not a global one).
-FRESH_ONLY_FAMILIES: List[str] = ["ts", "crt"]
+#: ``"live"`` for them, and pass-through for everyone else. TS and CRT per the
+#: 2026-10-20 spec amendment; QM added later the same day per the operator:
+#: the three setups whose history piles the ray budget with gravedust.
+FRESH_ONLY_FAMILIES: List[str] = ["ts", "crt", "qm"]
 
 VALID_BIAS = {"bullish", "bearish", "neutral", "none"}
 
