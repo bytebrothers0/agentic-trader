@@ -22,8 +22,9 @@ ob_detector.py — Order Blocks + Breaker Blocks (web Alchemist math).
          boundary was body-closed-through BEFORE the zone's birth (state
          invalidated) does not count — the fakeout had already gone real.
     FS   "False Sweep" origin: the origin candle's body CLOSED THROUGH the
-         preceding `sweep_window`-bar standing extreme, and a later candle's
-         body reclaimed back inside at or before the birth bar. Both reads
+         preceding `sweep_window`-bar standing extreme, and the IMMEDIATELY
+         NEXT candle's body reclaimed back inside — the strict two-candle
+         mirror of a two-candle TS: the lie, then the response. Both reads
          use only bars up to `birth` — nothing the market had not yet shown.
     (OS  wick-grab of the previous bar's extreme remains the base
          `_has_sweep` validity check; TS/FS layer on top of it.)
@@ -115,7 +116,8 @@ class OBDetector:
     classify_sweeps : bool
         Tag each zone's origin with its sweep family: "TS" (Turtle Soup —
         wick-swept pool via TSDetector) or "FS" (False Sweep — body close
-        through a standing pool reclaimed by the birth bar). Metadata only.
+        through a standing pool reclaimed by the next candle's body, the
+        strict two-candle mirror). Metadata only.
         Default True.
     sweep_window : int
         Bars before the origin candle that define the "standing pool" a
@@ -363,8 +365,9 @@ class OBDetector:
              boundary was body-closed-through before the zone's birth (state
              invalidated) does not count — the fakeout had gone real.
         FS — local: the origin candle's body CLOSED THROUGH the standing
-             extreme of the `sweep_window` bars before it, and a later
-             candle's body reclaimed back inside at or before the birth bar.
+             extreme of the `sweep_window` bars before it, and the
+             IMMEDIATELY NEXT candle's body reclaimed back inside (the
+             strict two-candle mirror of a two-candle TS: lie, response).
         TS wins when both shapes exist. Every read uses bars <= birth —
         nothing the market had not yet shown when the zone was born.
         """
@@ -425,34 +428,30 @@ class OBDetector:
 
     def _false_sweep(self, loc: int, birth: int, bullish: bool):
         """False-sweep origin: the origin candle's body closed through the
-        standing extreme of the bars before it (a 'breakout' body), then a
-        candle by the birth bar reclaimed with its body back inside.
+        standing extreme of the bars before it (a 'breakout' body), and the
+        IMMEDIATELY NEXT candle's body reclaimed back inside — the strict
+        two-candle mirror of a two-candle TS: the lie, then the response.
         Returns the swept pool level, or None. The standing level comes
-        strictly from bars before the origin candle, and the reclaim from
-        bars at/before birth — no look-ahead."""
+        strictly from bars before the origin candle, and the response candle
+        must sit at or before birth — no look-ahead."""
         o = self.df["open"].values
         h = self.df["high"].values
         l = self.df["low"].values
         c = self.df["close"].values
-        if loc <= 0:
+        if loc <= 0 or loc + 1 > birth:
             return None
         start = max(0, loc - self.sweep_window)
         if start == loc:
             return None
+        k = loc + 1
         if bullish:
             standing = float(min(l[start:loc]))
-            if not (min(o[loc], c[loc]) < standing):
-                return None
-            for k in range(loc + 1, birth + 1):
-                if min(o[k], c[k]) > standing:
-                    return standing
+            if min(o[loc], c[loc]) < standing and min(o[k], c[k]) > standing:
+                return standing
             return None
         standing = float(max(h[start:loc]))
-        if not (max(o[loc], c[loc]) > standing):
-            return None
-        for k in range(loc + 1, birth + 1):
-            if max(o[k], c[k]) < standing:
-                return standing
+        if max(o[loc], c[loc]) > standing and max(o[k], c[k]) < standing:
+            return standing
         return None
 
     def _mark_types(self, bull: list, bear: list) -> None:

@@ -275,6 +275,28 @@ def test_fs_needs_the_body_reclaim_by_birth():
     assert lv_bull[0].sweep_class == ""
 
 
+def test_fs_reclaim_must_be_the_immediate_next_candle():
+    # Same lie candle (bar 4 body-closes under the standing pool 98.2),
+    # but the body reclaim arrives ONE candle late: bar 5 is a small
+    # bullish carry whose body (97.9-98.1) stays under the pool, and
+    # only bar 6's body (98.3-99.8) gets back above it. FS is the strict
+    # two-candle mirror of a two-candle TS — lie, then the very next
+    # body back inside — so a deferred reclaim keeps the level untagged.
+    lv = [x for x in _bull(_df([
+        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 99.6},
+        {"open": 99.6, "high": 99.8, "low": 98.2, "close": 98.6},
+        {"open": 98.6, "high": 99.4, "low": 98.4, "close": 99.2},
+        {"open": 99.2, "high": 100.5, "low": 99.0, "close": 100.2},
+        {"open": 100.0, "high": 100.3, "low": 98.0, "close": 98.1},
+        {"open": 97.9, "high": 99.0, "low": 97.7, "close": 98.1},
+        {"open": 98.3, "high": 100.0, "low": 98.05, "close": 99.8},
+        {"open": 99.8, "high": 101.4, "low": 99.7, "close": 101.2},
+    ])) if not x.is_breaker]
+    assert len(lv) == 1
+    assert lv[0].formation_index == 4
+    assert lv[0].sweep_class == ""
+
+
 def test_plain_grab_origin_gets_no_family():
     # BULL_BASE: a clean displacement OB with no TS event and no body
     # through any standing pool — untagged, classification adds nothing.
