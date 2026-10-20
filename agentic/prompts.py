@@ -2,15 +2,18 @@
 
 Spec: docs/specs/2026-10-17-agentic-chart-agent-design.md, "The Agent Loop"
 (System prompt contract, Output contract) and "Memory, persistence, restart".
+The strategy itself is external: one markdown playbook per strategy
+(``agentic/strategy.py`` loads it), injected by the caller via
+``build_system_prompt(playbook=...)``.
 
 Two halves, both pure
 ---------------------
 The **system prompt** is policy: it tells the model what kind of thing it is (an
-analyst, propose-only), the top-down CRT playbook it runs by default, the
-condition vocabulary it may watch, and the perception / truth / discipline /
-honesty rules the design locks in. It is assembled once into
+analyst, propose-only), the perception / truth / discipline /
+honesty rules the design locks in, the condition vocabulary it may watch, and
+the output contract. It is assembled once into
 :data:`SYSTEM_PROMPT` and exposed by :func:`build_system_prompt` so a caller can
-append a playbook addendum or extra context without editing the contract.
+append the loaded strategy or extra context without editing the contract.
 
 The **briefing** is memory. The spec is explicit that the agent is *not* a
 transcript: each turn's context is rebuilt fresh from the store, so prompt size is
@@ -37,7 +40,6 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import describe as describe_conditions
-from agentic.crt_strategy import HTF_BIAS_TIMEFRAMES, LTF_EXECUTION_TIMEFRAMES
 from agentic.models import Serde, Subscription
 from agentic.store import ContextStore
 
@@ -46,29 +48,6 @@ if TYPE_CHECKING:  # pragma: no cover — typing only, keeps prompts free of a r
 
 #: How many notes from the turn log are read back into a briefing.
 NOTES_IN_BRIEFING = 10
-
-# --------------------------------------------------------------------------- #
-# The playbook
-# --------------------------------------------------------------------------- #
-
-#: The top-down CRT model, summarised from :mod:`agentic.crt_strategy` for the
-#: prompt. Prompted behaviour, not enforced control — the agent may improvise.
-CRT_PLAYBOOK = (
-    "Top-down CRT (Candle Range Theory) playbook — your default instinct, not a "
-    "straitjacket:\n"
-    "- HTF bias (" + "/".join(HTF_BIAS_TIMEFRAMES) + "): the higher-timeframe CRT is the "
-    "container you trade inside. A range candle defines CRH/CRL; a later candle sweeps one "
-    "boundary and closes back inside; the projection is toward the OPPOSITE boundary. That "
-    "direction is the bias and the opposite boundary is the draw-on-liquidity target.\n"
-    "- LTF confirmation (" + "/".join(LTF_EXECUTION_TIMEFRAMES) + "): drop down to validate the "
-    "bias. Wait for the change in state of delivery — a BOS in the bias direction — then a "
-    "fresh FVG or OB in the bias direction as the entry zone.\n"
-    "- Execution: enter at the aligned zone (discount for longs, premium for shorts), stop "
-    "beyond the zone padded by ~0.25xATR (else 5% of the HTF range), target the nearest HTF "
-    "CRT boundary beyond entry, partial at equilibrium. State the invalidation explicitly.\n"
-    "Decision order for every turn: ORIENT (HTF bias) -> LOCATE (the levels that matter) -> "
-    "ARM (subscriptions with expiries) -> REACT (update the thesis when the evidence changes)."
-)
 
 # --------------------------------------------------------------------------- #
 # The contract
@@ -103,7 +82,11 @@ SYSTEM_PROMPT = (
     "image for you; you reason over it and express everything as explicit, durable state. "
     "You are PROPOSE-ONLY: you emit plans, never orders.\n"
     "\n"
-    + CRT_PLAYBOOK + "\n"
+    "Strategy playbook:\n"
+    "The caller supplies your strategy playbook — a markdown the operator owns "
+    "(build_system_prompt(playbook=...) injects it directly after these rules). Follow it; "
+    "it is your default instinct, not a straitjacket. If no strategy was loaded, run with "
+    "your own reading and say so in your notes.\n"
     "\n"
     "Perception rules\n"
     "- You own your perception. Ask for what you need: change the view with set_view "
@@ -146,11 +129,13 @@ SYSTEM_PROMPT = (
 
 
 def build_system_prompt(*, playbook: str = "", extra: str = "") -> str:
-    """The system prompt, optionally extended with a playbook addendum or context.
+    """The system prompt, extended with the loaded strategy or extra context.
 
-    A single testable string: :data:`SYSTEM_PROMPT` always contains the role, the
-    CRT playbook, the condition vocabulary, the rules and the output contract; the
-    optional sections are appended, never substituted.
+    A single testable string: :data:`SYSTEM_PROMPT` always contains the role,
+    the perception/truth/discipline/honesty rules, the condition vocabulary and
+    the output contract; the strategy (loaded from the operator's .md by
+    :func:`agentic.strategy.load_strategy`) and any extra context are appended,
+    never substituted.
     """
     parts: List[str] = [SYSTEM_PROMPT]
     addendum = (playbook or "").strip()

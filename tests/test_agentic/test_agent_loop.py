@@ -931,7 +931,7 @@ def test_system_prompt_contains_the_contract():
     prompt = prompts.SYSTEM_PROMPT
 
     assert "PROPOSE-ONLY" in prompt  # role
-    assert "CRT" in prompt and "Candle Range Theory" in prompt  # playbook
+    # (the strategy/playbook is external now: strategies/*.md -> build_system_prompt)
     assert "level_forms" in prompt  # condition vocabulary
     assert "level_lookup" in prompt  # truth rule
     assert "Never read a price off the image" in prompt
@@ -942,6 +942,43 @@ def test_system_prompt_contains_the_contract():
     extended = prompts.build_system_prompt(playbook="Be patient.", extra="Symbol is gold.")
     assert extended.startswith(prompt)
     assert "Be patient." in extended and "Symbol is gold." in extended
+
+
+def test_the_loop_injects_the_loaded_strategy_into_the_prompt(tmp_path):
+    """strategies/*.md -> AgentLoop(playbook=...) -> every request's system prompt."""
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_enabled(True)
+    feed = _stub_with_fvg().build()
+    agent = ScriptedAgent([AgentReply()])  # one round, then silence
+    loop = AgentLoop(
+        store,
+        feed,
+        _renderer(tmp_path, clock),
+        agent,
+        clock=clock,
+        playbook="STRATEGY INSTRUCTIONS: trade Phoenix MNFR only.",
+    )
+
+    outcome = loop.run_turn(trigger="boot")
+
+    assert outcome.ok is True
+    assert "STRATEGY INSTRUCTIONS: trade Phoenix MNFR only." in agent.requests[0].system_prompt
+    # and the plain-contract parts still surround it
+    assert "PROPOSE-ONLY" in agent.requests[0].system_prompt
+
+
+def test_a_loop_without_a_playbook_keeps_the_bare_contract(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_enabled(True)
+    feed = _stub_with_fvg().build()
+    agent = ScriptedAgent([AgentReply()])
+    loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
+
+    loop.run_turn(trigger="boot")
+
+    assert agent.requests[0].system_prompt == prompts.build_system_prompt()
 
 
 # --------------------------------------------------------------------------- #

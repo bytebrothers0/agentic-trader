@@ -428,6 +428,7 @@ class AgentLoop:
         *,
         clock: Optional[Callable[[], datetime]] = None,
         watchdog: Optional[Watchdog] = None,
+        playbook: str = "",
     ):
         self.store = store
         self.feed = feed
@@ -435,6 +436,9 @@ class AgentLoop:
         self.client = client
         self._clock = clock or getattr(store, "_clock", None) or _utcnow
         self._watchdog = watchdog
+        # The operator's strategy (strategies/*.md via agentic.strategy), fixed
+        # for this loop's lifetime: a turn never mixes strategies.
+        self._playbook = str(playbook or "")
 
     # ------------------------------------------------------------------ gate
 
@@ -692,7 +696,7 @@ class AgentLoop:
             turn_id=new_id("turn"),
             trigger=trigger,
             trigger_detail=detail,
-            system_prompt=prompts.build_system_prompt(),
+            system_prompt=prompts.build_system_prompt(playbook=self._playbook),
             briefing=briefing,
             image_path=initial.image_path if initial else "",
             manifest=initial.manifest if initial else {},
