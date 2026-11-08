@@ -2,7 +2,7 @@
 ocl_detector.py — MSNR Open Close Level (OCL) Indicator
 
 Rules (from Advanced MSNR, Videos 2, 5, 8, 10, 11):
-  - OCL is ONLY valid on Higher Timeframes (Monthly, Weekly, Daily). Not 4H or lower.
+  - OCL is evaluated independently on whichever timeframe is supplied.
   - Base OCL = Two consecutive candles of the SAME color (2 bullish or 2 bearish).
   - Level price = CLOSE of the FIRST candle.
   - INVALID / Disqualified: Engulfing OCLs (where 2nd candle completely engulfs the 1st candle).
@@ -105,7 +105,7 @@ class OCLLevel:
 
 class OCLDetector:
     """
-    Detects and categorizes Open Close Levels (OCLs) from HTF OHLCV data.
+    Detects and categorizes Open Close Levels (OCLs) on the supplied timeframe.
     """
 
     def __init__(self, df: pd.DataFrame, timeframe: str = "D1"):
@@ -116,10 +116,6 @@ class OCLDetector:
     def detect_all(self, base_sr_levels: Optional[List] = None) -> List[OCLLevel]:
         """Detect all valid OCLs on this timeframe."""
         self._levels = []
-        # OCL is strictly HTF only (Monthly/Weekly/Daily). M1 = 1-minute, excluded.
-        if self.timeframe not in {"MN", "MN1", "W1", "D1", "MONTHLY", "WEEKLY", "DAILY"}:
-            return []
-
         self._detect_base_ocls()
         self._classify_socl_rocl(base_sr_levels)
         self._classify_one_lap_and_ls()

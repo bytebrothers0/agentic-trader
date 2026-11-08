@@ -57,7 +57,7 @@ PIN_TTL_DEFAULT_HOURS = 72.0
 PIN_TTL_MAX_HOURS = 24.0 * 14
 SUB_COOLDOWN_S = 300
 MAX_RENDERS_PER_TURN = 3
-MAX_TOOL_CALLS_PER_TURN = 8
+MAX_TOOL_CALLS_PER_TURN = 10
 MIN_TURN_INTERVAL_S = 60
 MAX_TURNS_PER_HOUR = 6
 MAX_TURNS_PER_DAY = 60
@@ -125,6 +125,10 @@ class ContextStore:
         now = self._clock()
         self.data = StoreState(symbol=str(symbol), created_at=now, updated_at=now)
         self.data.view.symbol = str(symbol)
+        # The turn-rate leash is injectable (see ``set_leash_limits``): the
+        # non-pure service layer reads ``config.settings`` live and hands its
+        # values over as a callable. The shipped constants remain the fallback.
+        self._leash_limits: Optional[Callable[[], Dict[str, Any]]] = None
         self._roll_windows(now)
 
     # ------------------------------------------------------------------ paths
@@ -199,7 +203,9 @@ class ContextStore:
         clock: Optional[Callable[[], datetime]] = None,
     ) -> "ContextStore":
         path = cls.path_for(symbol, state_dir)
-        with open(path, "r", encoding="utf-8") as f:
+        # Accept state files saved with a UTF-8 BOM by Windows editors and
+        # PowerShell's default JSON-writing tools.
+        with open(path, "r", encoding="utf-8-sig") as f:
             raw = json.load(f)
         store = cls(symbol=symbol, state_dir=state_dir, clock=clock)
         store.data = StoreState.from_dict(raw)
@@ -574,7 +580,55 @@ class ContextStore:
                 return proposal
         raise StoreError("unknown_proposal", f"no proposal {proposal_id!r}")
 
+    def record_proposal_execution(
+        self,
+        proposal_id: str,
+        *,
+        ok: bool,
+        ticket: int = 0,
+        error: str = "",
+    ) -> Proposal:
+        """Book the outcome of the executor's attempt on a proposal.
+
+        ``ok`` marks ``executed`` (a pending order now exists, ticket attached);
+        ``not ok`` keeps ``executed`` False and carries ``error`` so the panel —
+        and the next turn's briefing — shows why no order was placed.
+        """
+        for proposal in self.data.proposals:
+            if proposal.id == proposal_id:
+                if ok:
+                    proposal.executed = True
+                    proposal.order_ticket = int(ticket)
+                    proposal.execution_error = ""
+                else:
+                    proposal.executed = False
+                    proposal.order_ticket = 0
+                    proposal.execution_error = " ".join(str(error or "execution refused").split())[:200]
+                self._touch()
+                return proposal
+        raise StoreError("unknown_proposal", f"no proposal {proposal_id!r}")
+
     # ------------------------------------------------------------------ leash / turns
+
+    def set_leash_limits(self, limits: Optional[Callable[[], Dict[str, Any]]]) -> None:
+        """Inject the live turn-rate leash (called once per leash resolution).
+
+        ``limits`` returns a dict with optional keys ``min_turn_interval_s``,
+        ``max_turns_per_hour`` and ``max_turns_per_day``; anything missing (or a
+        callable that throws) degrades to the shipped constants. The store stays
+        pure: it never imports ``config`` — the service injects this.
+        """
+        self._leash_limits = limits
+
+    def _leash_value(self, name: str, fallback: float) -> float:
+        """One injected leash value, validated; absence or junk → the constant."""
+        try:
+            raw = (dict(self._leash_limits() or {}).get(name, fallback)
+                   if self._leash_limits is not None else fallback)
+            value = fallback if raw is None else float(raw)
+        except Exception:  # noqa: BLE001 — a bad injection must not unbound the store
+            return fallback
+        return value if value >= 0.0 else fallback
 
     def check_leash(self, now: Optional[datetime] = None) -> None:
         """Refuse to start a turn if the leash says no. Raises :class:`LeashExceeded`."""
@@ -582,18 +636,21 @@ class ContextStore:
         now = _as_aware(now)
         self._roll_windows(now)
         b = self.data.budget
+        min_interval_s = self._leash_value("min_turn_interval_s", MIN_TURN_INTERVAL_S)
+        max_per_hour = self._leash_value("max_turns_per_hour", MAX_TURNS_PER_HOUR)
+        max_per_day = self._leash_value("max_turns_per_day", MAX_TURNS_PER_DAY)
 
-        if b.last_turn_at is not None:
+        if b.last_turn_at is not None and min_interval_s > 0.0:
             since = (now - _as_aware(b.last_turn_at)).total_seconds()
-            if since < MIN_TURN_INTERVAL_S:
+            if since < min_interval_s:
                 raise LeashExceeded(
                     "min_turn_interval",
-                    f"only {since:.0f}s since the last turn; minimum is {MIN_TURN_INTERVAL_S}s",
+                    f"only {since:.0f}s since the last turn; minimum is {min_interval_s:.0f}s",
                 )
-        if b.turns_this_hour >= MAX_TURNS_PER_HOUR:
-            raise LeashExceeded("max_turns_per_hour", f"{MAX_TURNS_PER_HOUR} turns already this hour")
-        if b.turns_today >= MAX_TURNS_PER_DAY:
-            raise LeashExceeded("max_turns_per_day", f"{MAX_TURNS_PER_DAY} turns already today")
+        if b.turns_this_hour >= max_per_hour:
+            raise LeashExceeded("max_turns_per_hour", f"{max_per_hour:g} turns already this hour")
+        if b.turns_today >= max_per_day:
+            raise LeashExceeded("max_turns_per_day", f"{max_per_day:g} turns already today")
         if b.spend_usd_today >= MAX_SPEND_PER_DAY_USD:
             raise LeashExceeded(
                 "max_spend_per_day",

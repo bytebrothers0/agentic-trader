@@ -37,6 +37,12 @@ def loader():
     return inst
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch):
+    """Tests collapse the mid-download retry wait (the logic stays, the sleep goes)."""
+    monkeypatch.setattr(mt5_loader, "FEED_RETRY_WAIT_S", 0.0)
+
+
 def test_start_is_passed_to_copy_rates_from_pos_and_shifts_the_window(loader, monkeypatch):
     seen = {}
     latest = ORIGIN_TS + 10_000 * 3600  # the broker's newest H1 bar
@@ -161,3 +167,90 @@ def test_no_explicit_count_keeps_the_legacy_runtime_error(loader, monkeypatch):
 
     with pytest.raises(RuntimeError):
         loader.fetch_timeframe("M15")
+
+
+# --------------------------------------------------------------------------- #
+# The mid-download transient (a fresh terminal returns nothing on first ask)
+# --------------------------------------------------------------------------- #
+
+def test_empty_then_full_is_served_not_refused(loader, monkeypatch):
+    """First ask returns nothing (the terminal is downloading the series), the
+    second succeeds — the client must see candles, not a 422."""
+    attempts = []
+
+    def fake(symbol, timeframe, start, count):
+        attempts.append(1)
+        return _m15(count) if len(attempts) >= 2 else []
+
+    monkeypatch.setattr(mt5_loader.mt5, "copy_rates_from_pos", fake)
+
+    df = loader.fetch_timeframe("D1", count=300)
+    assert len(attempts) == 2
+    assert len(df) == 300
+
+
+def test_short_then_full_is_served_not_refused(loader, monkeypatch):
+    """A short first window (download mid-flight) also resolves on the retry."""
+    attempts = []
+
+    def fake(symbol, timeframe, start, count):
+        attempts.append(1)
+        return _m15(count) if len(attempts) >= 2 else _m15(count - 10)
+
+    monkeypatch.setattr(mt5_loader.mt5, "copy_rates_from_pos", fake)
+
+    df = loader.fetch_timeframe("D1", count=300)
+    assert len(df) == 300
+
+
+def test_a_feed_that_stays_empty_names_the_terminal_error(loader, monkeypatch):
+    def fake(symbol, timeframe, start, count):
+        return []
+
+    monkeypatch.setattr(mt5_loader.mt5, "copy_rates_from_pos", fake)
+    monkeypatch.setattr(mt5_loader.mt5, "last_error", lambda: (1, "history not loaded"))
+
+    with pytest.raises(mt5_loader.InsufficientHistory) as exc:
+        loader.fetch_timeframe("D1", count=300)
+    # the diagnosis says WHY: not 'none' alone, the terminal state rides along
+    assert "history not loaded" in str(exc.value)
+
+
+def test_a_feed_that_stays_short_after_retries_still_refuses(loader, monkeypatch):
+    attempts = []
+
+    def fake(symbol, timeframe, start, count):
+        attempts.append(1)
+        return _m15(count - 3)  # the broker genuinely holds fewer bars
+
+    monkeypatch.setattr(mt5_loader.mt5, "copy_rates_from_pos", fake)
+
+    with pytest.raises(mt5_loader.InsufficientHistory):
+        loader.fetch_timeframe("D1", count=300)
+    assert len(attempts) == mt5_loader.FEED_RETRY_ATTEMPTS
+
+
+def test_a_dead_ipc_pipe_reattaches_and_serves(loader, monkeypatch):
+    """A stray ``mt5.shutdown()`` anywhere drops the *process-wide* pipe; the
+    loader's next fetch must heal in place ("-10004 No IPC connection" first,
+    candles on the retry) instead of 422-ing until the server restarts."""
+    calls = []
+    attached = []
+
+    def fake_copy(symbol, timeframe, start, count):
+        calls.append(1)
+        return None if len(calls) == 1 else _m15(count)
+
+    monkeypatch.setattr(mt5_loader.mt5, "copy_rates_from_pos", fake_copy)
+    monkeypatch.setattr(
+        mt5_loader.mt5, "last_error", lambda: (-10004, "No IPC connection")
+    )
+    monkeypatch.setattr(
+        mt5_loader.mt5, "initialize", lambda **kw: attached.append(1) or True
+    )
+    monkeypatch.setattr(mt5_loader.mt5, "symbol_select", lambda *a, **kw: True)
+
+    df = loader.fetch_timeframe("D1", count=300)
+
+    assert len(df) == 300
+    assert attached and len(calls) == 2  # one reattach, then a healing copy

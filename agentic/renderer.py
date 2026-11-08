@@ -95,6 +95,23 @@ def _sr_label(level: LevelRecord) -> str:
     head = (level.origin or "").split(" ")[0].strip().upper()
     return {"SUPPORT": "S", "RESISTANCE": "R"}.get(head, head or "S")
 
+
+def _ocl_label(level: LevelRecord) -> str:
+    raw = str((level.attrs or {}).get("type", "")).lower()
+    return {
+        "socl": "sOCL", "rocl": "rOCL", "one_lap_ocl": "1LAP",
+        "ls_ocl": "LS-OCL", "ocl_bullish": "OCL+",
+        "ocl_bearish": "OCL-",
+    }.get(raw, "OCL")
+
+
+def _apex_label(level: LevelRecord) -> str:
+    raw = str((level.attrs or {}).get("type", "")).lower()
+    return {
+        "apex_support": "APX-S", "apex_resistance": "APX-R",
+        "iab_support": "IAB-S", "iab_resistance": "IAB-R",
+    }.get(raw, "APX")
+
 # Paper theme: white ground, bullish candles white with black borders, bearish
 # candles black, and black indicator ink. Only zones use fills: pale yellow for
 # order blocks and a very light black tint for FVG/IFVG. Family identity comes
@@ -681,6 +698,13 @@ class Renderer:
                 entries[tag].label = _bos_label(level)
             elif level.family == "sr":
                 entries[tag].label = _sr_label(level)
+            elif level.family == "ocl":
+                entries[tag].label = _ocl_label(level)
+            elif level.family == "apex":
+                entries[tag].label = _apex_label(level)
+            elif level.family == "ob":
+                raw_type = str((level.attrs or {}).get("type", ""))
+                entries[tag].label = "BRKR" if "BREAKER" in raw_type.upper() else "OB"
         return entries
 
     # ----------------------------------------------------------------- drawing
@@ -710,6 +734,11 @@ class Renderer:
                 drawn.append(level)
                 continue
             family = level.family
+            # S/R is the one family whose value depends on seeing the full
+            # sequence of nearby walls and role flips inside the window.
+            if family == "sr":
+                drawn.append(level)
+                continue
             used = per.get(family, 0)
             if used >= MAX_RAYS_PER_FAMILY:
                 continue
@@ -728,9 +757,9 @@ class Renderer:
         the manipulation bar). QM is the broken-twice arc: origin (left
         shoulder) → the second break → +5 bars right. IDM dead levels draw the
         full formation → swept/broken bar, uncapped (dashboard parity); fresh
-        ones keep the open span plus the +3 expansion. S/R holds until it
-        dies: dead levels run formation → their life-event bar exactly, fresh
-        ones the dashboard's open 8-bar pose. Trendlines run pivot → end bar
+        ones keep the open span plus the +3 expansion. Ordinary S/R rays run
+        from formation through +5 bars; SBR/RBS run from the source formation
+        through the flip candle and +5 bars. Trendlines run pivot → end bar
         exactly — a sloped segment, never capped. BOS reaches its
         close-through candle; zone boxes keep their full formation→fill span.
         """
@@ -741,6 +770,10 @@ class Renderer:
 
         start = max(_idx(level.formed_at), 0)
         if level.family in _ZONE_FAMILIES:
+            if level.family == "ob" and "BREAKER" in str((level.attrs or {}).get("type", "")).upper():
+                flip = _idx((level.attrs or {}).get("break_time"))
+                if flip >= start:
+                    return start, min(flip + 5, count - 1 + _RIGHT_GAP_BARS)
             # Zone boxes: formation -> life-cycle end (or a short open span).
             if level.changed_at is not None and level.changed_at > (
                 level.formed_at or _EPOCH
@@ -763,13 +796,16 @@ class Renderer:
             # detector's end bar, exactly (the dashboard draws the same two
             # points), never capped at the generic dead-ray length. The end
             # bar's price rides in ``price_end``.
+            retest = _idx((level.attrs or {}).get("retest_time"))
+            if retest >= start:
+                return start, min(retest + 5, count - 1 + _RIGHT_GAP_BARS)
             if level.changed_at is not None and level.changed_at > (
                 level.formed_at or _EPOCH
             ):
                 event = _idx(level.changed_at)
                 if event >= 0:
-                    return start, max(event, min(start + 1, count - 1))
-            end = min(start + 8, count - 1)
+                    return start, min(max(event + 5, start + 1), count - 1 + _RIGHT_GAP_BARS)
+            end = min(count - 1 + 5, count - 1 + _RIGHT_GAP_BARS)
         elif level.family == "ts":
             # The TS event: the anchor (``start_time``, the range candle), the
             # sweeping candle (``formed_at``), one bar right, plus the
@@ -825,21 +861,19 @@ class Renderer:
             else:
                 end = min(start + _SPAN_BARS + 3, count - 1)
         elif level.family == "sr":
-            # Dashboard parity, IDM-style: a dead S/R draws formation -> its
-            # life-event bar exactly (the body break, or the first wick touch
-            # for a merely touched level), uncapped — an S/R is a line that
-            # HELD until it didn't. A fresh one keeps the dashboard's open
-            # 8-bar pose.
-            if level.changed_at is not None and level.changed_at > (
-                level.formed_at or _EPOCH
-            ):
-                event = _idx(level.changed_at)
-                if event >= 0:
-                    end = min(max(event, start + 1), count - 1)
-                else:
-                    end = min(start + 8, count - 1)
+            # Role-flip payloads start at the source S/R formation. Extend
+            # through their body-break candle and five bars beyond it.
+            # Ordinary S/R rays extend five bars from their own formation.
+            kind = str((level.origin or "").split(" ")[0]).upper()
+            if kind in {"SBR", "RBS"}:
+                event = _idx((level.attrs or {}).get("break_time"))
+                end = (
+                    min(event + 5, count - 1)
+                    if event >= start
+                    else min(start + 5, count - 1)
+                )
             else:
-                end = min(start + 8, count - 1)
+                end = min(start + 5, count - 1)
         elif level.changed_at is not None and level.changed_at > (
             level.formed_at or _EPOCH
         ):
@@ -1022,7 +1056,8 @@ class Renderer:
         current_price = float(bars.close[-1]) if len(bars.close) else 0.0
         for level in levels:
             pinned = level.level_key in pinned_keys
-            text = display_tags[level.level_key]
+            unique_tag = display_tags[level.level_key]
+            text = unique_tag
             if level.family == "crt":
                 # The dashboard paints the family's word, not an ordinal: the
                 # operator's screenshot shows plain ``CRT``/``CRT-IB`` text on
@@ -1033,21 +1068,22 @@ class Renderer:
                 # Same word-not-ordinal parity: BOS / I-BOS / CHoCH / I-CHoCH,
                 # the structural *name* the payload carries.
                 text = _bos_label(level) + ("*" if pinned else "")
+            elif level.family == "ocl":
+                text = _ocl_label(level)
+            elif level.family == "apex":
+                text = _apex_label(level)
+            elif level.family == "ob" and "BREAKER" in str((level.attrs or {}).get("type", "")).upper():
+                text = "BRKR"
             elif level.family == "sr":
                 # Dashboard word parity too: S / R / SBR / RBS, never the
                 # meaningless "S7" ordinal. The dashboards' levelTag.
                 text = _sr_label(level) + ("*" if pinned else "")
+            if text != unique_tag:
+                # Keep the semantic word while making the printed tag uniquely
+                # addressable by level_lookup (e.g. ``O1 BRKR``, ``K2 sOCL``).
+                text = f"{unique_tag} {text.rstrip('*')}"
             color, alpha = self._level_style(level, pinned, current_price)
             linestyle = _LEVEL_STYLE
-            if level.family == "sr":
-                # Dashboard parity (app.js): fresh levels draw solid, touched
-                # (one-use) ones dashed at FULL contrast — the dashboard does
-                # not fade them — and broken ones gray dotted.
-                if level.status is LevelStatus.BROKEN:
-                    linestyle = ":"   # gray picked up from _level_style
-                elif level.status is LevelStatus.FILLED:
-                    linestyle = "--"
-                    alpha = 1.0
             # Family and status use luminance rather than competing hues.
             color = _bright(color)
             x0, x1 = self._span(level, bars)
@@ -1060,6 +1096,10 @@ class Renderer:
                 # drew it as a horizontal stub — the line vanished and only
                 # the tag stayed visible.
                 end_price = float((level.attrs or {}).get("price_end", price))
+                slope = float((level.attrs or {}).get("slope", 0.0) or 0.0)
+                base_idx = bars.index_at_or_before(level.changed_at)
+                if x1 > max(base_idx, x0):
+                    end_price += slope * (x1 - max(base_idx, x0))
                 ax.plot(
                     [x0, x1], [price, end_price],
                     color=color, alpha=alpha,

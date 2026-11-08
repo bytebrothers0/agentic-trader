@@ -25,34 +25,19 @@ SPEC_VERSION = "0.1.0"
 #: monthly form is spelled out rather than folded into ``M\d{1,2}``.
 _TIMEFRAME_RE = re.compile(r"^(M\d{1,2}|MN\d{0,2}|H\d{1,2}|D\d{1,2}|W\d{1,2})$")
 
-#: The *default view* families — one family each for the boxes, structure,
-#: zones and liquidity the top-down read needs, deliberately NOT "every
-#: detector that exists". The heavier overlays (`sr`, `qm`, `idm`, `trendline`)
-#: stay one ``set_view`` away: a fresh M15/300-bar render carrying all ten
-#: families measured **639 levels ≈ 49k token** of manifest, resent every round
-#: of a turn, versus ~15k for these six — enough to lose the turn under a token
-#: cap before the model said anything. A strategy .md may instruct other
-#: defaults; the agent can also change its own view mid-turn.
-DEFAULT_FAMILIES: List[str] = [
-    "crt", "bos", "fvg", "ob", "liquidity", "ts",
-]
-
-#: The default *view* is the dashboard's CRT toggle: the operator's screenshot
-#: shows a boot render with only the CRT range boundaries (and their inside-bar
-#: variant) drawn — 13 levels, every tag readable. The other families stay
-#: reachable with ``set_view(families=...)``; they are off, not gone.
-DEFAULT_VIEW_FAMILIES: List[str] = ["crt"]
+#: Start every agent turn from candles alone. The agent can request any subset
+#: of indicator families with set_view once it has read the unmarked price action.
+DEFAULT_FAMILIES: List[str] = []
+DEFAULT_VIEW_FAMILIES: List[str] = []
 
 #: The life-cycle dial for perception ``("default", "all", "live")``.
-#: ``"default"`` — the shipped default — hides dead levels **only** for the
-#: :data:`FRESH_ONLY_FAMILIES` (``ts``/``crt``) and keeps every state for every
-#: other family; ``"live"`` keeps only fresh / unmitigated / unbroken levels
-#: everywhere (per family: TS alive, CRT undistributed, FVG fresh, OB
-#: unmitigated, IDM unswept); ``"all"`` shows dead history too.
+#: New views default to ``"all"``. Explicit ``"default"`` retains the older
+#: family-aware policy (hide dead TS/CRT/QM, keep all other families); ``"live"``
+#: keeps only fresh / unmitigated / unbroken levels everywhere.
 STATUS_FILTERS: List[str] = ["default", "all", "live"]
 
-#: The families whose dead history the *default* perception hides — exactly
-#: ``"live"`` for them, and pass-through for everyone else. TS and CRT per the
+#: The families whose dead history the explicit legacy ``"default"`` dial hides
+#: — exactly ``"live"`` for them, and pass-through for everyone else. TS and CRT per the
 #: 2026-10-20 spec amendment; QM added later the same day per the operator:
 #: the three setups whose history piles the ray budget with gravedust.
 FRESH_ONLY_FAMILIES: List[str] = ["ts", "crt", "qm"]
@@ -234,12 +219,11 @@ class View(Serde):
     timeframe: str = "M15"
     chart_type: ChartType = ChartType.CANDLES
     families: List[str] = field(default_factory=lambda: list(DEFAULT_VIEW_FAMILIES))
-    #: Which life-cycle states the agent perceives: ``"default"`` (fresh-only
-    #: for TS/CRT via ``FRESH_ONLY_FAMILIES``, everything for the rest),
+    #: Which life-cycle states the agent perceives: ``"all"`` (the new-view
+    #: default), ``"default"`` (fresh-only for TS/CRT/QM, everything for the rest),
     #: ``"live"`` (strictly fresh/unmitigated/unbroken everywhere) or ``"all"``.
-    #: Validated by ``Store.set_view``; the renderer's ray budget is spent on
-    #: signal, not history, until the agent asks to see the dead ones.
-    status_filter: str = "default"
+    #: Validated by ``Store.set_view``.
+    status_filter: str = "all"
     bars: int = 180
     #: How many bars to skip back from the newest one, **per timeframe**. The
     #: rendered window is ``[now-(offset+bars)*tf, now-offset*tf]``; ``0`` (the
@@ -309,6 +293,12 @@ class Proposal(Serde):
     reason: str = ""
     provenance: List[str] = field(default_factory=list)
     status: ProposalStatus = ProposalStatus.PROPOSED
+    #: Real-execution bookkeeping (execution/agent_orders.py). ``executed`` is
+    #: True when the proposal became a pending order; failures keep ``executed``
+    #: False and carry ``execution_error`` so the panel shows why no order exists.
+    executed: bool = False
+    order_ticket: int = 0
+    execution_error: str = ""
 
 
 @dataclass

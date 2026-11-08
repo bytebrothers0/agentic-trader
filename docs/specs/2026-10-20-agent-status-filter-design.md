@@ -70,3 +70,11 @@ fresh only — that's the TS and CRT indicators only."* So:
   default.
 - **Third entry in `FRESH_ONLY_FAMILIES` (same day, operator):** **QM** — the
   shipped `"default"` now drops dead QM alongside dead TS and CRT.
+
+## Amendment (2026-10-20, operator)
+
+The new-view `View.status_filter` default is now **`"all"`**, so the agent sees
+dead history for every family unless it explicitly chooses another filter.
+`"live"` remains strictly live-only, and explicit `"default"` preserves the
+previous family-aware TS/CRT/QM filtering behavior. Persisted views that omit
+the field inherit `"all"` through the dataclass default.

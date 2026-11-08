@@ -7,9 +7,9 @@ Rules (web Alchemist MSNR):
   - S/R is defined by the CLOSE of the body, NOT wicks.
   - Support  = bearish candle immediately followed by a bullish candle (V).
   - Resistance = bullish candle immediately followed by a bearish candle (A).
-  - GAP SNR: opposite pair with a GAP between first close and second open
-    (open[i+1] != close[i]). Gap levels are hidden zones — trendlines must
-    never connect them; they refine into LTF engulfing zones instead.
+  - GAP SNR: opposite pair whose second open is displaced from the first
+    close by more than 0.1 local ATR. Gap levels are hidden zones — trendlines
+    must never connect them; they refine into LTF engulfing zones instead.
   - SBR: a prior support whose BODY closes BELOW → flips to resistance,
     fresh in the new role. RBS: mirror.
   - Web flip rule (MALIYA): "once broken with a body" — any body close
@@ -25,6 +25,11 @@ import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
+
+
+# Ignore feed/rounding mismatches when classifying a candle-open discontinuity
+# as a real gap. This matches the trendline detector's 0.1 ATR gap threshold.
+_GAP_ATR_MULT = 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +62,7 @@ class CandleLevel:
     candle_time: pd.Timestamp
     state: LevelState = LevelState.FRESH
 
-    # Web gap flag: open[i+1] != close[i] -> GAP (hidden) SNR.
+    # Gap flag: a meaningful open/previous-close discontinuity marks hidden SNR.
     is_gap: bool = False
     # Web 2-use rule: wick touches consumed (fresh use + unfresh use max).
     touch_count: int = 0
@@ -142,15 +147,29 @@ class CandleAnalyzer:
         closes = df["close"].values
         opens = df["open"].values
         times = df.index
+        prev_close = df["close"].shift(1)
+        true_range = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - prev_close).abs(),
+                (df["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr = true_range.ewm(
+            alpha=1.0 / 14.0, min_periods=1, adjust=False
+        ).mean().values
 
         for i in range(len(df) - 1):
             c0_bearish = closes[i] < opens[i]   # candle i is bearish
             c0_bullish = closes[i] > opens[i]   # candle i is bullish
             c1_bearish = closes[i+1] < opens[i+1]
             c1_bullish = closes[i+1] > opens[i+1]
-            # GAP SNR: second candle opens away from first close (hidden
-            # zone — same pair shape, flagged for TL exclusion/refinement).
-            is_gap = bool(abs(opens[i + 1] - closes[i]) > 1e-9)
+            # A tiny open/close difference is normal feed noise on MT5. Only
+            # classify a gap when the discontinuity exceeds 0.1 local ATR.
+            is_gap = bool(
+                abs(opens[i + 1] - closes[i]) > _GAP_ATR_MULT * atr[i + 1]
+            )
 
             if c0_bearish and c1_bullish:
                 # Support formed

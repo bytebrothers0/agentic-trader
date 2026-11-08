@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import describe as describe_conditions
-from agentic.models import Serde, Subscription
+from agentic.models import ProposalStatus, Serde, Subscription
 from agentic.store import ContextStore
 
 if TYPE_CHECKING:  # pragma: no cover — typing only, keeps prompts free of a runtime dep
@@ -48,6 +48,8 @@ if TYPE_CHECKING:  # pragma: no cover — typing only, keeps prompts free of a r
 
 #: How many notes from the turn log are read back into a briefing.
 NOTES_IN_BRIEFING = 10
+#: How many live proposals (with their real-execution outcome) are read back.
+ORDERS_IN_BRIEFING = 6
 
 # --------------------------------------------------------------------------- #
 # The contract
@@ -56,6 +58,49 @@ NOTES_IN_BRIEFING = 10
 _CONDITION_VOCABULARY = (
     "Condition vocabulary you may watch — only these are expressible, so \"watch for a good "
     "long setup\" is not a thing you can arm:\n" + describe_conditions()
+)
+
+_INDICATOR_GUIDE = (
+    "Project-specific indicator guide (use these local definitions, which take "
+    "precedence over generic trading terminology):\n"
+    "- `sr` (S/R): body-close levels from a bearish→bullish pair (support) or "
+    "bullish→bearish pair (resistance). A body close through support creates SBR; "
+    "through resistance creates RBS. Wick touch is mitigation/use, not a body break.\n"
+    "- `crt` (Candle Range Theory): an anchor candle defines a high/low range; a "
+    "later wick sweeps one edge and closes back inside. The opposite edge is the "
+    "target. A close beyond the swept edge invalidates; reaching the far edge distributes.\n"
+    "- `ts` (Turtle Soup): a range boundary is swept and the sweep candle body closes "
+    "back inside, within the configured window (normally five bars). It is a reversal "
+    "event, not an entry by itself. Variants describe the bars between anchor and sweep.\n"
+    "- `bos`: market structure level broken by candle close. BOS is continuation; "
+    "CHoCH is a break against the tracked structure direction; `I-` means internal.\n"
+    "- `fvg`: three-candle imbalance (bullish when current low > high two bars back; "
+    "bearish mirror). First wick into the zone mitigates it. `ifvg`: a recent FVG "
+    "closed through by the full body and confirmed by an overlapping opposite FVG.\n"
+    "- `ob`: order-block zone from the last opposite-colour candle before a swing "
+    "break/displacement; it must be associated with a sweep or displacement. A body "
+    "close through its far edge can flip it into a breaker. Wick contact alone mitigates.\n"
+    "- `liquidity`: clustered, approximately equal swing highs/lows (buy-side above "
+    "highs; sell-side below lows); a wick through marks the pool taken. A single swing "
+    "is not an equal-level pool.\n"
+    "- `qm`: Quasimodo, a failed SBR/RBS: price body-closes through an S/R level, then "
+    "body-closes back across it. Direction and subtype are in the level description.\n"
+    "- `idm`: inducement/pullback levels from BOS-anchored, two-candle, or "
+    "reference-candle rules. Wick through and reclaim is swept; body close through is broken.\n"
+    "- `trendline`: sloped line through two or three close-price swing apexes. A body "
+    "close through breaks it; far-side wick touch is a retest. Role-flip/channel/sweep "
+    "metadata may be included in its description.\n"
+    "- `ocl`: open-close level on the selected chart timeframe, normally the first candle's close in "
+    "a same-colour two-candle pair; subtypes include support/resistance and levels "
+    "broken twice.\n"
+    "- `apex`: validated close-price swing on the selected chart timeframe that led to a structural "
+    "breakout. External apex is major; IAB is an internal swing.\n"
+    "Lifecycle words are family-specific: live/fresh means currently active; mitigated "
+    "or filled usually means touched/used; swept/taken means liquidity was raided; "
+    "broken/invalidated means the rule's close-through occurred. Read the level's "
+    "family, type, description, state, and end_kind together. A detected feature is "
+    "evidence, not a trade instruction or proof of confluence. Ask for exact prices "
+    "with `level_lookup`; never infer them from labels or pixels.\n"
 )
 
 _OUTPUT_CONTRACT = (
@@ -79,7 +124,12 @@ _OUTPUT_CONTRACT = (
 
 SYSTEM_PROMPT = (
     "You are a market analyst for one instrument. Each turn the system renders one chart "
-    "image for you; you reason over it and express everything as explicit, durable state. "
+    "image for you; the first image is a plain 180-candle chart without indicator overlays. "
+    "Request indicator families with set_view when you need them. After the initial plain "
+    "chart, your first response must use set_view to request the indicator families and/or "
+    "timeframe needed for analysis; do not end the turn without examining indicator evidence. "
+    "You reason over the image "
+    "and express everything as explicit, durable state. "
     "You are PROPOSE-ONLY: you emit plans, never orders.\n"
     "\n"
     "Strategy playbook:\n"
@@ -92,12 +142,15 @@ SYSTEM_PROMPT = (
     "- You own your perception. Ask for what you need: change the view with set_view "
     "(symbol, timeframe, chart type, families, bars, offset, layout/panes, tags, "
     "annotations).\n"
+    "- Limit every image to at most three distinct indicator families. If more evidence "
+    "is needed, inspect the current image, then request the next focused family group "
+    "with a later set_view/render sequence; use `families_deferred` in the set_view "
+    "result to choose what to inspect next.\n"
     "- `status_filter` chooses which life-cycle states you see. The default is "
-    "'default': dead TS, CRT and QM levels are hidden (the sweep/setup detectors "
-    "pile up gravedust fast), while every other family shows its fresh *and* dead "
-    "levels. Set it to 'live' when you want strictly fresh levels for every "
-    "family, or 'all' when you need the dead TS/CRT/QM history too — broken "
-    "levels, filled zones.\n"
+    "'all', including broken levels and filled zones. Set it to 'live' when you "
+    "want strictly fresh levels for every family. The explicit 'default' option "
+    "keeps the older family-aware policy: hide dead TS/CRT/QM, show every state "
+    "for other families.\n"
     "- A pinned level stays visible even if the status filter would hide it (and "
     "a pin is exempt from the per-family ray budget).\n"
     "- Do not assume the default view is the right view. If you need another timeframe, "
@@ -132,6 +185,8 @@ SYSTEM_PROMPT = (
     "\n"
     + _CONDITION_VOCABULARY + "\n"
     "\n"
+    + _INDICATOR_GUIDE + "\n"
+    "\n"
     + _OUTPUT_CONTRACT
 )
 
@@ -147,6 +202,20 @@ def build_system_prompt(*, playbook: str = "", extra: str = "") -> str:
     """
     parts: List[str] = [SYSTEM_PROMPT]
     addendum = (playbook or "").strip()
+    if "mnsr" in addendum[:300].lower():
+        parts.append(
+            "Required MNSR workflow:\n"
+            "1. Start with a split view of two distinct timeframes (context first, setup second), "
+            "at most three overlay families, and include liquidity. Every image is limited to "
+            "three distinct indicator families.\n"
+            "2. Render that selected view and look up the context liquidity family. If useful "
+            "liquidity exists, pin the exact returned level_key and timeframe.\n"
+            "3. Complete the playbook's setup checks. Before ending, either make a valid "
+            "trade proposal or arm a strategy-relevant watch for the missing setup phase.\n"
+            "Do not render every indicator family together. Inspect each image, then use later "
+            "set_view/render calls sequentially for another focused group when more evidence is "
+            "needed; set_view reports any families_deferred."
+        )
     if addendum:
         parts.append("Playbook addendum:\n" + addendum)
     context = (extra or "").strip()
@@ -266,6 +335,39 @@ def _missing_now() -> datetime:
     )
 
 
+def _order_digest(store: ContextStore, limit: int = ORDERS_IN_BRIEFING) -> List[Dict[str, Any]]:
+    """The live proposals with their **real-execution outcome**, oldest first.
+
+    ``propose_trade`` does not place an order itself — the executor syncs after
+    the turn — so the model's feedback has to come *here*. Each row tells it
+    honestly what became of its idea: placed (with the terminal ticket), refused
+    (with the broker's reason — "invalid stops", a duplicate plan, the cap), or
+    not yet executed. A refused order is retried next turn, so this digest is
+    what lets the model *adapt* — tighten a stop distance the broker rejected,
+    or drop a plan that keeps failing — instead of blindly re-proposing it.
+    """
+    rows: List[Dict[str, Any]] = []
+    for proposal in list(store.data.proposals)[-limit:]:
+        if proposal.status is not ProposalStatus.PROPOSED:
+            continue
+        if proposal.executed:
+            state = f"order placed (ticket {proposal.order_ticket})"
+        elif proposal.execution_error:
+            state = f"NOT placed — refused: {proposal.execution_error}"
+        else:
+            state = "not yet executed"
+        rows.append({
+            "id": proposal.id,
+            "bias": proposal.bias,
+            "setup": proposal.setup,
+            "entry": proposal.entry,
+            "sl": proposal.sl,
+            "tp": proposal.tp,
+            "execution": state,
+        })
+    return rows
+
+
 def build_briefing(
     store: ContextStore,
     *,
@@ -292,6 +394,8 @@ def build_briefing(
     - ``retroactive`` — fires missed while the process was down, each marked
       ``live: false`` and ``"not live"``; they are history, not evidence now.
     - ``notes`` — recent notes read back from the turn log.
+    - ``orders`` — the live proposals with what really happened to them at the
+      terminal (placed ticket, refusal reason, not yet executed).
 
     ``now`` is required: a missing instant raises rather than silently reading the
     wall clock (see :func:`_missing_now`), so a briefing is always reproducible.
@@ -312,6 +416,7 @@ def build_briefing(
         "expired": [_expiry_briefing(s, now) for s in expired],
         "retroactive": [_fire_briefing(f, now, live=False) for f in retroactive],
         "notes": _recent_notes(store),
+        "orders": _order_digest(store),
         "now": now.isoformat(),
     }
 

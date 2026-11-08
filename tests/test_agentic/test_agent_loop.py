@@ -9,6 +9,7 @@ The scenarios mirror the spec's turn algorithm: a full turn end-to-end, a resume
 boot turn with backfill, the leash, the caps, the kill switch, the note memory,
 and the prompt / briefing contracts.
 """
+import os
 from datetime import timedelta
 
 import pytest
@@ -33,8 +34,20 @@ from agentic.agent_loop import (
     AgentReply,
     AgentRequest,
     ScriptedAgent,
+    _required_workflow_tool,
 )
+
+
+def _leash_calls() -> int:
+    """The tool-call cap an un-injected loop runs on: the shipped default."""
+    return MAX_TOOL_CALLS_PER_TURN
+
+
+def _leash_rounds() -> int:
+    """The round budget an un-injected loop runs on: the shipped default."""
+    return MAX_TOOL_ROUNDS
 from agentic.feed import Feed, InsufficientHistory
+from agentic.llm import VisionClient
 from agentic.models import SubscriptionKind, Trigger
 from agentic.renderer import Renderer
 from agentic.store import (
@@ -122,6 +135,8 @@ def _log_entry(record, name):
 def test_full_turn_end_to_end(tmp_path):
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
+    # The startup render must ignore this saved indicator selection.
+    store.set_view(families=["fvg", "ob", "sr"])
     stub = _stub_with_fvg()
     feed = stub.build()
     key = _m15_key()
@@ -180,8 +195,9 @@ def test_full_turn_end_to_end(tmp_path):
     assert outcome.reason == ""
     assert outcome.trigger == "request"
     assert outcome.tool_calls == 5
-    # initial render (#1) + the explicit render tool call (#2)
-    assert outcome.renders == 2
+    # model-led perception: nothing is rendered before the model speaks; the
+    # exception count is therefore just the explicit render tool call (#1).
+    assert outcome.renders == 1
 
     # the store reflects every mutation
     assert store.data.view.bars == 50
@@ -202,7 +218,7 @@ def test_full_turn_end_to_end(tmp_path):
     assert [e["call"]["name"] for e in record.tool_calls] == [
         "set_view", "render", "level_lookup", "add_pin", "add_watch",
     ]
-    assert record.renders == 2
+    assert record.renders == 1
     assert record.tokens == 230
     assert record.cost_usd == approx(0.03)
     assert record.output["notes"][0]["text"] == "watching the M15 fvg"
@@ -213,12 +229,18 @@ def test_full_turn_end_to_end(tmp_path):
     assert lookup["ok"] is True
     assert lookup["result"]["matches"][0]["family"] == "fvg"
 
-    # the outcome's image/manifest are the *final* render (the render tool call),
-    # not the turn's initial perception render.
+    # the outcome's image/manifest are the *final* render (the render tool call)
     final_render = _log_entry(record, "render")["result"]["result"]
     assert outcome.image_path == final_render["image_path"]
-    assert outcome.manifest == final_render["manifest"]
+    assert outcome.manifest["render_id"] == final_render["manifest"]["render_id"]
+    assert set(outcome.manifest["tags"]) == set(final_render["manifest"]["tags"])
+    assert "image" in outcome.manifest and "image" not in final_render["manifest"]
     assert outcome.manifest["tags"], "the real renderer drew tags"
+    # model-led perception: the turn OPENS image-less — the strategy, the tools
+    # and the briefing are what the model first sees; the render arrives only
+    # after the model's own set_view + render round.
+    assert agent.requests[0].image_path == ""
+    assert agent.requests[1].image_path and os.path.isfile(agent.requests[1].image_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -256,7 +278,7 @@ def test_boot_turn_on_a_resumed_store(tmp_path):
     )
     outcome = loop.boot()
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason.startswith("incomplete_analysis")
     assert outcome.trigger == Trigger.BOOT.value
     # the thesis survived the restart
     assert resumed.data.thesis.bias == "bullish"
@@ -281,7 +303,8 @@ def test_boot_without_a_watchdog_still_runs(tmp_path):
         ScriptedAgent([AgentReply()]), clock=clock,
     )
     outcome = loop.boot()
-    assert outcome.ok is True and outcome.trigger == Trigger.BOOT.value
+    assert outcome.ok is False and outcome.reason == "incomplete_analysis"
+    assert outcome.trigger == Trigger.BOOT.value
     assert loop.wake() is None  # no watchdog: nothing to wake
 
 
@@ -309,7 +332,7 @@ def test_leash_refuses_a_second_turn_in_the_same_instant(tmp_path):
     loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
 
     first = loop.run_turn(trigger="request")
-    assert first.ok is True
+    assert first.ok is False and first.reason == "incomplete_analysis"
 
     second = loop.run_turn(trigger="request")
     assert second.ok is False
@@ -340,20 +363,20 @@ def test_more_tool_calls_than_the_cap_are_truncated(tmp_path):
     feed = _stub_with_fvg().build()
     calls = [
         ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": f"note {i}"})
-        for i in range(MAX_TOOL_CALLS_PER_TURN + 3)
+        for i in range(_leash_calls() + 3)
     ]
     agent = ScriptedAgent([AgentReply(tool_calls=calls)])
     loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason.startswith("incomplete_analysis")
     # every emitted call is logged; only the cap's worth ran
-    assert outcome.tool_calls == MAX_TOOL_CALLS_PER_TURN + 3
+    assert outcome.tool_calls == _leash_calls() + 3
     assert "tool_calls" in outcome.output["truncated"]
     assert "truncated" in outcome.reason
-    assert len(store.data.turns[0].tool_calls) == MAX_TOOL_CALLS_PER_TURN + 3
-    assert len(outcome.output["notes"]) == MAX_TOOL_CALLS_PER_TURN
+    assert len(store.data.turns[0].tool_calls) == _leash_calls() + 3
+    assert len(outcome.output["notes"]) == _leash_calls()
 
     # the dropped calls are surfaced to the model, not silently discarded
     dropped = [
@@ -374,7 +397,7 @@ def test_more_renders_than_the_cap_are_truncated(tmp_path):
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason.startswith("incomplete_analysis")
     assert outcome.renders == MAX_RENDERS_PER_TURN
     assert "renders" in outcome.output["truncated"]
     refused = [
@@ -391,24 +414,25 @@ def test_calling_exactly_the_tool_cap_is_not_truncated(tmp_path):
     feed = _stub_with_fvg().build()
     calls = [
         ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": f"note {i}"})
-        for i in range(MAX_TOOL_CALLS_PER_TURN)
+        for i in range(_leash_calls())
     ]
     loop = AgentLoop(
         store, feed, _renderer(tmp_path, clock),
         ScriptedAgent([AgentReply(tool_calls=calls)]), clock=clock,
     )
     outcome = loop.run_turn(trigger="request")
-    assert outcome.tool_calls == MAX_TOOL_CALLS_PER_TURN
+    assert outcome.tool_calls == _leash_calls()
     assert "truncated" not in outcome.output
-    assert outcome.reason == ""
+    assert outcome.reason == "incomplete_analysis"
 
 
 def test_using_exactly_the_render_cap_is_not_truncated(tmp_path):
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
     feed = _stub_with_fvg().build()
-    # the initial render is #1, so the cap allows MAX_RENDERS_PER_TURN - 1 more.
-    calls = [ToolCall(call_id=f"c{i}", name="render") for i in range(MAX_RENDERS_PER_TURN - 1)]
+    # model-led perception: there is no pre-turn render — the budget is spent
+    # entirely by the model's own render calls, and the cap serves them all.
+    calls = [ToolCall(call_id=f"c{i}", name="render") for i in range(MAX_RENDERS_PER_TURN)]
     loop = AgentLoop(
         store, feed, _renderer(tmp_path, clock),
         ScriptedAgent([AgentReply(tool_calls=calls)]), clock=clock,
@@ -418,6 +442,78 @@ def test_using_exactly_the_render_cap_is_not_truncated(tmp_path):
     assert "truncated" not in outcome.output
 
 
+def test_an_injected_render_cap_binds_the_turn(tmp_path):
+    """The loop honours the render bound its injected leash carries.
+
+    ``AGENT_MAX_RENDERS_PER_TURN`` reaches the registry through the leash dict,
+    the pipe ``_settings_leash`` uses. A *lower* injected cap tails the turn's
+    renders: the initial render is #1, one more succeeds, and the next is
+    refused with the injected number in the error.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    calls = [ToolCall(call_id=f"c{i}", name="render") for i in range(4)]
+    agent = ScriptedAgent([AgentReply(tool_calls=calls)])
+    loop = AgentLoop(
+        store, feed, _renderer(tmp_path, clock), agent, clock=clock,
+        leash=lambda: {"tool_calls": 99, "rounds": 7, "renders": 2},
+    )
+    outcome = loop.run_turn(trigger="request")
+    assert outcome.renders == 2
+    refused = [
+        entry["result"]
+        for entry in store.data.turns[0].tool_calls
+        if entry["result"]["ok"] is False
+    ]
+    assert refused and "render_cap: 2 renders per turn" in refused[0]["error"]
+
+
+def test_a_raised_injected_render_cap_allows_more_renders(tmp_path):
+    """Raising the injected render cap is not silently clamped to the constant.
+
+    The shipped default is 3; an injected leash of ``renders=6`` must actually
+    allow 6, otherwise the settings knob would emulate but not raise.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    # model-led: all 6 budget slots are the model's own render calls.
+    calls = [ToolCall(call_id=f"c{i}", name="render") for i in range(6)]
+    agent = ScriptedAgent([AgentReply(tool_calls=calls)])
+    loop = AgentLoop(
+        store, feed, _renderer(tmp_path, clock), agent, clock=clock,
+        leash=lambda: {"tool_calls": 99, "rounds": 7, "renders": 6},
+    )
+    outcome = loop.run_turn(trigger="request")
+    assert outcome.renders == 6
+    assert "truncated" not in outcome.output
+    assert not [
+        entry for entry in store.data.turns[0].tool_calls
+        if entry["result"]["ok"] is False
+    ]
+
+
+def test_a_leash_without_a_renders_key_uses_the_shipped_cap(tmp_path):
+    """Older leashes carry only ``tool_calls``/``rounds`` — still valid.
+
+    The render budget falls back to the shipped constant, so injecting a
+    settings leash written before this knob existed changes nothing else.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    calls = [ToolCall(call_id=f"c{i}", name="render") for i in range(MAX_RENDERS_PER_TURN + 1)]
+    agent = ScriptedAgent([AgentReply(tool_calls=calls)])
+    loop = AgentLoop(
+        store, feed, _renderer(tmp_path, clock), agent, clock=clock,
+        leash=lambda: {"tool_calls": 99, "rounds": 7},
+    )
+    outcome = loop.run_turn(trigger="request")
+    assert outcome.renders == MAX_RENDERS_PER_TURN
+    assert "renders" in outcome.output["truncated"]
+
+
 def test_max_tool_rounds_is_enforced(tmp_path):
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
@@ -425,13 +521,39 @@ def test_max_tool_rounds_is_enforced(tmp_path):
     # a model that never stops asking for tools runs out of *rounds*.
     script = [
         AgentReply(tool_calls=[ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": "x"})])
-        for i in range(MAX_TOOL_ROUNDS + 2)
+        for i in range(_leash_rounds() + 2)
     ]
     loop = AgentLoop(store, feed, _renderer(tmp_path, clock), ScriptedAgent(script), clock=clock)
     outcome = loop.run_turn(trigger="request")
-    assert outcome.tool_calls == MAX_TOOL_ROUNDS  # one per round, then stopped
+    assert outcome.tool_calls == _leash_rounds()  # one per round, then stopped
     assert outcome.output["truncated"] == ["rounds"]
-    assert outcome.reason == "truncated: rounds"
+    assert outcome.reason == "incomplete_analysis; truncated: rounds"
+
+
+def test_an_injected_leash_binds_the_turn(tmp_path):
+    """The loop honours whatever leash the service injects.
+
+    ``config.settings`` lives outside the pure core, so the live reading is the
+    *caller's* job — here the values are fed straight to ``AgentLoop(leash=…)``
+    the way ``AgentService`` does with ``_settings_leash``. Both caps bind:
+    within two model rounds the first note executes, the second is refused at
+    the injected one-call cap, and the turn reports both truncations.
+    """
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    feed = _stub_with_fvg().build()
+    script = [
+        AgentReply(tool_calls=[ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": "x"})])
+        for i in range(5)
+    ]
+    loop = AgentLoop(
+        store, feed, _renderer(tmp_path, clock), ScriptedAgent(script), clock=clock,
+        leash=lambda: {"tool_calls": 1, "rounds": 2},
+    )
+    outcome = loop.run_turn(trigger="request")
+    assert outcome.tool_calls == 2          # 2 rounds: 1 executed + 1 refused at tool_cap
+    # capped on both leashes: the per-turn call cap and the round cap
+    assert outcome.output["truncated"] == ["tool_calls", "rounds"]
 
 
 def test_a_toolless_closing_call_recovers_the_structured_output(tmp_path):
@@ -471,7 +593,7 @@ def test_a_toolless_closing_call_recovers_the_structured_output(tmp_path):
     assert store.data.thesis.bias == "bullish"
     assert store.data.thesis.invalidation == "below 4100"
     # The cap still stands: one closing call, not a second tool phase.
-    assert outcome.tool_calls == MAX_TOOL_ROUNDS
+    assert outcome.tool_calls == _leash_rounds()
 
     closing_request = agent.requests[-1]
     assert closing_request.tools == []          # no tools: the model must answer now
@@ -479,10 +601,47 @@ def test_a_toolless_closing_call_recovers_the_structured_output(tmp_path):
     assert closing_request.briefing["closing"]  # the instruction to end the turn
     assert "add_note" in closing_request.briefing["evidence"]  # evidence survives as text
 
-    # The closing call is billed like any other round (all MAX_TOOL_ROUNDS + 1 calls).
+    # The closing call is billed like any other round (all rounds + 1 calls).
+    rounds_for_billing = _leash_rounds()
     record = store.data.turns[0]
-    assert record.tokens == (10 + 5) * MAX_TOOL_ROUNDS + (20 + 10)
-    assert record.cost_usd == approx(0.01 * MAX_TOOL_ROUNDS + 0.02)
+    assert record.tokens == (10 + 5) * rounds_for_billing + (20 + 10)
+    assert record.cost_usd == approx(0.01 * rounds_for_billing + 0.02)
+
+
+def test_notes_only_reply_gets_a_closing_call_for_the_required_thesis(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([
+        AgentReply(output={"notes": []}),
+        AgentReply(output={"thesis": {
+            "bias": "neutral", "storyline": "range remains unresolved",
+            "invalidation": "close beyond either range edge", "confidence": 0.3,
+        }}),
+    ])
+
+    outcome = AgentLoop(
+        store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent, clock=clock
+    ).run_turn(trigger="request")
+
+    assert outcome.ok
+    assert len(agent.requests) == 2
+    assert agent.requests[-1].tools == []
+    assert store.data.thesis.storyline == "range remains unresolved"
+
+
+def test_turn_is_reported_incomplete_if_closing_reply_still_has_no_thesis(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([AgentReply(output={"notes": []})])
+
+    outcome = AgentLoop(
+        store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent, clock=clock
+    ).run_turn(trigger="request")
+
+    assert outcome.ok is False
+    assert outcome.reason == "incomplete_analysis"
+    assert outcome.output["analysis_status"] == "incomplete"
+    assert len(agent.requests) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -509,7 +668,7 @@ def test_disabled_refuses_fire_and_boot_but_allows_a_request(tmp_path):
 
     # a human request is always allowed, even with the agent disabled.
     allowed = loop.run_turn(trigger="request", detail="human asks anyway")
-    assert allowed.ok is True
+    assert allowed.ok is False and allowed.reason == "incomplete_analysis"
     assert len(store.data.turns) == 1
 
 
@@ -537,7 +696,8 @@ def test_a_refused_wake_keeps_the_fire_buffered(tmp_path):
     store.set_enabled(True)
     clock.set(at(6, 20))
     fired = loop.wake()
-    assert fired is not None and fired.ok is True
+    assert fired is not None and fired.ok is False
+    assert fired.reason == "incomplete_analysis"
     assert fired.trigger == Trigger.FIRE.value
     assert watchdog.pending() == []
     assert len(store.data.turns) == 1
@@ -619,10 +779,300 @@ def test_the_initial_render_fetches_the_view_snapshot_once(tmp_path):
     registry.initial_render()
     assert stub.snapshot_calls.count(("XAUUSDm", "M15")) == 1
 
-    # a lookup right after the render re-uses the snapshot it seeded, not a re-fetch.
+    # The initial image uses the fixed 180-bar contract; this saved view is 20
+    # bars, so a subsequent lookup must fetch the requested view's own snapshot.
     registry.execute(ToolCall(name="level_lookup", arguments={"family": "fvg"}))
-    assert stub.snapshot_calls.count(("XAUUSDm", "M15")) == 1
+    assert stub.snapshot_calls.count(("XAUUSDm", "M15")) == 2
 
+
+def test_initial_perception_is_plain_even_when_saved_view_has_indicators(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(families=["fvg", "ob", "sr"])
+    key = _m15_key()
+    store.add_subscription("pin", params={"level_key": key}, reason="keep visible")
+    store.set_thesis(levels_of_interest=[key])
+    renderer = _renderer(tmp_path, clock)
+    stub = _stub_with_fvg()
+    registry = ToolRegistry(store, stub.build(), renderer, clock=clock)
+
+    registry.initial_render()
+
+    first = renderer.calls[0]
+    assert first["snapshot"].levels == []
+    assert first["pins"] == []
+    assert first["thesis_level_keys"] == []
+    assert stub.bars_requests[0][2] == 180
+
+
+def test_loop_requires_split_view_render_and_level_lookup_before_finishing(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    choices = []
+
+    def scripted(request):
+        choices.append(request.tool_choice)
+        if len(choices) == 1:
+            params = next(t["parameters"] for t in request.tools if t["name"] == "set_view")
+            assert params["required"] == ["layout", "panes", "families"]
+            assert params["properties"]["layout"]["enum"] == ["split"]
+            assert "families" in params["required"]
+            return AgentReply(tool_calls=[
+                ToolCall(name="set_view", arguments={
+                    "layout": "split", "panes": ["H1", "M15"],
+                    "families": ["liquidity", "bos", "ob"],
+                })
+            ])
+        if len(choices) == 2:
+            assert choices[-1] == {"type": "function", "function": {"name": "render"}}
+            return AgentReply(tool_calls=[ToolCall(name="render")])
+        if len(choices) == 3:
+            assert choices[-1] == {"type": "function", "function": {"name": "level_lookup"}}
+            params = next(t["parameters"] for t in request.tools if t["name"] == "level_lookup")
+            assert params["required"] == ["family"]
+            return AgentReply(tool_calls=[ToolCall(name="level_lookup", arguments={"family": "liquidity"})])
+        if len(choices) == 4:
+            assert choices[-1] == {"type": "function", "function": {"name": "add_watch"}}
+            return AgentReply(tool_calls=[ToolCall(name="add_watch", arguments={
+                "condition": "bos_forms", "params": {"timeframe": "M15", "direction": "bearish"},
+                "ttl_hours": 12, "reason": "wait for setup structure",
+            })])
+        return AgentReply(output={"thesis": {
+            "bias": "neutral", "storyline": "H1 context and M15 setup checked",
+            "invalidation": "a decisive close beyond the range", "confidence": 0.3,
+        }})
+
+    agent = ScriptedAgent(scripted)
+    outcome = AgentLoop(
+        store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent, clock=clock,
+        playbook="Phoenix MNSR",
+    ).run_turn(trigger="request")
+
+    assert outcome.ok
+    assert choices == [
+        {"type": "function", "function": {"name": "set_view"}},
+        {"type": "function", "function": {"name": "render"}},
+        {"type": "function", "function": {"name": "level_lookup"}},
+        {"type": "function", "function": {"name": "add_watch"}},
+        "auto",
+    ]
+
+
+def test_context_liquidity_result_requires_a_real_pin_then_a_watch_or_proposal():
+    log = [
+        {"call": {"name": "set_view", "arguments": {}}, "result": {"ok": True, "result": {
+            "layout": "split", "panes": ["H1", "M15"],
+            "families": ["liquidity", "bos", "ob"],
+        }}},
+        {"call": {"name": "render", "arguments": {}}, "result": {"ok": True, "result": {}}},
+        {"call": {"name": "level_lookup", "arguments": {"family": "liquidity"}},
+         "result": {"ok": True, "result": {"matches": [
+             {"family": "liquidity", "level_key": "liquidity:H1:4190", "timeframe": "H1", "status": "live"}
+         ]}}},
+    ]
+
+    assert _required_workflow_tool(log, require_watch=True) == "add_pin"
+    log.append({"call": {"name": "add_pin", "arguments": {
+        "level_key": "liquidity:H1:4190", "timeframe": "H1",
+    }}, "result": {"ok": True, "result": {}}})
+    assert _required_workflow_tool(log, require_watch=True) == "add_watch"
+    log.append({"call": {"name": "add_watch", "arguments": {"condition": "bos_forms"}},
+                "result": {"ok": True, "result": {}}})
+    assert _required_workflow_tool(log, require_watch=True) == ""
+
+
+def test_context_view_rejects_inherited_all_family_or_single_timeframe_dials(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(
+        store, _stub_with_fvg().build(), _renderer(tmp_path, clock),
+        clock=clock, require_context_view=True,
+    )
+
+    one_frame = registry.execute(ToolCall(name="set_view", arguments={
+        "timeframe": "M15", "families": ["liquidity", "bos", "ob"],
+    }))
+    assert one_frame.ok
+    assert one_frame.result["layout"] == "split"
+    assert one_frame.result["panes"] == ["H1", "M15"]
+    crowded = registry.execute(ToolCall(name="set_view", arguments={
+        "layout": "split", "panes": ["H1", "M15"],
+        "families": ["liquidity", "bos", "ob", "fvg"],
+    }))
+    assert crowded.ok and len(crowded.result["families"]) == 3
+    assert crowded.result["families"] == ["liquidity", "bos", "ob"]
+    assert crowded.result["families_deferred"] == ["fvg"]
+
+
+def test_indicator_views_explain_sequential_family_cap(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(), _renderer(tmp_path, clock), clock=clock)
+    result = registry.execute(ToolCall(name="set_view", arguments={
+        "families": ["bos", "ob", "fvg", "ifvg"],
+    }))
+    assert result.ok
+    assert result.result["families"] == ["bos", "ob", "fvg"]
+    assert result.result["families_deferred"] == ["ifvg"]
+
+
+def test_render_caps_legacy_persisted_views_to_three_families(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(families=["liquidity", "bos", "ob", "fvg"])
+    stub = _stub_with_fvg()
+    registry = ToolRegistry(store, stub.build(), _renderer(tmp_path, clock), clock=clock)
+    result = registry.execute(ToolCall(name="render"))
+    assert result.ok
+    assert stub.snapshot_families[-1] == ["liquidity", "bos", "ob"]
+
+
+def test_agent_tool_call_budget_is_ten():
+    assert MAX_TOOL_CALLS_PER_TURN == 10  # shipped default; a live retune is an injected leash
+
+
+def test_phoenix_prompt_requires_sequential_groups_of_three_indicators():
+    prompt = prompts.build_system_prompt(playbook="Phoenix MNSR")
+    assert "at most three overlay families" in prompt
+    assert "sequential" in prompt.lower()
+
+
+def test_every_playbook_is_told_to_sequence_indicator_families():
+    prompt = prompts.build_system_prompt()
+    assert "at most three distinct indicator families" in prompt.lower()
+    assert "families_deferred" in prompt
+
+
+def test_phoenix_turn_arms_fallback_watch_if_model_stops_before_action(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    agent = ScriptedAgent([
+        AgentReply(tool_calls=[ToolCall(name="set_view", arguments={
+            "layout": "split", "panes": ["H1", "M15"],
+            "families": ["liquidity", "bos", "ob"],
+        })]),
+        AgentReply(tool_calls=[ToolCall(name="render")]),
+        AgentReply(),  # model omits the required lookup; the orchestrator supplies it
+        AgentReply(),  # model then stops; a safe wait is more useful than silence
+        AgentReply(output={"thesis": {
+            "bias": "neutral", "storyline": "No active context pool or trade trigger was confirmed.",
+            "invalidation": "Reassess when setup-frame structure changes.", "confidence": 0.2,
+        }}),
+    ])
+
+    outcome = AgentLoop(
+        store, _stub_with_fvg().build(), _renderer(tmp_path, clock), agent,
+        clock=clock, playbook="Phoenix MNSR",
+    ).run_turn(trigger="request")
+
+    assert outcome.ok
+    fallback = next(entry for entry in store.data.turns[-1].tool_calls
+                    if entry["call"]["name"] == "add_watch")
+    assert fallback["source"] == "workflow_fallback"
+    assert fallback["call"]["arguments"]["condition"] == "bos_forms"
+    assert fallback["call"]["arguments"]["params"]["timeframe"] == "M15"
+    lookup = next(entry for entry in store.data.turns[-1].tool_calls
+                  if entry["call"]["name"] == "level_lookup")
+    assert lookup["source"] == "workflow_fallback"
+    assert lookup["call"]["arguments"] == {"family": "liquidity", "timeframe": "H1"}
+    assert "system added a conservative watch" in agent.requests[-1].briefing["workflow_action"]
+
+
+def test_vision_agent_end_to_end_receives_plain_image_and_uses_tools(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    store.set_view(families=["fvg", "ob", "sr"])
+    sent_payloads = []
+    set_view_choice = {"type": "function", "function": {"name": "set_view"}}
+
+    def transport(payload):
+        sent_payloads.append(payload)
+        user_parts = payload["messages"][-1]["content"]
+        image_parts = [part for part in user_parts if part["type"] == "image_url"]
+        # model-led perception: the turn opens text-only; the image exists only
+        # from the round after the model's own render call onwards.
+        if len(sent_payloads) in (1, 2):
+            assert image_parts == []          # strategy + tools first, no image
+        else:
+            assert len(image_parts) == 1
+            assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+        if len(sent_payloads) == 1:
+            assert payload["tool_choice"] == set_view_choice
+            return {"choices": [{"finish_reason": "tool_calls", "message": {
+                "tool_calls": [
+                    {"id": "set-view", "type": "function", "function": {
+                        "name": "set_view", "arguments": '{"layout":"split","panes":["H1","M15"],"families":["liquidity","bos","ob"]}'
+                    }},
+                ], "content": None,
+            }}], "usage": {"prompt_tokens": 10, "completion_tokens": 4}}
+        if len(sent_payloads) == 4:
+            assert payload["tool_choice"] == {"type": "function", "function": {"name": "add_watch"}}
+            return {"choices": [{"finish_reason": "tool_calls", "message": {
+                "tool_calls": [{"id": "watch", "type": "function", "function": {
+                    "name": "add_watch", "arguments": '{"condition":"bos_forms","params":{"timeframe":"M15","direction":"bearish"},"ttl_hours":12,"reason":"wait for structure"}',
+                }}], "content": None,
+            }}], "usage": {"prompt_tokens": 10, "completion_tokens": 4}}
+        if len(sent_payloads) in (2, 3):
+            expected = "render" if len(sent_payloads) == 2 else "level_lookup"
+            assert payload["tool_choice"] == {"type": "function", "function": {"name": expected}}
+            name = expected
+            args = "{}" if name == "render" else '{"family":"liquidity"}'
+            return {"choices": [{"finish_reason": "tool_calls", "message": {
+                "tool_calls": [{"id": name, "type": "function", "function": {
+                    "name": name, "arguments": args,
+                }}], "content": None,
+            }}], "usage": {"prompt_tokens": 10, "completion_tokens": 4}}
+        assert payload["tool_choice"] == "auto"
+        assert any(message["role"] == "tool" for message in payload["messages"])
+        return {"choices": [{"finish_reason": "stop", "message": {
+            "content": '{"thesis":{"bias":"neutral","storyline":"FVG checked",'
+                       '"invalidation":"close beyond the range","confidence":0.4},'
+                       '"reasoning":"Inspected the plain chart, then requested and checked FVG."}'
+        }}], "usage": {"prompt_tokens": 14, "completion_tokens": 9}}
+
+    vision = VisionClient(transport, model="glm-5.3-flash-free")
+
+    class InspectingClient:
+        def __init__(self):
+            self.first_views = []
+
+        def complete(self, request):
+            if not self.first_views:
+                self.first_views.append({
+                    "image_path": request.image_path,
+                    "manifest": dict(request.manifest),
+                    "tool_choice": request.tool_choice,
+                })
+            return vision.complete(request)
+
+    client = InspectingClient()
+    activity = []
+    outcome = AgentLoop(
+        store,
+        _stub_with_fvg().build(),
+        _png_renderer(tmp_path, clock),
+        client,
+        clock=clock,
+        playbook="Phoenix MNSR",
+        activity=lambda event, data: activity.append((event, data)),
+    ).run_turn(trigger="request", detail="e2e validation")
+
+    assert outcome.ok and outcome.tool_calls == 4 and outcome.renders == 1
+    # model-led: the first request carries no image and no manifest — the model
+    # decides the view itself (set_view) and asks for its own render.
+    assert client.first_views[0]["image_path"] == ""
+    assert client.first_views[0]["manifest"] == {}
+    assert len(sent_payloads) == 5
+    record = store.data.turns[-1]
+    assert [entry["call"]["name"] for entry in record.tool_calls] == [
+        "set_view", "render", "level_lookup", "add_watch"
+    ]
+    assert record.tool_calls[2]["result"]["result"]["query"]["family"] == "liquidity"
+    assert record.output["notes"] == []
+    assert record.output["thesis"]["storyline"] == "FVG checked"
+    assert {event for event, _ in activity} >= {
+        "turn_started", "model_response", "tool_call", "tool_result"
+    }
 
 # --------------------------------------------------------------------------- #
 # render_current: pin resolution (stub) and the real manifest
@@ -655,7 +1105,8 @@ def test_a_pinned_dead_level_still_draws_under_the_fresh_filter(tmp_path):
     # the way they are exempt from the per-family ray budget. A dead *ts* level
     # is exactly what "default" hides, so the "all" retry must fire.
     clock = FakeClock(at(6, 0))
-    store = _store(tmp_path, clock)     # view.status_filter is the default "default"
+    store = _store(tmp_path, clock)
+    store.set_view(status_filter="default")
     dead = _level(
         "ts",
         type="TS HIGH (BEARISH)",
@@ -767,6 +1218,8 @@ def test_level_lookup_measures_a_p2_tag_against_pane_two(tmp_path):
     registry = ToolRegistry(store, _split_feed(), _png_renderer(tmp_path, clock), clock=clock)
 
     registry.initial_render()
+    registry.execute(ToolCall(name="set_view", arguments={"families": ["crt", "fvg"]}))
+    registry.execute(ToolCall(name="render"))
     tag = next(t for t in registry.last_result.manifest["tags"] if t.startswith("P2:"))
 
     result = registry.execute(ToolCall(name="level_lookup", arguments={"tag": tag})).result
@@ -786,6 +1239,8 @@ def test_level_lookup_searches_every_pane_by_family_and_near_price(tmp_path):
     registry = ToolRegistry(store, _split_feed(), _png_renderer(tmp_path, clock), clock=clock)
 
     registry.initial_render()
+    registry.execute(ToolCall(name="set_view", arguments={"families": ["crt", "fvg"]}))
+    registry.execute(ToolCall(name="render"))
 
     by_family = registry.execute(
         ToolCall(name="level_lookup", arguments={"family": "fvg"})
@@ -825,36 +1280,67 @@ def _historyless_feed(*, fail_when):
 
 
 def test_a_persisted_offset_past_history_degrades_to_the_live_edge(tmp_path):
+    """The bad-offset hazard is now an IN-BAND refusal the model can act on.
+
+    There is no pre-turn render any more, so nobody hits the poisoned offset
+    before the model; the model's own render call is refused with
+    ``insufficient_history`` (a tool result, not an exception), and the model
+    fixes its own request: ``set_view(offset=0)`` renders fine at the live edge.
+    """
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
     store.set_view(offset=999)  # persisted: the feed holds nowhere near this
     feed = _historyless_feed(fail_when=lambda offset: offset > 0)
-    agent = ScriptedAgent([AgentReply(output={"reasoning": "recovered"})])
+    agent = ScriptedAgent([
+        AgentReply(tool_calls=[
+            ToolCall(call_id="c1", name="render"),
+            ToolCall(call_id="c2", name="set_view", arguments={"offset": 0}),
+            ToolCall(call_id="c3", name="render"),
+        ]),
+        AgentReply(output={"reasoning": "recovered"}),
+    ])
     loop = AgentLoop(store, feed, _png_renderer(tmp_path, clock), agent, clock=clock)
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
-    assert store.data.view.offset == 0      # degraded to the live edge, so the view is usable
+    assert outcome.reason.startswith("incomplete_analysis")   # +"truncated: renders"
+    # the refusal named the problem in-band, then the model's fix took effect
+    log = store.data.turns[0].tool_calls
+    assert log[0]["result"]["ok"] is False
+    assert "insufficient_history" in log[0]["result"]["error"]
+    assert log[1]["result"]["ok"] is True
+    assert store.data.view.offset == 0      # degraded to the live edge in-band
+    assert log[2]["result"]["ok"] is True
     assert outcome.image_path               # the retry rendered an image
     assert "render_error" not in outcome.output
     assert len(store.data.turns) == 1
 
 
 def test_a_render_failure_is_recorded_and_the_turn_still_completes(tmp_path):
+    """Every render fails (even offset 0): the model SEES the refusal in-band.
+
+    The turn still runs to completion — no exception escapes, the outcome has
+    no image, and the turn record carries the refused call with its reason.
+    """
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
     store.set_view(offset=5)
-    feed = _historyless_feed(fail_when=lambda offset: True)  # even the live edge fails
-    agent = ScriptedAgent([AgentReply(output={"reasoning": "no image, carry on"})])
+    feed = _historyless_feed(fail_when=lambda offset: True)  # every render fails
+    agent = ScriptedAgent([
+        AgentReply(tool_calls=[ToolCall(call_id="c1", name="render")]),
+        AgentReply(output={"reasoning": "no image, carry on"}),
+    ])
     loop = AgentLoop(store, feed, _png_renderer(tmp_path, clock), agent, clock=clock)
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
+    assert outcome.reason.startswith("incomplete_analysis")   # +"truncated: renders"
     assert outcome.image_path == ""
-    assert outcome.output["render_error"].startswith("InsufficientHistory")
-    assert store.data.turns[0].output["render_error"].startswith("InsufficientHistory")
+    entry = store.data.turns[0].tool_calls[0]
+    assert entry["call"]["name"] == "render"
+    assert entry["result"]["ok"] is False
+    assert entry["result"]["error"].startswith("insufficient_history")
+    assert "render_error" not in outcome.output
 
 
 # --------------------------------------------------------------------------- #
@@ -937,7 +1423,7 @@ def test_a_rejected_output_is_captured_not_raised(tmp_path):
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason == "incomplete_analysis"
     errors = outcome.output["apply_errors"]
     assert any(e.startswith("thesis:") for e in errors)
     assert any(e.startswith("proposal:") for e in errors)
@@ -991,7 +1477,7 @@ def test_the_loop_injects_the_loaded_strategy_into_the_prompt(tmp_path):
 
     outcome = loop.run_turn(trigger="boot")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason.startswith("incomplete_analysis")
     assert "STRATEGY INSTRUCTIONS: trade Phoenix MNFR only." in agent.requests[0].system_prompt
     # and the plain-contract parts still surround it
     assert "PROPOSE-ONLY" in agent.requests[0].system_prompt
@@ -1068,9 +1554,10 @@ def test_run_turn_records_the_calls_whose_results_it_fed_back(tmp_path):
 
     loop.run_turn(trigger="request")
 
-    # the same object is handed to every round, so its tool activity accumulates
-    # in order, alongside the results, for the wire layer to rebuild.
-    request = agent.requests[0]
+    # each round's request is a snapshot of what that round saw; the last
+    # *regular* round (the closing call is deliberately tool-less) carries the
+    # full accumulated history for the wire layer to rebuild.
+    request = next(r for r in reversed(agent.requests) if r.tool_calls_made)
     assert [call.call_id for call in request.tool_calls_made] == ["c1", "c2"]
     assert [result.call_id for result in request.tool_results] == ["c1", "c2"]
 
@@ -1081,17 +1568,18 @@ def test_tool_calls_made_includes_calls_dropped_by_the_cap(tmp_path):
     feed = _stub_with_fvg().build()
     calls = [
         ToolCall(call_id=f"c{i}", name="add_note", arguments={"text": f"note {i}"})
-        for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
+        for i in range(_leash_calls() + 2)
     ]
     agent = ScriptedAgent([AgentReply(tool_calls=calls), AgentReply()])
     loop = AgentLoop(store, feed, _renderer(tmp_path, clock), agent, clock=clock)
 
     loop.run_turn(trigger="request")
 
-    request = agent.requests[0]
-    # every emitted call has a result (executed or tool_cap-refused), and is recorded.
-    assert len(request.tool_calls_made) == MAX_TOOL_CALLS_PER_TURN + 2
-    assert len(request.tool_results) == MAX_TOOL_CALLS_PER_TURN + 2
+    request = next(r for r in reversed(agent.requests) if r.tool_calls_made)
+    # the last regular round's snapshot: every emitted call has a result
+    # (executed or tool_cap-refused), recorded in order.
+    assert len(request.tool_calls_made) == _leash_calls() + 2
+    assert len(request.tool_results) == _leash_calls() + 2
     assert [r.call_id for r in request.tool_results] == [c.call_id for c in calls]
 
 
@@ -1235,18 +1723,22 @@ class _ManifestRenderer(FakeRenderer):
 
 
 def test_the_closing_call_sees_the_chart_as_text(tmp_path):
-    """A turn whose tool rounds were spent on `set_view` must not close with the
-    model honestly holding no numbers: the last render's manifest rides along as
-    a text digest, live levels first."""
+    """A turn with a render must not close with the model honestly holding no
+    numbers: the last render's manifest rides along as a text digest, live
+    levels first. (The initial perception render is gone — to have a chart at
+    closing time, the model's own render call must have succeeded.)"""
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
-    agent = ScriptedAgent([AgentReply(text="thinking out loud")])  # no output, no tools
+    agent = ScriptedAgent([
+        AgentReply(tool_calls=[ToolCall(call_id="c1", name="render")]),
+        AgentReply(text="thinking out loud"),  # no output → the closing call
+    ])
     loop = AgentLoop(store, _stub_with_fvg().build(), _ManifestRenderer(
         out_dir=str(tmp_path / "r"), clock=clock), agent, clock=clock)
 
     outcome = loop.run_turn(trigger="request")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason == "incomplete_analysis"
     closing = agent.requests[-1]
     assert closing.image_path == ""                    # still image-less...
     chart = closing.briefing["chart"]
@@ -1259,7 +1751,9 @@ def test_the_closing_call_sees_the_chart_as_text(tmp_path):
 
 
 def test_the_closing_call_admits_when_nothing_rendered(tmp_path):
-    """No manifest -> no `chart` block: the model is told the truth either way."""
+    """No model render -> no `chart` block: the model is told the truth either
+    way. (Nothing renders before the model speaks now, so a model that never
+    asked for a render closes with none.)"""
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)
     agent = ScriptedAgent([AgentReply(text="thinking out loud")])

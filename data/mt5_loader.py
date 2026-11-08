@@ -10,6 +10,7 @@ Features:
 from __future__ import annotations
 
 import threading
+import time
 from typing import Dict, List, Optional
 import logging
 import pandas as pd
@@ -24,6 +25,13 @@ from config.settings import (
 
 logger = logging.getLogger("MSNR_MT5Loader")
 _mt5_lock = threading.Lock()
+
+#: A fresh ``copy_rates`` can briefly return nothing (or a short window) while
+#: the terminal is still downloading that timeframe's series into memory — the
+#: very first D1/W1 request after boot is the classic case. Before declaring
+#: ``InsufficientHistory``, give the terminal this much slack.
+FEED_RETRY_ATTEMPTS = 3
+FEED_RETRY_WAIT_S = 0.4
 
 
 class InsufficientHistory(ValueError):
@@ -72,6 +80,26 @@ class MT5DataLoader:
             self._connected = True
             logger.info(f"Connected to MT5 successfully. Active Symbol: {self.resolved_symbol}")
             return True
+
+    def _reattach(self) -> bool:
+        """Re-``initialize`` after the process's IPC pipe died (``-10004``).
+
+        MT5's Python bindings hold **one** connection per *process*: a stray
+        ``shutdown()`` — anywhere in the server — drops it for every user at
+        once, and ``copy_rates`` then fails with ``No IPC connection`` until
+        someone attaches again. This heals in place, so a broken pipe on the
+        candles feed costs one retry round, not a restart of the server.
+        """
+        init_params = {"timeout": 30_000}
+        if MT5_PATH:
+            init_params["path"] = MT5_PATH
+        with _mt5_lock:
+            if mt5.initialize(**init_params):
+                self._connected = True
+                mt5.symbol_select(self.resolved_symbol, True)
+                return True
+            logger.error(f"MT5 reattach failed: {mt5.last_error()}")
+            return False
 
     def _resolve_symbol(self, symbol: str) -> str:
         """Find the broker's exact symbol name for a given request."""
@@ -140,24 +168,46 @@ class MT5DataLoader:
             return self._resample(tf_key.upper(), count, start)
 
         bars_count = count or CANDLE_FETCH_COUNT.get(tf_key.upper(), 500)
-        with _mt5_lock:
-            rates = mt5.copy_rates_from_pos(self.resolved_symbol, mt5_tf, start, bars_count)
+        rates: Optional[list] = None
+        for attempt in range(max(1, FEED_RETRY_ATTEMPTS)):
+            with _mt5_lock:
+                rates = mt5.copy_rates_from_pos(self.resolved_symbol, mt5_tf, start, bars_count)
+                err = mt5.last_error()
+            got = 0 if rates is None else len(rates)
+            if got >= bars_count:
+                break
+            if rates is None and err and err[0] == -10004:
+                # The process's IPC attach to the terminal died (something
+                # called ``mt5.shutdown()`` in-process, or the terminal
+                # restarted). Re-attach and copy again on the next attempt —
+                # this is healable, not "insufficient history".
+                logger.warning(
+                    f"MT5 IPC dropped ({err}); re-attaching for '{self.resolved_symbol}'"
+                )
+                if self._reattach():
+                    continue
+            if attempt + 1 < max(1, FEED_RETRY_ATTEMPTS):
+                # Terminal may still be syncing this timeframe's history; a short
+                # wait beats reporting "insufficient history" on a series that is
+                # merely mid-download.
+                time.sleep(FEED_RETRY_WAIT_S)
 
         if rates is None or len(rates) == 0:
+            err = mt5.last_error()
             if count is not None:
                 # An explicit window that yields nothing means the offset (or the
                 # request) is past the feed's history — a fixable client error.
                 raise InsufficientHistory(
                     f"requested {count} {tf_key.upper()} bar(s) at start={start}; "
-                    f"the feed returned none"
+                    f"the feed returned none (terminal: {err})"
                 )
-            err = mt5.last_error()
             raise RuntimeError(f"Failed to copy rates for {self.resolved_symbol} [{tf_key}]: {err}")
 
         if count is not None and len(rates) < int(count):
             # ``copy_rates_from_pos`` silently returns a short window when the
-            # request reaches past the oldest bar; surface it instead of letting
-            # the caller reason over the wrong window.
+            # request reaches past the oldest bar (or the terminal has not
+            # finished downloading); surface it instead of letting the caller
+            # reason over the wrong window.
             raise InsufficientHistory(
                 f"requested {count} {tf_key.upper()} bar(s) at start={start}; "
                 f"only {len(rates)} available"

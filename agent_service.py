@@ -38,8 +38,9 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from agentic._time import as_aware
@@ -52,12 +53,22 @@ from agentic.agent_loop import (
 )
 from agentic.feed import Feed
 from agentic.llm import DEFAULT_MAX_TOKENS, DEFAULT_MODEL, Transport, VisionClient
+from agentic.models import Proposal, ProposalStatus, Thesis
 from agentic.prompts import subscription_briefing, turn_conclusion
 from agentic.renderer import DEFAULT_RENDER_DIR, Renderer
-from agentic.store import ContextStore, LeashExceeded
+from agentic.store import (
+    ContextStore,
+    LeashExceeded,
+    MAX_RENDERS_PER_TURN,
+    MAX_TOOL_CALLS_PER_TURN,
+    MAX_TURNS_PER_DAY,
+    MAX_TURNS_PER_HOUR,
+    MIN_TURN_INTERVAL_S,
+)
 from agentic.strategy import load_strategy
 from agentic.tools import ToolCall
 from agentic.watchdog import Watchdog
+from execution.agent_orders import execute_proposal
 
 logger = logging.getLogger("agent_service")
 
@@ -86,6 +97,55 @@ def _utcnow() -> datetime:
 #: the dataclass default and :func:`_request_headers` share this one literal; the
 #: ``AGENT_HTTP_USER_AGENT`` constant in :mod:`config.settings` must match it.
 DEFAULT_USER_AGENT = "trading-bot-agent/1.0"
+
+
+def _settings_leash() -> Dict[str, int]:
+    """Read the agent's turn leash from ``config.settings`` — live, per turn.
+
+    The user retunes ``AGENT_MAX_TOOL_CALLS`` / ``AGENT_MAX_TOOL_ROUNDS`` /
+    ``AGENT_MAX_RENDERS_PER_TURN`` there (the shipped defaults live in
+    :mod:`agentic.store` / ``agent_loop``); an edit applies to the very next turn
+    with no restart. The loop itself must stay a pure module, so this settings
+    read lives here and is injected as a callable.
+    """
+    from config import settings
+
+    def count(name: str, fallback: int) -> int:
+        try:
+            value = int(getattr(settings, name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+        return value if value >= 1 else fallback
+
+    return {
+        "tool_calls": count("AGENT_MAX_TOOL_CALLS", MAX_TOOL_CALLS_PER_TURN),
+        "rounds": count("AGENT_MAX_TOOL_ROUNDS", MAX_TOOL_ROUNDS),
+        "renders": count("AGENT_MAX_RENDERS_PER_TURN", MAX_RENDERS_PER_TURN),
+    }
+
+
+def _settings_turn_limits() -> Dict[str, float]:
+    """Read the store's turn-rate leash from ``config.settings`` — live, per check.
+
+    Injected into the :class:`~agentic.store.ContextStore` (``set_leash_limits``):
+    the store is a pure module, so this settings read lives here. Raises inside
+    the injected callable degrade in the store to the shipped constants, so a
+    broken settings edit can never unbound the store.
+    """
+    from config import settings
+
+    def num(name: str, fallback: float) -> float:
+        try:
+            value = float(getattr(settings, name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+        return value if value >= 0.0 else fallback
+
+    return {
+        "min_turn_interval_s": num("AGENT_MIN_TURN_INTERVAL_S", MIN_TURN_INTERVAL_S),
+        "max_turns_per_hour": num("AGENT_MAX_TURNS_PER_HOUR", MAX_TURNS_PER_HOUR),
+        "max_turns_per_day": num("AGENT_MAX_TURNS_PER_DAY", MAX_TURNS_PER_DAY),
+    }
 
 
 @dataclass
@@ -381,39 +441,37 @@ def make_transport(config: AgentConfig) -> Transport:
 def _mock_script(config: AgentConfig) -> List[AgentReply]:
     """The deterministic, zero-spend script a mock turn replays.
 
-    Round 1 arms a watch and sets the view; round 2 writes a thesis (with an
-    explicit invalidation and low confidence), a note and a one-line reasoning —
-    a plausible, repeatable analyst turn that spends nothing and touches no
-    network. It is a *list of replies*; :func:`_mock_agent` replays it once per
-    turn (see there), so the script is not consumed by the first turn alone.
+    Follow the same two-timeframe perception, render, liquidity lookup and
+    watch-or-proposal workflow as live strategy turns, then write the thesis.
+    :func:`_mock_agent` replays this zero-spend sequence once per turn.
     """
     timeframe = str(config.timeframe or "M15")
-    round_one = AgentReply(
-        tool_calls=[
-            ToolCall(
-                call_id="mock-set-view",
-                name="set_view",
-                arguments={"timeframe": timeframe, "bars": int(config.bars or 50)},
-            ),
-            ToolCall(
-                call_id="mock-add-watch",
-                name="add_watch",
-                arguments={
-                    "condition": "level_forms",
-                    "params": {
-                        "family": "fvg",
-                        "direction": "bullish",
-                        "timeframe": timeframe,
-                    },
-                    "ttl_hours": 12.0,
-                    "reason": "wait for the next bullish FVG in the active timeframe",
-                },
-            ),
-        ],
-        tokens={"prompt": 0, "completion": 0},
-        cost_usd=0.0,
-    )
-    round_two = AgentReply(
+    context_timeframe = "H4" if timeframe == "H1" else "H1"
+    round_one = AgentReply(tool_calls=[ToolCall(
+        call_id="mock-set-view",
+        name="set_view",
+        arguments={
+            "layout": "split",
+            "panes": [context_timeframe, timeframe],
+            "families": ["liquidity", "bos", "ob"],
+            "bars": min(180, max(20, int(config.bars or 50))),
+        },
+    )])
+    round_two = AgentReply(tool_calls=[ToolCall(call_id="mock-render", name="render")])
+    round_three = AgentReply(tool_calls=[ToolCall(
+        call_id="mock-liquidity-lookup", name="level_lookup", arguments={"family": "liquidity"}
+    )])
+    round_four = AgentReply(tool_calls=[ToolCall(
+        call_id="mock-add-watch",
+        name="add_watch",
+        arguments={
+            "condition": "bos_forms",
+            "params": {"timeframe": timeframe, "direction": "bullish"},
+            "ttl_hours": 12.0,
+            "reason": "wait for structure confirmation before proposing a trade",
+        },
+    )])
+    round_five = AgentReply(
         output={
             "thesis": {
                 "bias": "bullish",
@@ -436,7 +494,7 @@ def _mock_script(config: AgentConfig) -> List[AgentReply]:
         tokens={"prompt": 0, "completion": 0},
         cost_usd=0.0,
     )
-    return [round_one, round_two]
+    return [round_one, round_two, round_three, round_four, round_five]
 
 
 def _mock_agent(config: AgentConfig) -> ScriptedAgent:
@@ -445,8 +503,8 @@ def _mock_agent(config: AgentConfig) -> ScriptedAgent:
     ``ScriptedAgent`` consumes a plain list once, so only the very first turn
     would have content and every later turn would fall silent. Driving it from a
     callable that resets the round counter whenever ``request.turn_id`` changes
-    makes each turn yield the same two-round script (round 1 arms a watch, round 2
-    writes the thesis) — consecutive mock turns are identical, and still zero-spend.
+    makes each turn yield the same five-round workflow — consecutive mock turns
+    are identical, and still zero-spend.
     """
     script = _mock_script(config)
     state: Dict[str, Any] = {"turn_id": None, "round": 0}
@@ -533,6 +591,26 @@ class AgentService:
         self._draining = False      # a stop() timed out: the old thread is still alive
         self._last_render: Dict[str, Any] = {}
         self._failures: List[str] = []
+        self._activity_lock = threading.Lock()
+        self._activity_seq = 0
+        self._activity_events = deque(maxlen=500)
+
+    def emit_activity(self, event: str, payload: Dict[str, Any]) -> None:
+        """Append one bounded, JSON-safe event for the panel's SSE feed."""
+        item_payload = json.loads(json.dumps(payload or {}, default=str))
+        with self._activity_lock:
+            self._activity_seq += 1
+            self._activity_events.append({
+                "id": self._activity_seq,
+                "type": str(event),
+                "at": as_aware(self._clock()).isoformat(),
+                "data": item_payload,
+            })
+
+    def activity_events_after(self, event_id: int = 0) -> List[Dict[str, Any]]:
+        """Return buffered events newer than an SSE cursor."""
+        with self._activity_lock:
+            return [dict(item) for item in self._activity_events if item["id"] > int(event_id)]
 
     # ------------------------------------------------------------------ store
 
@@ -560,6 +638,7 @@ class AgentService:
                 except Exception as exc:  # a bad config must not brick the runtime
                     self._record_failure("seed", exc)
                 store.save()
+            store.set_leash_limits(_settings_turn_limits)
             self._store = store
         return self._store
 
@@ -568,6 +647,7 @@ class AgentService:
         self._store = ContextStore.load_or_new(
             self.config.symbol, state_dir=self.config.state_dir, clock=self._clock
         )
+        self._store.set_leash_limits(_settings_turn_limits)
         return self._store
 
     # ------------------------------------------------------------------ internals
@@ -587,6 +667,8 @@ class AgentService:
             clock=self._clock,
             watchdog=self._watchdog(),
             playbook=self._strategy.text,
+            activity=self.emit_activity,
+            leash=_settings_leash,
         )
 
     def _record_failure(self, where: str, exc: BaseException) -> None:
@@ -678,7 +760,8 @@ class AgentService:
         per_call = max(1.0, float(self.config.http_timeout_s)) + (
             TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S
         )
-        return per_call * (MAX_TOOL_ROUNDS + 1) + max(1.0, float(self.config.poll_s))
+        rounds = _settings_leash().get("rounds", MAX_TOOL_ROUNDS)
+        return per_call * (rounds + 1) + max(1.0, float(self.config.poll_s))
 
     def pause(self) -> None:
         """Keep the state but stop waking: the watchdog still runs, it just idles."""
@@ -759,8 +842,12 @@ class AgentService:
                 outcome = self._loop().boot()
             except Exception as exc:  # noqa: BLE001 — a boot failure must not crash
                 self._record_failure("boot", exc)
+                self.emit_activity("turn_failed", {"trigger": "boot", "reason": str(exc)})
                 return None
-        self._remember_render(outcome)
+            self._remember_render(outcome)
+            if outcome is not None:
+                self.emit_activity("turn_finished", self._turn_finished_payload(outcome))
+            self._resolve_orders("boot")
         return outcome
 
     def scan_once(self) -> Optional[TurnOutcome]:
@@ -800,8 +887,11 @@ class AgentService:
                 )
             except Exception as exc:  # noqa: BLE001 — a poll must never raise out
                 self._record_failure("scan", exc)
+                self.emit_activity("turn_failed", {"trigger": "fire", "reason": str(exc)})
                 return None
-        self._remember_render(outcome)
+            self._remember_render(outcome)
+            self.emit_activity("turn_finished", self._turn_finished_payload(outcome))
+            self._resolve_orders("scan")
         return outcome
 
     def run_now(self, message: str = "") -> TurnOutcome:
@@ -813,9 +903,172 @@ class AgentService:
                 )
             except Exception as exc:  # noqa: BLE001 — report, never raise out
                 self._record_failure("run_now", exc)
-                return TurnOutcome(trigger="request", ok=False, reason=str(exc))
-        self._remember_render(outcome)
+                outcome = TurnOutcome(trigger="request", ok=False, reason=str(exc))
+            self._remember_render(outcome)
+            self.emit_activity("turn_finished", self._turn_finished_payload(outcome))
+            self._resolve_orders("request")
         return outcome
+
+    def _resolve_orders(self, source: str) -> None:
+        """Execute fresh proposals (``AGENT_EXECUTE_TRADES``) and feed the panel.
+
+        Never raises: a broken terminal is a booked proposal error, and a fault
+        outside the executor lands in the failures log like every other piece
+        of the runtime.
+        """
+        try:
+            outcomes = self._sync_proposal_orders()
+        except Exception as exc:  # noqa: BLE001
+            self._record_failure("orders", exc)
+            return
+        if not outcomes:
+            return
+        self.emit_activity(
+            "proposal_orders",
+            {"source": source, "orders": outcomes},
+        )
+
+    def _turn_finished_payload(self, outcome: TurnOutcome) -> Dict[str, Any]:
+        """Send a compact, useful outcome summary to the live panel feed."""
+        record = next(
+            (turn for turn in reversed(self.store.data.turns) if turn.id == outcome.turn_id),
+            None,
+        ) if outcome.turn_id else None
+        calls = list(getattr(record, "tool_calls", []) or [])
+        names = [str((entry.get("call") or {}).get("name") or "") for entry in calls]
+        output = dict(outcome.output or {})
+        proposals = len(output.get("proposals") or [])
+        proposals += names.count("propose_trade")
+        return {
+            "trigger": outcome.trigger,
+            "turn_id": outcome.turn_id,
+            "ok": outcome.ok,
+            "reason": outcome.reason,
+            "tool_calls": outcome.tool_calls,
+            "analysis_status": output.get("analysis_status", "complete" if outcome.ok else "incomplete"),
+            "proposals": proposals,
+            "pins": names.count("add_pin"),
+            "watches": names.count("add_watch"),
+            "workflow_missing": list(output.get("workflow_missing") or []),
+        }
+
+    # ------------------------------------------------------------------ execution
+
+    def _proposal_plan(self, proposal: Proposal) -> tuple:
+        """The dedupe key of a proposal: the levels a re-proposed plan repeats."""
+        return (
+            proposal.bias,
+            round(float(proposal.entry or 0.0), 1),
+            round(float(proposal.sl or 0.0), 1),
+            round(float(proposal.tp or 0.0), 1),
+        )
+
+    def _sync_proposal_orders(self) -> List[Dict[str, Any]]:
+        """Execute fresh proposals as real MT5 orders. Called after every turn.
+
+        Runs under the turn lock. The settings are re-read on **every** call, so
+        flipping ``AGENT_EXECUTE_TRADES``, changing ``AGENT_FIXED_LOT`` or the
+        cap in ``config/settings.py`` applies from the next proposal with no
+        restart. Mock mode never places orders (a scripted agent's ideas are
+        not trades). Every outcome — placed, refused, duplicate — is booked on
+        the proposal itself and reported back for the activity feed.
+        """
+        from config import settings as live
+
+        if not bool(getattr(live, "AGENT_EXECUTE_TRADES", False)):
+            return []
+        mode = str(getattr(live, "AGENT_MODE", "") or "").lower()
+        if mode != "live":
+            return []
+        fixed_lot = float(getattr(live, "AGENT_FIXED_LOT", 0.01) or 0.01)
+        magic = int(getattr(live, "AGENT_ORDER_MAGIC", 999777))
+        style = str(getattr(live, "AGENT_ORDER_STYLE", "auto") or "auto").lower()
+        max_open = max(1, int(getattr(live, "AGENT_MAX_OPEN_ORDERS", 2)))
+
+        data = self.store.data
+        executed_keys = {
+            self._proposal_plan(p)
+            for p in data.proposals
+            if p.executed
+        }
+        # A slot stays busy while its proposal is "working": placed within the
+        # last day. Proposal statuses never flip on their own, so this time
+        # window (not a status) keeps the cap from wedging after old trades hit.
+        cutoff = as_aware(self._clock()) - timedelta(hours=24)
+        open_orders = sum(
+            1 for p in data.proposals
+            if p.executed and not p.execution_error
+            and (p.created_at is None or as_aware(p.created_at) >= cutoff)
+        )
+        outcomes: List[Dict[str, Any]] = []
+        for proposal in list(data.proposals):
+            if proposal.executed or proposal.status is not ProposalStatus.PROPOSED:
+                continue
+            try:
+                # duplicate? a re-proposed plan whose entry/SL/TP already live in
+                # the terminal is noted, never re-placed
+                plan = self._proposal_plan(proposal)
+                if plan in executed_keys:
+                    self.store.record_proposal_execution(
+                        proposal.id, ok=False,
+                        error="duplicate_plan: the same entry/sl/tp already or previously placed",
+                    )
+                    outcomes.append({"proposal_id": proposal.id, "success": False,
+                                     "comment": "duplicate_plan"})
+                    continue
+                if open_orders >= max_open:
+                    self.store.record_proposal_execution(
+                        proposal.id, ok=False,
+                        error=f"open_orders_cap: {open_orders} pending agent order(s), cap {max_open}",
+                    )
+                    outcomes.append({"proposal_id": proposal.id, "success": False,
+                                     "comment": "open_orders_cap"})
+                    continue
+                result = execute_proposal(
+                    proposal,
+                    symbol=self.config.symbol,
+                    fixed_lot=fixed_lot,
+                    magic=magic,
+                    style=style,
+                )
+            except Exception as exc:  # noqa: BLE001 — an MT5 fault must never kill the turn bookkeeping
+                result = {"success": False, "comment": f"execution_error: {exc}"}
+            if result.get("success"):
+                self.store.record_proposal_execution(
+                    proposal.id, ok=True, ticket=int(result.get("ticket") or 0)
+                )
+                executed_keys.add(plan)
+                open_orders += 1
+            else:
+                self.store.record_proposal_execution(
+                    proposal.id, ok=False,
+                    error=str(result.get("comment") or "order not placed"),
+                )
+            outcomes.append({"proposal_id": proposal.id, **result})
+        return outcomes
+
+    def reset_context(self) -> Dict[str, Any]:
+        """Clear analysis memory while preserving the operator's view and leash.
+
+        Serialize with turns so a model response cannot repopulate the context
+        immediately after the reset. Replacing the watchdog also drops pending
+        coalesced fires from subscriptions that no longer exist.
+        """
+        with self._turn_lock:
+            store = self.store
+            store.data.subscriptions.clear()
+            store.data.thesis = Thesis()
+            store.data.turns.clear()
+            store.data.proposals.clear()
+            store.data.agent.last_evaluated_at = None
+            store.save()
+            self._watchdog_obj = Watchdog(self._feed, clock=self._clock)
+            self._last_render = {}
+            return {
+                "ok": True,
+                "cleared": ["thesis", "subscriptions", "proposals", "turn_history", "last_render"],
+                "status": self.status(),
+            }
 
     # ------------------------------------------------------------------ read surface
 
@@ -916,13 +1169,29 @@ class AgentService:
         rows: List[Dict[str, Any]] = []
         for turn in reversed(turns):
             conclusion = turn_conclusion(turn)
+            calls = list(getattr(turn, "tool_calls", []) or [])
+            output = dict(getattr(turn, "output", {}) or {})
+            thesis = output.get("thesis") if isinstance(output.get("thesis"), dict) else {}
+            refused = sum(
+                1 for entry in calls
+                if not ((entry or {}).get("result") or {}).get("ok", True)
+            )
             rows.append(
                 {
                     "id": conclusion["turn_id"],
                     "trigger": conclusion["trigger"],
                     "started_at": conclusion["at"],
-                    "output": dict(getattr(turn, "output", {}) or {}),
+                    "output": output,
                     "summary": conclusion["conclusion"],
+                    # what the model actually did (the dashboard shows real
+                    # activity; the full call log stays in the state file)
+                    "calls": len(calls),
+                    "refused": refused,
+                    "renders": int(getattr(turn, "renders", 0) or 0),
+                    "tokens": int(getattr(turn, "tokens", 0) or 0),
+                    "cost_usd": float(getattr(turn, "cost_usd", 0.0) or 0.0),
+                    "first_call": ((calls[0] or {}).get("call") or {}).get("name", ""),
+                    "thesis_bias": thesis.get("bias", ""),
                 }
             )
         return rows

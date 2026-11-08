@@ -14,10 +14,10 @@ MT5_TIMEOUT = 10_000  # ms
 # =============================================================================
 # INSTRUMENTS (Start with XAUUSD, expand later)
 # =============================================================================
-INSTRUMENTS = ["XAUUSD"]
+INSTRUMENTS = [""]
 
 INSTRUMENT_SPECS = {
-    "XAUUSD": {
+    "": {
         "pip_value": 0.01,        # 1 pip = 0.01 price units for XAUUSD
         "point_value": 0.01,      # MT5 point = 0.01
         # Fixed SL = 300 points = 3.00 price units (~30 pips). Risk-management
@@ -67,12 +67,6 @@ TIMEFRAME_MAP = {
     "M3":  mt5.TIMEFRAME_M3,   # 3-minute
     "M1":  mt5.TIMEFRAME_M1,   # 1-minute (standard MT5 meaning)
 }
-
-# Timeframes where OCL detection is valid (HTF only)
-OCL_VALID_TIMEFRAMES = {"MN1", "MN", "W1", "D1"}
-
-# Timeframes where Apex/IAB detection is valid (line chart analysis)
-APEX_VALID_TIMEFRAMES = {"MN1", "MN", "W1", "D1"}
 
 # =============================================================================
 # INDICATOR PARAMETERS
@@ -172,6 +166,9 @@ IFVG_ENABLED = True
 FVG_MIN_ATR_MULT = 0.1
 IFVG_MAX_GAP_BARS = 50
 IFVG_MIN_OVERLAP_FRAC = 0.5
+# FVG and IFVG detection can use zones formed just before the visible window;
+# the chart itself remains limited to the requested bar count.
+FVG_CONTEXT_BARS = 300
 
 # OB + Breaker Blocks (LuxAlgo port + Luap status) — enabled.
 # Swing lookback, last N zones per side, body-based zones option.
@@ -181,6 +178,9 @@ IFVG_MIN_OVERLAP_FRAC = 0.5
 OB_ENABLED = True
 OB_SWING_LENGTH = 10
 OB_SHOW_LAST = 3
+# OB/breaker detection gets extra history so blocks formed just before the
+# visible chart window can still be recognized. Chart candles stay unchanged.
+OB_CONTEXT_BARS = 300
 OB_USE_BODY = False
 OB_REQUIRE_FVG = False
 OB_REQUIRE_SWEEP = True
@@ -192,6 +192,9 @@ OB_MARK_DECISIONAL = True
 # forward window for break-retest scan.
 TL_ENABLED = True
 TL_PIVOT_LENGTH = 14
+# Trendline pivots and break/retest state use extra history; rendered candles
+# stay at the requested visible width.
+TL_CONTEXT_BARS = 300
 # Multi-scale apex windows: a close swing counts as an apex if it is the
 # extreme of ANY of these symmetric windows, and the results are merged.
 # Window 5 catches the local swings a channel is built from; window 14 keeps
@@ -199,7 +202,7 @@ TL_PIVOT_LENGTH = 14
 # short, steep noise segments that crowd out the meaningful lines.)
 TL_PIVOT_WINDOWS = (5, 14)
 TL_SLOPE_MULT = 1.0
-TL_MAX_LINES = 3
+TL_MAX_LINES = 8
 TL_RETEST_BARS = 30
 # Touch/collinearity tolerance for the point-to-point trendline (fraction
 # of ATR(14)). A 3rd apex or validation touch within this band respects the
@@ -326,16 +329,61 @@ AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
 AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name
 AGENT_MAX_TOKENS = 8000         # per-call output cap (a reasoning model bills its hidden reasoning here)
 AGENT_TEMPERATURE = 0.0
+#: The agent's leash, adjustable anytime. All are re-read from this module on
+#: every turn, so an edit (or a restart) applies to the NEXT turn without any
+#: other wiring — the loop never captures the value once.
+#:   AGENT_MAX_TOOL_CALLS      — executed tool calls allowed in one turn (tool_cap).
+#:   AGENT_MAX_TOOL_ROUNDS     — model round-trips (calls) allowed in one turn.
+#:   AGENT_MAX_RENDERS_PER_TURN — total chart renders in one turn, INCLUDING the
+#:                               turn's initial perception render. A further
+#:                               render call is refused with "render_cap"; the
+#:                               model is told why and proceeds on what it has.
+AGENT_MAX_TOOL_CALLS = 200
+AGENT_MAX_TOOL_ROUNDS = 400
+AGENT_MAX_RENDERS_PER_TURN = 25
+#: The turn-rate throttle (the store leash): how often a turn may even START.
+#: These fire BEFORE any model call — a refusal shows on the panel as
+#: "leash:min_turn_interval" / "leash:max_turns_per_hour" / "leash:max_turns_per_day"
+#: with zero tool calls/proposals, because the turn never ran. All are re-read
+#: live from this module on every start attempt:
+#:   AGENT_MIN_TURN_INTERVAL_S — min seconds between two turns (0 = disabled).
+#:   AGENT_MAX_TURNS_PER_HOUR  — turns allowed in any rolling hour.
+#:   AGENT_MAX_TURNS_PER_DAY   — turns allowed per calendar day.
+AGENT_MIN_TURN_INTERVAL_S = 60
+AGENT_MAX_TURNS_PER_HOUR = 30
+AGENT_MAX_TURNS_PER_DAY = 240
 AGENT_HTTP_TIMEOUT_S = 120.0   # per-request timeout for the live transport
 AGENT_HTTP_USER_AGENT = "trading-bot-agent/1.0"  # must match agent_service.DEFAULT_USER_AGENT (Cloudflare 1010 blocks urllib's default)
 AGENT_STATE_DIR = ""           # "" -> agentic/state (gitignored default)
 AGENT_RENDER_DIR = ""          # "" -> agentic/renders (gitignored default)
 
+# AGENT EXECUTION — propose_trade places REAL MT5 orders
+#
+# When AGENT_EXECUTE_TRADES is on, every fresh proposal the agent emits (bias,
+# entry, SL, TP) is dispatched to the terminal as a pending order with that
+# SL/TP attached — the broker-owned exit is the agent's exit. Orders are
+# pending stop or limit (or stop-limit, see AGENT_ORDER_STYLE) chosen by which
+# side of the market the entry sits on: a bullish entry above the ask is a
+# BUY_STOP, otherwise a BUY_LIMIT; mirrored for sells.
+#
+# Volume is the FIXED lot in AGENT_FIXED_LOT — never risk-percent sizing. All
+# of these are re-read on every sync, so an edit applies from the next turn on:
+#   AGENT_EXECUTE_TRADES  — the master switch ( False = propose-only)
+#   AGENT_FIXED_LOT       — the volume placed on every agent order
+#   AGENT_ORDER_MAGIC     — the MT5 magic marking agent-originated orders
+#   AGENT_ORDER_STYLE     — "auto" (limit/stop by market side) | "stop_limit"
+#   AGENT_MAX_OPEN_ORDERS — cap on the agent's unsettled pending orders
+AGENT_EXECUTE_TRADES = True
+AGENT_FIXED_LOT = 0.01
+AGENT_ORDER_MAGIC = 999777
+AGENT_ORDER_STYLE = "auto"
+AGENT_MAX_OPEN_ORDERS = 2
+
 # The agent's strategy: one markdown playbook per strategy, whole-file injected
 # into the system prompt (see agentic/strategy.py). Changing STRATEGY_ACTIVE
 # takes effect on the next service boot — a turn never mixes strategies.
 STRATEGY_DIR = "strategies"    # repo-relative (absolute also accepted)
-STRATEGY_ACTIVE = "phoenix_mnsr"   # the .md (no extension) the agent runs
+STRATEGY_ACTIVE = "alchemy_mnsr"   # the .md (no extension) the agent runs
 
 # =============================================================================
 # LOGGING

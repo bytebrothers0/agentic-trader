@@ -76,7 +76,7 @@ LIVE_SYMBOL = os.environ.get("AGENT_LIVE_SYMBOL", "XAUUSD")
 #: the hidden reasoning counts against this cap, so a small value truncates the
 #: turn before the structured object is ever written (300-1300 visible tokens, but
 #: 600 was not enough; see the provider subsection of the spec).
-MAX_OUTPUT_TOKENS = 2000
+MAX_OUTPUT_TOKENS = 8000
 
 #: The render size for the smoke test. The renderer is real; only the size is
 #: dialled down so the image is not the thing that overflows (image tokens are a

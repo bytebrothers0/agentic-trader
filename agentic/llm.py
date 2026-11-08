@@ -549,7 +549,7 @@ class VisionClient:
         tools = to_openai_tools(request.tools)
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = request.tool_choice or "auto"
 
         response_format = self._response_format
         if response_format is None and not tools:

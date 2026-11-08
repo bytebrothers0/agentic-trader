@@ -413,9 +413,15 @@ def test_payload_wraps_tools_and_requests_auto_tool_choice():
             },
         }
     ]
-    # With tools present, tool-calling and the prompt carry the contract, so no
-    # forced response_format is sent.
     assert "response_format" not in payload
+
+
+def test_payload_can_require_tool_call_for_initial_perception():
+    choice = {"type": "function", "function": {"name": "set_view"}}
+    request = AgentRequest(system_prompt="sys", briefing={}, tools=[{"name": "set_view"}], tool_choice=choice)
+    payload = VisionClient(lambda _: {}).build_payload(request)
+
+    assert payload["tool_choice"] == choice
 
 
 def test_payload_asks_for_a_json_object_when_there_are_no_tools():

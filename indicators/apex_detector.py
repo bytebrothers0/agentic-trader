@@ -3,7 +3,7 @@ apex_detector.py — MSNR Line Chart Apex & IAB Indicator
 
 Rules (from Advanced MSNR, Videos 1, 4, 7, 10, 11):
   - Apex and IAB levels are strictly evaluated using a LINE CHART (close prices only).
-  - Valid on Higher Timeframes (Monthly, Weekly, Daily).
+  - Evaluated independently on whichever timeframe is supplied.
   - Apex Support: Major external swing low on line chart that led to an upward structural breakout.
   - Apex Resistance: Major external swing high on line chart that led to a downward structural breakout.
   - IAB Support (Internal Apex Break): Minor/internal swing low that caused a structural breakout.
@@ -89,10 +89,6 @@ class ApexDetector:
     def detect_all(self) -> List[ApexLevel]:
         """Detect all verified Apex and IAB swing levels (with freshness states applied)."""
         self._levels = []
-        # Apex/IAB valid on HTF only (Monthly/Weekly/Daily). M1 = 1-minute, excluded.
-        if self.timeframe not in {"MN", "MN1", "W1", "D1", "MONTHLY", "WEEKLY", "DAILY"}:
-            return []
-
         df = self.df
         closes = df["close"].values
         times = df.index

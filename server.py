@@ -10,11 +10,13 @@ FastAPI backend serving:
 from __future__ import annotations
 
 import os
+import asyncio
+import json
 import threading
 from typing import Callable, Optional, Tuple
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
@@ -25,11 +27,14 @@ from config.settings import (
     BOS_ENABLED, BOS_SWING_LENGTH,
     BOS_INTERNAL_LENGTH, BOS_SHOW_INTERNAL, FVG_ENABLED, IFVG_ENABLED,
     FVG_MIN_ATR_MULT, IFVG_MAX_GAP_BARS, IFVG_MIN_OVERLAP_FRAC,
+    FVG_CONTEXT_BARS,
     BOS_SWING_TOL_ATR, OB_ENABLED, OB_SWING_LENGTH, OB_SHOW_LAST,
+    OB_CONTEXT_BARS,
     OB_USE_BODY, OB_REQUIRE_FVG, OB_REQUIRE_SWEEP, OB_DISPLACEMENT_MULT,
     OB_MARK_DECISIONAL,
     TS_MIN_WICK_BODY_FRAC, TS_MIN_WICK_RANGE_FRAC, TS_MAX_BETWEEN,
     TL_ENABLED, TL_PIVOT_LENGTH, TL_PIVOT_WINDOWS, TL_SLOPE_MULT, TL_MAX_LINES,
+    TL_CONTEXT_BARS,
     TL_RETEST_BARS, TL_BODY_PIVOTS, TL_REQUIRE_ENGULFING,
     TL_SKIP_GAP_ANCHORS, TL_GAP_ATR_MULT, TL_TOL_ATR,
     TL_CHANNEL_PARALLEL_ATR, TL_SWEEP_ATR,
@@ -250,23 +255,12 @@ def _start_agent_service():
 
 
 def sr_render_levels(base_levels):
-    """Reduce the CandleAnalyzer output to the levels worth DRAWING.
+    """Return every drawable S/R level, with role-flips replacing their source.
 
-    The raw detector emits every V/A candle pair (≈ one level per candle),
-    which floods the chart's ray budget with ordinary body closes. Three
-    rules select the real walls:
-
-      1. GAP SNR are hidden zones (the methodology's own words) — never drawn.
-      2. The web 2-use rule: a level with two wick touches is used up — retire it.
-      3. A broken S/R whose body-close ALSO spawned its SBR/RBS successor at
-         the same price is already redrawn by that successor — skip the corpse.
-
-    What remains is then *clustered* by price proximity (0.05% relative, the
-    same join tolerance QM uses): many V-pair closes land pennies apart, and
-    seven copies of one wall draws as seven meaningless lines. Each cluster
-    sends one representative — an alive level over a dead one, newest first.
-    Pure: detectors stay untouched for their other consumers (the QM block
-    re-runs ``detect_all`` unfiltered).
+    Gap levels remain hidden zones. A broken level with an SBR/RBS successor
+    is represented by that successor, which carries the source's origin into
+    the render payload. Do not retire touched levels or cluster nearby prices:
+    the agent needs to see the detected history and distinct nearby levels.
     """
     flipped_sources = {
         id(c.derived_from) for c in base_levels if c.derived_from is not None
@@ -274,24 +268,20 @@ def sr_render_levels(base_levels):
     kept = [
         lv for lv in base_levels
         if not lv.is_gap
-        and lv.touch_count < 2
         and id(lv) not in flipped_sources
     ]
+    return sorted(kept, key=lambda x: (x.candle_index, x.price))
 
-    clusters: list = []
-    for lv in sorted(kept, key=lambda x: (x.price, x.candle_index)):
-        if clusters and abs(lv.price - clusters[-1][0].price) <= (
-            0.0005 * max(abs(lv.price), abs(clusters[-1][0].price), 1e-9)
-        ):
-            clusters[-1].append(lv)
-        else:
-            clusters.append([lv])
 
-    representatives = []
-    for cluster in clusters:
-        alive = [x for x in cluster if x.state != LevelState.BROKEN]
-        representatives.append(max(alive or cluster, key=lambda x: x.candle_index))
-    return representatives
+@app.get("/health")
+def health():
+    """Liveness probe — answers before the terminal, no MT5 in the path.
+
+    Anything polling ``GET /health`` (monitors, scripts, the browser) gets a
+    cheap 200 instead of a 404; deep health surfaces live in ``/api/account``
+    and the agent panel routes.
+    """
+    return {"ok": True, "status": "alive"}
 
 
 @app.get("/api/symbols")
@@ -419,10 +409,29 @@ def get_indicators(
         }
     try:
         loader = get_loader(symbol)
+        # Every indicator starts from the requested window. Only OB/BRKR and
+        # trendlines optionally inspect additional history, ending at the same
+        # offset. A missing context falls back without invalidating the chart.
         df = loader.fetch_timeframe(timeframe.upper(), count=bars, start=offset)
         
         current_price = float(df["close"].iloc[-1])
         times_unix = df["time"].values
+
+        context_cache = {}
+
+        def _context_frame(context_bars: int):
+            context_bars = max(int(bars), int(context_bars))
+            if context_bars not in context_cache:
+                if context_bars == int(bars):
+                    context_cache[context_bars] = df
+                else:
+                    try:
+                        context_cache[context_bars] = loader.fetch_timeframe(
+                            timeframe.upper(), count=context_bars, start=offset
+                        )
+                    except InsufficientHistory:
+                        context_cache[context_bars] = df
+            return context_cache[context_bars]
 
         # ATR(14), Wilder smoothing — the agent's volatility unit for stops,
         # sizing and "distance in ATR" lookups. Surfaced here so the read-only
@@ -472,7 +481,13 @@ def get_indicators(
                 if freshness_filter == "unfresh_only" and lvl.state != LevelState.UNFRESH:
                     continue
 
-                t_idx = min(lvl.candle_index, len(times_unix) - 1)
+                # A role-flip's visible story starts at the original S/R
+                # formation and reaches the candle that broke it.
+                source = lvl.derived_from
+                t_idx = min(
+                    source.candle_index if source is not None else lvl.candle_index,
+                    len(times_unix) - 1,
+                )
                 time_val = int(times_unix[t_idx])
 
                 # Zone life-cycle end: broken -> break bar, touched -> touch bar.
@@ -490,13 +505,15 @@ def get_indicators(
                     "state": lvl.state.value.upper(),
                     "time": time_val,
                     "candle_index": lvl.candle_index,
+                    "break_time": int(times_unix[min(lvl.candle_index, len(times_unix) - 1)])
+                    if source is not None else None,
                     "end_time": _end_time(end_idx),
                     "end_kind": end_kind,
                     "desc": f"{lvl.level_type.value.upper()} ({lvl.state.value})"
                 })
 
-        # 2. OCL (HTF only; enabled via OCL_ENABLED)
-        if ocl_on and timeframe.upper() in {"MN", "MN1", "W1", "D1"}:
+        # 2. OCL (runs independently on the requested chart timeframe)
+        if ocl_on:
             ocl_det = OCLDetector(df, timeframe=timeframe.upper())
             ocls = ocl_det.detect_all()
             for ocl in ocls:
@@ -541,8 +558,8 @@ def get_indicators(
                     "desc": f"QM: {qm.qm_type.value.upper()} {qm.direction.value.upper()}"
                 })
 
-        # 4. Apex & IAB (HTF only; enabled via APEX_ENABLED)
-        if apex_on and timeframe.upper() in {"MN", "MN1", "W1", "D1"}:
+        # 4. Apex & IAB (runs independently on the requested chart timeframe)
+        if apex_on:
             apex_det = ApexDetector(df, timeframe=timeframe.upper())
             apexes = apex_det.detect_all()
             for apex in apexes:
@@ -760,19 +777,27 @@ def get_indicators(
                     "desc": f"{kind}: {bo.direction.value.upper()}"
                 })
 
-        # 8. FVG zones (LuxAlgo port). Fresh AND mitigated zones are shown:
+        # 8. FVG zones (LuxAlgo port), using their own wider context. Fresh
+        # AND mitigated zones are shown:
         # mitigated ones ride as history (state UNFRESH, end_time = the first
         # wick into the zone, end_kind 'mitigated') so the perception dial's
         # 'all'/'default' views and the dashboard can draw the played-out
         # zones the way other families' history is drawn. Computed once and
         # shared with the IFVG block below.
-        fvg_det = FVGDetector(df, min_atr_mult=FVG_MIN_ATR_MULT,
-                              max_gap_bars=IFVG_MAX_GAP_BARS,
-                              min_overlap_frac=IFVG_MIN_OVERLAP_FRAC)
-        fvg_levels = fvg_det.detect_all() if (fvg_on or ifvg_on) else []
-        ifvg_levels = fvg_det.detect_ifvg(fvg_levels) if ifvg_on else []
+        if fvg_on or ifvg_on:
+            fvg_df = _context_frame(FVG_CONTEXT_BARS)
+            fvg_times_unix = fvg_df["time"].values
+            fvg_det = FVGDetector(fvg_df, min_atr_mult=FVG_MIN_ATR_MULT,
+                                  max_gap_bars=IFVG_MAX_GAP_BARS,
+                                  min_overlap_frac=IFVG_MIN_OVERLAP_FRAC)
+            fvg_levels = fvg_det.detect_all()
+            ifvg_levels = fvg_det.detect_ifvg(fvg_levels) if ifvg_on else []
+        else:
+            fvg_times_unix = times_unix
+            fvg_levels = []
+            ifvg_levels = []
         if fvg_on:
-            last_fvg = len(times_unix) - 1
+            last_fvg = len(fvg_times_unix) - 1
             for fv in fvg_levels:
                 t_idx = min(fv.formation_index, last_fvg)
                 if fv.mitigated and fv.mitigation_index is not None:
@@ -785,8 +810,8 @@ def get_indicators(
                     "type": f"FVG ({fv.direction.value.upper()})",
                     "price": round(fv.mid, 3),
                     "state": state,
-                    "time": int(times_unix[t_idx]),
-                    "end_time": (int(times_unix[e_idx]) if e_idx is not None else None),
+                    "time": int(fvg_times_unix[t_idx]),
+                    "end_time": (int(fvg_times_unix[e_idx]) if e_idx is not None else None),
                     "end_kind": end_kind,
                     "box_top": round(fv.top, 3),
                     "box_bottom": round(fv.bottom, 3),
@@ -799,13 +824,13 @@ def get_indicators(
             for iv in ifvg_levels:
                 if not iv.fresh:
                     continue  # mitigated inversions are hidden
-                t_idx = min(iv.formation_index, len(times_unix) - 1)
+                t_idx = min(iv.formation_index, len(fvg_times_unix) - 1)
                 levels_data.append({
                     "category": "ifvg",
                     "type": f"IFVG ({iv.direction.value.upper()})",
                     "price": round(iv.mid, 3),
                     "state": "FRESH",
-                    "time": int(times_unix[t_idx]),
+                    "time": int(fvg_times_unix[t_idx]),
                     "end_time": None,
                     "end_kind": "active",
                     "box_top": round(iv.top, 3),
@@ -813,17 +838,19 @@ def get_indicators(
                     "desc": f"IFVG: {iv.direction.value.upper()}"
                 })
 
-        # 10. OB + Breaker Blocks (LuxAlgo port). Non-breakers extend to
-        # the last bar (as the script draws them); breakers run origin ->
-        # flip, the flip bar carried separately for the two-tone drawing.
+        # 10. OB + Breaker Blocks (LuxAlgo port). Uses its own wider context;
+        # non-breakers extend to the last bar, breakers from
+        # origin to flip with the flip bar carried separately for rendering.
         if ob_on:
-            ob_det = OBDetector(df, swing_length=OB_SWING_LENGTH,
+            ob_df = _context_frame(OB_CONTEXT_BARS)
+            ob_times_unix = ob_df["time"].values
+            ob_det = OBDetector(ob_df, swing_length=OB_SWING_LENGTH,
                                 use_body=OB_USE_BODY, show_last=OB_SHOW_LAST,
                                 require_fvg=OB_REQUIRE_FVG,
                                 require_sweep=OB_REQUIRE_SWEEP,
                                 displacement_mult=OB_DISPLACEMENT_MULT,
                                 mark_decisional=OB_MARK_DECISIONAL)
-            last_idx = len(times_unix) - 1
+            last_idx = len(ob_times_unix) - 1
             for ob in ob_det.detect_all():
                 t_idx = min(ob.formation_index, last_idx)
                 payload = {
@@ -831,8 +858,8 @@ def get_indicators(
                     "type": f"{ob.kind} ({ob.direction.value.upper()})",
                     "price": round(ob.mid, 3),
                     "state": ob.status,
-                    "time": int(times_unix[t_idx]),
-                    "end_time": int(times_unix[last_idx]),
+                    "time": int(ob_times_unix[t_idx]),
+                    "end_time": int(ob_times_unix[last_idx]),
                     # A mitigated block is played-out history (the state's word
                     # must reach the agent's life-cycle map) — but a breaker is
                     # not dead, it flipped.
@@ -845,14 +872,16 @@ def get_indicators(
                              + _sweep_desc(ob))
                 }
                 if ob.is_breaker and ob.break_index is not None:
-                    payload["break_time"] = int(times_unix[min(ob.break_index, last_idx)])
+                    payload["break_time"] = int(ob_times_unix[min(ob.break_index, last_idx)])
                 levels_data.append(payload)
 
         # 11. Auto trendlines (point-to-point close apexes): support /
         # resistance lines, channel pairs, break-retest role flips and
         # trendline-liquidity sweeps.
         if tl_on:
-            tl_det = TLDetector(df, pivot_length=TL_PIVOT_LENGTH,
+            tl_df = _context_frame(TL_CONTEXT_BARS)
+            tl_times_unix = tl_df["time"].values
+            tl_det = TLDetector(tl_df, pivot_length=TL_PIVOT_LENGTH,
                                 pivot_windows=TL_PIVOT_WINDOWS,
                                 slope_mult=TL_SLOPE_MULT,
                                 max_lines=TL_MAX_LINES,
@@ -865,7 +894,7 @@ def get_indicators(
                                 channel_parallel_atr=TL_CHANNEL_PARALLEL_ATR,
                                 sweep_atr=TL_SWEEP_ATR)
             tl_lines = list(tl_det.detect_all())
-            last_idx = len(times_unix) - 1
+            last_idx = len(tl_times_unix) - 1
             for tl in tl_lines:
                 s_idx = min(tl.pivot_index, last_idx)
                 e_idx = min(tl.end_index, last_idx)
@@ -883,8 +912,10 @@ def get_indicators(
                     "price_end": round(tl.value_at(e_idx), 3),
                     "state": ("FRESH" if tl.state.value == "active"
                               else "BROKEN"),
-                    "time": int(times_unix[s_idx]),
-                    "end_time": int(times_unix[e_idx]),
+                    "time": int(tl_times_unix[s_idx]),
+                    "anchor_2_time": int(tl_times_unix[min(tl.second_anchor_index, last_idx)])
+                    if tl.second_anchor_index is not None else None,
+                    "end_time": int(tl_times_unix[e_idx]),
                     "end_kind": ("retest" if tl.retested else
                                  ("broken" if tl.state.value == "broken"
                                   else "active")),
@@ -903,14 +934,14 @@ def get_indicators(
                              f"{', ENG' if tl.anchor_engulfing or tl.anchor_engulfed else ''})"),
                 }
                 if tl.break_index is not None:
-                    payload["break_time"] = int(times_unix[min(tl.break_index,
+                    payload["break_time"] = int(tl_times_unix[min(tl.break_index,
                                                                last_idx)])
                 if tl.retest_index is not None:
-                    payload["retest_time"] = int(times_unix[min(tl.retest_index,
+                    payload["retest_time"] = int(tl_times_unix[min(tl.retest_index,
                                                                 last_idx)])
                 if tl.sweep_bars:
                     payload["sweep_times"] = [
-                        int(times_unix[min(b, last_idx)]) for b in tl.sweep_bars]
+                        int(tl_times_unix[min(b, last_idx)]) for b in tl.sweep_bars]
                 levels_data.append(payload)
 
         # Sort levels by price descending
@@ -957,6 +988,49 @@ def get_agent_panel():
         return panel
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent/events")
+async def get_agent_events(request: Request, after: int = Query(0, ge=0)):
+    """Stream bounded agent activity (turns, model rounds, and tool calls)."""
+    try:
+        service = get_agent_service()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    last_event_id = request.headers.get("last-event-id", "")
+    try:
+        cursor = max(int(after), int(last_event_id or 0))
+    except (TypeError, ValueError):
+        cursor = int(after)
+
+    async def stream_activity():
+        nonlocal cursor
+        yield ": connected\n\n"
+        last_keepalive = asyncio.get_running_loop().time()
+        while not await request.is_disconnected():
+            events = service.activity_events_after(cursor)
+            if events:
+                for event in events:
+                    cursor = int(event["id"])
+                    data = json.dumps(event, ensure_ascii=True, separators=(",", ":"))
+                    yield f"id: {cursor}\nevent: activity\ndata: {data}\n\n"
+                continue
+            await asyncio.sleep(0.4)
+            now = asyncio.get_running_loop().time()
+            if now - last_keepalive >= 15:
+                yield ": keepalive\n\n"
+                last_keepalive = now
+
+    return StreamingResponse(
+        stream_activity(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/agent/turns")
@@ -1024,6 +1098,15 @@ def resume_agent():
         service = get_agent_service()
         service.resume()
         return {"ok": True, "status": service.status()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/reset-context")
+def reset_agent_context():
+    """Clear agent analysis memory while retaining view, runtime state and budget."""
+    try:
+        return get_agent_service().reset_context()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

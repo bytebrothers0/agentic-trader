@@ -135,9 +135,19 @@ _ATTR_KEYS: tuple = (
     # Trendline slope truth: the segment's end-bar price, so the renderer can
     # draw the pivoted sloped line instead of a horizontal stub.
     "price_end",
+    "anchor_2_time",
     # QM's second break (the QM birth candle): the level broken twice. The
     # render's story arc runs origin -> this bar -> +5 bars right.
     "break_time",
+    "retest_time",
+    "retest_role",
+    "role",
+    "flipped",
+    "channel",
+    "liquidity",
+    "touches",
+    "slope",
+    "type",
     "range_high",
     "range_low",
     "target",
@@ -388,10 +398,16 @@ def parse_level(
     changed_at = _to_dt(level.get("end_time"))
     band_low, band_high = _band(level)
 
+    identity_direction = direction
+    if family == TRENDLINE:
+        # Many valid candidates share the same first apex and price. Include
+        # their second anchor so each distinct line has its own stable tag/key.
+        identity_direction = f"{direction}:{level.get('anchor_2_time', level.get('price_end', ''))}"
+
     level_key = make_level_key(
         family,
         timeframe,
-        direction,
+        identity_direction,
         price,
         formed_at.isoformat() if formed_at else None,
     )
@@ -459,7 +475,7 @@ def filter_status(snapshot: "FeedSnapshot", status_filter: str) -> "FeedSnapshot
     The watchdog deliberately does NOT use this: subscription evaluation needs
     state history for edge triggers.
     """
-    value = str(status_filter or "default").lower() or "default"
+    value = str(status_filter or "all").lower() or "all"
     if value not in FILTER_STATUS_VALUES:
         raise ValueError("status_filter must be 'default', 'all' or 'live'")
     if value == "all":

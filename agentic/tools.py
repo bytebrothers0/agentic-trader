@@ -24,7 +24,10 @@ manifest. The turn's **initial perception render counts as render #1**;
 owns that budget: :meth:`ToolRegistry.initial_render` seeds it, each successful
 ``render`` tool call spends one, and a further call is refused with
 ``render_cap`` rather than silently dropped. This is why the count lives here and
-not in the loop — there is exactly one home for the cap.
+not in the loop — there is exactly one home for the cap. The cap is injectable
+(``ToolRegistry(max_renders=…)``) so a non-pure layer can retune it live from
+``config.settings`` without this module importing ``config``; the constant is
+the default.
 
 Notes
 -----
@@ -76,13 +79,16 @@ TOOL_NAMES: Tuple[str, ...] = (
     "propose_trade",
 )
 
+MAX_FAMILIES_PER_IMAGE = 3
+
 TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
                 "offset (re-render a past window), layout/panes (set layout=split with "
-                "exactly 2 panes for two stacked timeframes), status_filter ('default' "
-                "= fresh TS/CRT/QM only, all states for other families; 'live' = "
-                "strictly fresh everywhere; 'all' = dead history too), tags, "
-                "annotations. Unknown dials are refused.",
+                "exactly 2 panes for two stacked timeframes), status_filter ('all' "
+                "= the default, including dead history; 'live' = strictly fresh "
+                "everywhere; 'default' = hide dead TS/CRT/QM only), tags, "
+                "annotations. Use at most 3 indicator families per image; request any "
+                "additional families in later focused set_view/render calls. Unknown dials are refused.",
     "render": "Re-render the store's view + pins after a change; returns image_path, "
               "render_id and manifest.",
     "level_lookup": "Exact numbers for a tag you saw, a level_key from a previous turn, a "
@@ -114,13 +120,24 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "symbol": {"type": "string"},
             "timeframe": {"type": "string", "description": "e.g. M15, H2, D1"},
             "chart_type": {"type": "string", "enum": ["candles", "line"]},
-            "families": {"type": "array", "items": {"type": "string"}},
+            "families": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "crt", "ts", "bos", "fvg", "ifvg", "ob",
+                        "liquidity", "sr", "qm", "idm", "trendline",
+                        "ocl", "apex",
+                    ],
+                },
+                "description": "Show at most 3 distinct indicator families per image. If you need more, call set_view with the next focused group and render it sequentially. [] means a plain candle chart.",
+            },
             "status_filter": {
                 "type": "string",
                 "enum": ["default", "all", "live"],
-                "description": "'default' (fresh TS/CRT/QM only, everything for other "
-                               "families), 'live' (strictly fresh/unmitigated/"
-                               "unbroken everywhere), 'all' (dead history too)",
+                "description": "'all' (the default; includes dead history), 'live' "
+                               "(strictly fresh/unmitigated/unbroken everywhere), "
+                               "'default' (hide dead TS/CRT/QM only)",
             },
             "bars": {"type": "integer", "minimum": MIN_BARS, "maximum": MAX_BARS},
             "offset": {"type": "integer", "minimum": 0, "maximum": MAX_OFFSET},
@@ -331,10 +348,10 @@ def resolve_pins(
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
-    families = list(view.families) or None
+    families = list(view.families)
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
-    dial = str(getattr(view, "status_filter", "default") or "default").lower()
+    dial = str(getattr(view, "status_filter", "all") or "all").lower()
     cache = cache if cache is not None else {}
 
     def _fetch(timeframe: str, status_filter: str) -> FeedSnapshot:
@@ -373,6 +390,8 @@ def render_current(
     renderer: Renderer,
     *,
     cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]] = None,
+    include_pins: bool = True,
+    plain: bool = False,
 ) -> RenderResult:
     """Render the store's view + pins to an image and its tag manifest.
 
@@ -396,10 +415,13 @@ def render_current(
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
-    families = list(view.families) or None
-    bars_count = int(view.bars)
+    # The first perception image must not inherit the persisted dashboard view.
+    # Empty the returned snapshots as well as requesting no families: this keeps
+    # custom providers from accidentally leaking levels into the plain chart.
+    families = [] if plain else list(view.families)[:MAX_FAMILIES_PER_IMAGE]
+    bars_count = MAX_BARS if plain else int(view.bars)
     offset = int(view.offset or 0)
-    status_filter = str(getattr(view, "status_filter", "default") or "default").lower()
+    status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
     thesis = store.data.thesis.levels_of_interest
     pane_timeframes = [str(tf) for tf in (view.panes or [])]
     if view.layout is Layout.SPLIT and len(pane_timeframes) > 1:
@@ -415,6 +437,7 @@ def render_current(
             pane_timeframes=pane_timeframes,
             thesis=thesis,
             cache=cache,
+            plain=plain,
         )
 
     timeframe = view.timeframe
@@ -426,15 +449,17 @@ def render_current(
         offset=offset,
         status_filter=status_filter,
     )
+    if plain:
+        snapshot.levels = []
     bars = feed.bars(symbol, timeframe, bars=bars_count, offset=offset)
     if cache is not None:
         cache[_cache_key(timeframe, bars_count, offset, status_filter)] = snapshot
-    pins = resolve_pins(store, feed, snapshot, cache=cache)
+    pins = resolve_pins(store, feed, snapshot, cache=cache) if include_pins else []
     return renderer.render(
         snapshot,
         bars,
         pins=pins,
-        thesis_level_keys=thesis,
+        thesis_level_keys=thesis if include_pins else (),
         offset=offset,
     )
 
@@ -474,20 +499,24 @@ def _render_split(
     pane_timeframes: List[str],
     thesis: Any,
     cache: Optional[Dict[Tuple[str, int, int, str], FeedSnapshot]],
+    plain: bool = False,
 ) -> RenderResult:
     """The two-pane perception: one snapshot/bars pair per pane, pins per pane."""
     view = store.data.view
-    dial = str(status_filter or "default").lower()
+    dial = str(status_filter or "all").lower()
     pane_snapshots = {
         tf: _fetch_snapshot(feed, cache, symbol, tf, families, bars, offset, status_filter=dial)
         for tf in pane_timeframes
     }
+    if plain:
+        for snapshot in pane_snapshots.values():
+            snapshot.levels = []
     pane_bars = {
         tf: feed.bars(symbol, tf, bars=bars, offset=offset) for tf in pane_timeframes
     }
     primary_tf = pane_timeframes[0]
     pins_by_tf: Dict[str, List[LevelRecord]] = {tf: [] for tf in pane_timeframes}
-    for sub in store.open_subscriptions(SubscriptionKind.PIN):
+    for sub in (() if plain else store.open_subscriptions(SubscriptionKind.PIN)):
         pin_tf = str((sub.params or {}).get("timeframe") or view.timeframe)
         target = pin_tf if pin_tf in pins_by_tf else primary_tf
         if pin_tf in pane_snapshots:
@@ -516,7 +545,7 @@ def _render_split(
         primary.snapshot,
         primary.bars,
         pins=list(pins_by_tf[primary_tf]),
-        thesis_level_keys=thesis,
+        thesis_level_keys=() if plain else thesis,
         panes=pane_objs,
         layout="split",
         offset=offset,
@@ -546,12 +575,23 @@ class ToolRegistry:
         *,
         clock: Optional[Callable[[], datetime]] = None,
         now: Optional[datetime] = None,
+        require_context_view: bool = False,
+        max_renders: int = MAX_RENDERS_PER_TURN,
     ):
         self._store = store
         self._feed = feed
         self._renderer = renderer
         self._clock = clock or _utcnow
         self._now = now
+        self._require_context_view = bool(require_context_view)
+        # The render budget is injectable so the live service can retune it per
+        # turn from ``config.settings``; the shipped constant is the default and
+        # any nonsense degrades to it rather than to "unlimited".
+        try:
+            cap = int(max_renders)
+        except (TypeError, ValueError):
+            cap = MAX_RENDERS_PER_TURN
+        self._max_renders = cap if cap >= 1 else MAX_RENDERS_PER_TURN
 
         self._notes: List[Dict[str, Any]] = []
         self._renders = 0
@@ -640,22 +680,27 @@ class ToolRegistry:
     # ------------------------------------------------------------------ render
 
     def initial_render(self) -> RenderResult:
-        """The turn's first render — it counts as render #1 toward the cap.
+        """The turn's first render is a plain candle chart (no levels or pins).
 
         The loop calls this once, before the model sees anything. Keeping it here
         (rather than in the loop) means the cap has exactly one home.
         """
-        return self._render()
+        return self._render(include_pins=False, plain=True)
 
-    def _render(self) -> RenderResult:
-        if self._renders >= MAX_RENDERS_PER_TURN:
+    def _render(self, *, include_pins: bool = True, plain: bool = False) -> RenderResult:
+        if self._renders >= self._max_renders:
             self._render_refusals += 1
-            raise _RenderCap()
+            raise _RenderCap(self._max_renders)
         # ``cache`` is the registry's snapshot store: ``render_current`` seeds it
         # with the view snapshot it already fetched, so the render pays for one
         # fetch and an immediate subsequent lookup re-uses it (no double fetch).
         result = render_current(
-            self._store, self._feed, self._renderer, cache=self._snapshots
+            self._store,
+            self._feed,
+            self._renderer,
+            cache=self._snapshots,
+            include_pins=include_pins,
+            plain=plain,
         )
         self._renders += 1
         self.last_result = result
@@ -675,13 +720,13 @@ class ToolRegistry:
         bars = int(view.bars)
         offset = int(view.offset or 0)
         tf = str(timeframe)
-        status_filter = str(getattr(view, "status_filter", "default") or "default").lower()
+        status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
         key = _cache_key(tf, bars, offset, status_filter)
         if key not in self._snapshots:
             self._snapshots[key] = self._feed.snapshot(
                 symbol,
                 tf,
-                families=list(view.families) or None,
+                families=list(view.families),
                 bars=bars,
                 offset=offset,
                 status_filter=status_filter,
@@ -703,18 +748,41 @@ class ToolRegistry:
     # ------------------------------------------------------------------ tools
 
     def _tool_set_view(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        args = dict(args)
+        requested_families = list(dict.fromkeys(
+            str(f) for f in (args.get("families", self._store.data.view.families) or [])
+        ))
+        families = requested_families
+        if self._require_context_view:
+            # Repair the constrained first view at the tool boundary so one
+            # imperfect model call cannot consume the entire analysis budget.
+            current = str(self._store.data.view.timeframe or "M15")
+            panes = list(args.get("panes") or [])
+            if len(panes) != 2 or panes[0] == panes[1]:
+                panes = ["H4" if current == "H1" else "H1", current]
+            args["layout"] = "split"
+            args["panes"] = panes
+            args["timeframe"] = str(panes[0])
+            families = ["liquidity", *[str(f) for f in families if str(f) != "liquidity"][:MAX_FAMILIES_PER_IMAGE - 1]]
+            self._require_context_view = False
+        else:
+            families = families[:MAX_FAMILIES_PER_IMAGE]
+        args["families"] = families
         view = self._store.set_view(**args)
+        self._require_context_view = False
         # The view changed, so any snapshot cached for the old dials is stale;
         # the next lookup must re-read the feed.
         self.reset_snapshots()
-        return view.to_dict()
+        result = view.to_dict()
+        result["families_deferred"] = [family for family in requested_families if family not in families]
+        return result
 
     def _tool_render(self, args: Dict[str, Any]) -> Dict[str, Any]:
         result = self._render()
         return {
             "image_path": result.image_path,
             "render_id": result.render_id,
-            "manifest": result.manifest,
+            "manifest": _manifest_for_model(result.manifest),
         }
 
     def _tool_level_lookup(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -837,8 +905,28 @@ class ToolRegistry:
 class _RenderCap(StoreError):
     """The per-turn render cap was reached (internal; becomes ``render_cap``)."""
 
-    def __init__(self, message: str = ""):
-        super().__init__("render_cap", message or f"{MAX_RENDERS_PER_TURN} renders per turn")
+    def __init__(self, cap: int = MAX_RENDERS_PER_TURN, message: str = ""):
+        super().__init__("render_cap", message or f"{cap} renders per turn")
+
+
+def _manifest_for_model(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep tag-to-level lookup data while shrinking repeated tool messages."""
+    tag_fields = (
+        "tag", "label", "level_key", "family", "timeframe", "direction",
+        "price", "price_low", "price_high", "status", "origin",
+        "created_at", "distance_points", "variant", "target",
+    )
+    compact = {
+        key: manifest[key]
+        for key in ("render_id", "symbol", "timeframe", "window", "price_range", "hidden_levels", "layout", "panes")
+        if key in manifest
+    }
+    tags = manifest.get("tags") or {}
+    compact["tags"] = {
+        str(tag): {key: entry[key] for key in tag_fields if key in entry}
+        for tag, entry in tags.items() if isinstance(entry, dict)
+    }
+    return compact
 
 
 def _sub_dict(sub: Subscription, *, now: Optional[datetime] = None) -> Dict[str, Any]:

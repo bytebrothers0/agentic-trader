@@ -21,10 +21,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-#: Sanity cap for one strategy file, in characters. Roughly 5k tokens: this
-#: bounds every turn's input (the strategy text rides in the system prompt) so
-#: an innocent-looking 500-line .md cannot blow the token leash on every call.
-MAX_STRATEGY_CHARS = 20_000
+#: Sanity cap for one strategy file, in characters. The shipped playbook grew
+#: beyond the old 20k cap; 25k accepts it while still bounding prompt growth.
+MAX_STRATEGY_CHARS = 25_000
 
 
 class StrategyError(ValueError):

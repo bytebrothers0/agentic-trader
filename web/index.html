@@ -18,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=16" />
+  <link rel="stylesheet" href="/static/style.css?v=18" />
 </head>
 <body class="dark-theme">
   
@@ -118,7 +118,7 @@
   <!-- Main Content Layout -->
   <main class="main-layout">
     
-    <!-- Left Sidebar: TS + S/R + QM live, OCL/Apex disabled -->
+    <!-- Left Sidebar: indicator families can be enabled independently -->
     <aside class="sidebar" id="indicatorSidebar">
       <div class="sidebar-header">
         <h3><i data-lucide="compass"></i> Indicators</h3>
@@ -302,7 +302,7 @@
             </label>
             <span class="color-indicator ocl-color"></span>
           </div>
-          <p class="card-desc">sOCL, rOCL, 1-Lap OCL, and LS OCL on HTF (M, W, D). Engulfing disqualified.</p>
+          <p class="card-desc">sOCL, rOCL, 1-Lap OCL, and LS OCL on the selected timeframe. Engulfing disqualified.</p>
         </div>
 
         <!-- 3. Quasimodo (QM) Card -->
@@ -501,6 +501,9 @@
     <div class="settings-actions">
       <button class="action-pill" id="btnAgentPause">Pause</button>
       <button class="action-pill" id="btnAgentRunNow">Run now</button>
+      <button class="action-pill agent-reset-btn" id="btnAgentResetContext" title="Clear agent analysis memory">
+        <i data-lucide="trash-2"></i> Reset context
+      </button>
     </div>
     <div class="agent-error" id="agentError" hidden></div>
 
@@ -555,6 +558,12 @@
       <div class="agent-turns" id="agentTurns"><div class="empty-state">No turns logged.</div></div>
     </div>
 
+    <!-- Live SSE activity: model rounds and each tool call/result -->
+    <div class="agent-section">
+      <span class="section-label"><i data-lucide="activity"></i> LIVE ACTIVITY</span>
+      <div class="agent-activity" id="agentActivity"><div class="empty-state">Waiting for agent activity.</div></div>
+    </div>
+
     <!-- Last render -->
     <div class="agent-section">
       <span class="section-label"><i data-lucide="image"></i> LAST RENDER</span>
@@ -571,6 +580,16 @@
     </div>
   </aside>
 
-  <script src="/static/app.js?v=30"></script>
+  <div class="agent-render-modal" id="agentRenderModal" hidden aria-hidden="true">
+    <div class="agent-render-modal-scrim" data-agent-render-close></div>
+    <section class="agent-render-modal-dialog" role="dialog" aria-modal="true" aria-label="Agent chart preview">
+      <button class="agent-render-modal-close" id="btnCloseAgentRenderModal" type="button" title="Close preview">
+        <i data-lucide="x"></i>
+      </button>
+      <img id="agentRenderModalImage" alt="Expanded agent chart render" />
+    </section>
+  </div>
+
+  <script src="/static/app.js?v=32"></script>
 </body>
 </html>

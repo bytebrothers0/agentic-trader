@@ -17,10 +17,12 @@ The turn algorithm (spec's six steps)
 2. **Gating.** A ``fire`` / ``boot`` / ``schedule`` trigger when ``agent.enabled``
    is false is refused (``reason="disabled"``). A ``request`` is *always* allowed —
    the human asked. Then ``store.expire_due(now)`` retires what timed out.
-3. **Briefing + render.** ``prompts.build_briefing`` rebuilds the context fresh from
-   the store, and the first render of the turn is performed. That render counts as
-   render #1 toward ``MAX_RENDERS_PER_TURN``; the :class:`~agentic.tools.ToolRegistry`
-   owns that budget so it cannot double-count.
+3. **Briefing + model-led perception.** ``prompts.build_briefing`` rebuilds the
+   context fresh from the store, and the turn opens **text-only**: the system
+   prompt + strategy, the briefing and the tool schemas — the model sees no
+   image until it chooses the view and asks for its own render (which then
+   counts toward :class:`~agentic.tools.ToolRegistry`'s render budget). A feed
+   failure surfaces in-band, as a refused render call, never as a hard degrade.
 4. **LLM + tool phase.** :meth:`AgentLoop._tool_phase` calls the client, executes its
    tool calls (bounded by ``MAX_TOOL_CALLS_PER_TURN``) and re-renders (bounded by
    ``MAX_RENDERS_PER_TURN``); it feeds the results back and calls again, up to a
@@ -47,7 +49,8 @@ Triggers on top of the algorithm:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
@@ -55,10 +58,11 @@ from agentic import prompts
 from agentic._time import as_aware, new_id
 from agentic.feed import Feed
 from agentic.models import Serde, Trigger
-from agentic.renderer import RenderResult, Renderer
+from agentic.renderer import Renderer
 from agentic._dialect import coerce_bias as _coerce_bias
 from agentic._dialect import coerce_proposal as _coerce_proposal
 from agentic.store import (
+    MAX_RENDERS_PER_TURN,
     MAX_TOOL_CALLS_PER_TURN,
     ContextStore,
     LeashExceeded,
@@ -69,7 +73,21 @@ from agentic.watchdog import Watchdog
 
 #: How many times the model may be asked again after a round of tool calls. Small
 #: on purpose: a loop is a leash in itself.
-MAX_TOOL_ROUNDS = 4
+MAX_TOOL_ROUNDS = 7
+
+
+def default_leash() -> Dict[str, int]:
+    """How ``AgentLoop`` bounds a turn when nobody injected a leash: the shipped
+    constants above. A live retune lives **outside** this module — the loop is a
+    pure module and may not import ``config`` — so the (non-pure) service builds
+    its loop with a leash callable that reads the ``AGENT_MAX_TOOL_CALLS`` /
+    ``AGENT_MAX_TOOL_ROUNDS`` ``AGENT_MAX_RENDERS_PER_TURN`` settings, re-read
+    per turn."""
+    return {
+        "tool_calls": MAX_TOOL_CALLS_PER_TURN,
+        "rounds": MAX_TOOL_ROUNDS,
+        "renders": MAX_RENDERS_PER_TURN,
+    }
 
 #: The instruction for the *closing call* — the one last, tool-less ask made when
 #: the tool rounds ended without a structured object. Tool-calling loops and
@@ -78,12 +96,24 @@ MAX_TOOL_ROUNDS = 4
 #: tools and no chart image, which is the shape these models reliably answer. It
 #: fires only when there is nothing to lose (see ``_tool_phase``).
 CLOSING_INSTRUCTION = (
-    "End the turn now. You have no more tool calls to make. Reply with ONLY the "
+    "Your previous response omitted the required thesis. End the turn now; you have "
+    "no more tool calls to make. Reply with ONLY the "
     "strict JSON object defined in the output contract — no prose, no markdown "
     "fence, nothing before or after it. This closing call does not re-attach the "
     "chart image even when one rendered earlier in the turn: the chart's levels "
     "ride along as text in the briefing's `chart` block, so reason from those "
-    "numbers rather than claiming no chart was available."
+    "numbers rather than claiming no chart was available. Include a `thesis` object "
+    "with a bias, a non-empty storyline, an explicit invalidation, and confidence. "
+    "If evidence is insufficient, say so and use neutral bias."
+)
+
+CLOSING_SYSTEM_PROMPT = (
+    "Close the existing analysis from the supplied chart summary and tool evidence. "
+    "Do not call tools. Return only one JSON object with `thesis` containing `bias`, "
+    "`storyline`, `levels_of_interest`, `invalidation`, and `confidence`; also include "
+    "`proposals` (an empty array when no valid setup passed), `notes`, and `reasoning`. "
+    "Never invent prices. If the analysis did not establish a valid setup, use neutral "
+    "bias, explain which evidence or strategy phase is missing, and say no trade proposal."
 )
 
 #: The single key the closing instruction is carried under in the briefing. It
@@ -133,6 +163,185 @@ def _one_line(text: Any, limit: int = 0) -> str:
     if limit and len(flat) > limit:
         return flat[: limit - 1].rstrip() + "…"
     return flat
+
+
+def _has_thesis(output: Any) -> bool:
+    """Whether model output satisfies the minimum durable-read contract."""
+    thesis = output.get("thesis") if isinstance(output, dict) else None
+    return bool(
+        isinstance(thesis, dict)
+        and str(thesis.get("storyline") or "").strip()
+        and str(thesis.get("invalidation") or "").strip()
+    )
+
+
+def _has_thesis_tool_call(log: Sequence[Dict[str, Any]]) -> bool:
+    """A successful set_thesis tool can fulfill the durable-read contract."""
+    for entry in log or ():
+        call = (entry or {}).get("call") or {}
+        result = (entry or {}).get("result") or {}
+        value = result.get("result") or {}
+        if (
+            call.get("name") == "set_thesis"
+            and result.get("ok", True)
+            and str(value.get("storyline") or "").strip()
+            and str(value.get("invalidation") or "").strip()
+        ):
+            return True
+    return False
+
+
+def _workflow_state(log: Sequence[Dict[str, Any]], output: Any = None) -> Dict[str, bool]:
+    """Return the concrete perception/action milestones completed this turn."""
+    entries = list(log or ())
+    valid_view_at = None
+    for index, entry in enumerate(entries):
+        call = (entry or {}).get("call") or {}
+        result = (entry or {}).get("result") or {}
+        view = result.get("result") or {}
+        is_context_view = (
+            call.get("name") == "set_view"
+            and result.get("ok", True)
+            and isinstance(view, dict)
+            and view.get("layout") == "split"
+            and len(view.get("panes") or []) == 2
+            and len(set(view.get("panes") or [])) == 2
+            and 1 <= len(view.get("families") or []) <= 3
+            and "liquidity" in (view.get("families") or [])
+        )
+        if call.get("name") == "set_view" and result.get("ok", True):
+            # A later view change supersedes an earlier valid one.
+            valid_view_at = index if is_context_view else None
+
+    render_at = next((
+        index for index, entry in enumerate(entries)
+        if valid_view_at is not None
+        and index > valid_view_at
+        and ((entry or {}).get("call") or {}).get("name") == "render"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+    ), None)
+    liquidity_lookup_at = next((
+        index for index, entry in enumerate(entries)
+        if render_at is not None
+        and index > render_at
+        and ((entry or {}).get("call") or {}).get("name") == "level_lookup"
+        and (((entry or {}).get("call") or {}).get("arguments") or {}).get("family") == "liquidity"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+    ), None)
+
+    lookup_matches: List[Dict[str, Any]] = []
+    if liquidity_lookup_at is not None:
+        value = ((entries[liquidity_lookup_at].get("result") or {}).get("result") or {})
+        lookup_matches = [item for item in (value.get("matches") or []) if isinstance(item, dict)]
+    liquidity_matches = [
+        item for item in lookup_matches if item.get("status") in {"live", "swept"}
+    ]
+    pinned_keys = {
+        str((((entry or {}).get("call") or {}).get("arguments") or {}).get("level_key") or "")
+        for index, entry in enumerate(entries)
+        if liquidity_lookup_at is not None and index > liquidity_lookup_at
+        and ((entry or {}).get("call") or {}).get("name") == "add_pin"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+    }
+    pin_done = not liquidity_matches or any(
+        str(item.get("level_key") or "") in pinned_keys for item in liquidity_matches
+    )
+    proposals = output.get("proposals") if isinstance(output, dict) else None
+    proposal_done = bool(proposals) or any(
+        ((entry or {}).get("call") or {}).get("name") == "propose_trade"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+        for entry in entries
+    )
+    watch_done = any(
+        ((entry or {}).get("call") or {}).get("name") == "add_watch"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+        for entry in entries
+    )
+    return {
+        "context_view": valid_view_at is not None,
+        "render": render_at is not None,
+        "liquidity_lookup": liquidity_lookup_at is not None,
+        "pin": pin_done,
+        "action": proposal_done or watch_done,
+        "liquidity_found": bool(liquidity_matches),
+    }
+
+
+def _workflow_pin_candidate(log: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Nearest actionable liquidity from the turn's required survey lookup."""
+    for entry in reversed(list(log or ())):
+        call = (entry or {}).get("call") or {}
+        result = (entry or {}).get("result") or {}
+        if (
+            call.get("name") != "level_lookup"
+            or ((call.get("arguments") or {}).get("family") != "liquidity")
+            or not result.get("ok", True)
+        ):
+            continue
+        body = result.get("result") or {}
+        matches = [
+            dict(item) for item in (body.get("matches") or [])
+            if isinstance(item, dict) and item.get("status") in {"live", "swept"}
+            and item.get("level_key") and item.get("timeframe")
+        ]
+        if not matches:
+            return None
+        primary_tf = ""
+        for earlier in reversed(list(log or ())):
+            earlier_call = (earlier or {}).get("call") or {}
+            earlier_result = (earlier or {}).get("result") or {}
+            if earlier_call.get("name") == "set_view" and earlier_result.get("ok", True):
+                view = earlier_result.get("result") or {}
+                panes = view.get("panes") or []
+                primary_tf = str(panes[0]) if panes else ""
+                break
+        matches.sort(key=lambda item: (
+            0 if str(item.get("timeframe")) == primary_tf else 1,
+            abs(float(item.get("distance_points") or 0.0)),
+            str(item.get("level_key") or ""),
+        ))
+        return matches[0]
+    return None
+
+
+def _required_workflow_tool(
+    log: Sequence[Dict[str, Any]], output: Any = None, *, require_watch: bool = True
+) -> str:
+    """The turn cannot finish until the strategy's minimum inspection is done."""
+    state = _workflow_state(log, output)
+    if not state["context_view"]:
+        return "set_view"
+    if not state["render"]:
+        return "render"
+    if not state["liquidity_lookup"]:
+        return "level_lookup"
+    if state["liquidity_found"] and not state["pin"]:
+        return "add_pin"
+    if require_watch and not state["action"]:
+        return "add_watch"
+    return ""
+
+
+def _workflow_tools(registry: ToolRegistry, required: str) -> List[Dict[str, Any]]:
+    """Copy the tool surface, tightening the currently required workflow step."""
+    tools = copy.deepcopy(registry.schemas())
+    by_name = {tool["name"]: tool for tool in tools}
+    if required == "set_view":
+        schema = by_name["set_view"]["parameters"]
+        schema["properties"]["layout"]["enum"] = ["split"]
+        schema["required"] = ["layout", "panes", "families"]
+    elif required == "level_lookup":
+        schema = by_name["level_lookup"]["parameters"]
+        schema["properties"]["family"]["enum"] = ["liquidity"]
+        schema["required"] = ["family"]
+    elif required == "add_pin":
+        schema = by_name["add_pin"]["parameters"]
+        schema["required"] = ["level_key", "timeframe", "reason"]
+    return tools
+
+
+def _tool_choice(name: str) -> Dict[str, Dict[str, str]]:
+    return {"type": "function", "function": {"name": name}}
 
 
 def _evidence_digest(log: Sequence[Dict[str, Any]], *, per_result: int = 600) -> str:
@@ -226,6 +435,9 @@ class AgentRequest(Serde):
     image_path: str = ""
     manifest: Dict[str, Any] = field(default_factory=dict)
     tools: List[Dict[str, Any]] = field(default_factory=list)
+    #: Strategy turns use a required staged tool sequence before they can finish;
+    #: turns without a Phoenix playbook keep the ordinary set_view-first contract.
+    tool_choice: Any = "auto"
     tool_results: List[ToolResult] = field(default_factory=list)  # fed back on the next round
     #: The calls whose results are in ``tool_results``, in the same order. A real
     #: client (``agentic.llm``) uses this to rebuild the assistant ``tool_calls``
@@ -392,20 +604,21 @@ def _execute_tool_call(
     executed: int,
     truncations: List[str],
     log: List[Dict[str, Any]],
+    tool_cap: int,
 ) -> Tuple[ToolResult, int]:
     """Run one tool call, or refuse it at the per-turn cap.
 
     Returns ``(result, executed_count)`` so the caller can keep the running count.
-    A call beyond ``MAX_TOOL_CALLS_PER_TURN`` becomes an ``ok=False`` result in the
+    A call beyond ``tool_cap`` becomes an ``ok=False`` result in the
     log and in what the model sees next — visible on both sides, never dropped.
     """
-    if executed >= MAX_TOOL_CALLS_PER_TURN:
+    if executed >= tool_cap:
         truncations.append("tool_calls")
         result = ToolResult(
             call_id=call.call_id,
             name=call.name,
             ok=False,
-            error=f"tool_cap: {MAX_TOOL_CALLS_PER_TURN} tool calls per turn",
+            error=f"tool_cap: {tool_cap} tool calls per turn",
         )
     else:
         result = registry.execute(call)
@@ -429,6 +642,8 @@ class AgentLoop:
         clock: Optional[Callable[[], datetime]] = None,
         watchdog: Optional[Watchdog] = None,
         playbook: str = "",
+        activity: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        leash: Optional[Callable[[], Dict[str, int]]] = None,
     ):
         self.store = store
         self.feed = feed
@@ -436,6 +651,10 @@ class AgentLoop:
         self.client = client
         self._clock = clock or getattr(store, "_clock", None) or _utcnow
         self._watchdog = watchdog
+        self._activity = activity
+        # The leash is injected so a non-pure layer can retune the caps live
+        # (config.settings); the loop itself stays free of any config import.
+        self._leash_of = leash or default_leash
         # The operator's strategy (strategies/*.md via agentic.strategy), fixed
         # for this loop's lifetime: a turn never mixes strategies.
         self._playbook = str(playbook or "")
@@ -501,35 +720,16 @@ class AgentLoop:
             retroactive=retroactive,
         )
 
-    # ------------------------------------------------------------------ step 3
-
-    def _initial_render(
-        self, registry: ToolRegistry
-    ) -> Tuple[Optional[RenderResult], str]:
-        """Step 3's first render, hardened so a persisted bad view cannot brick the loop.
-
-        A view whose ``offset`` exceeds the feed's history makes every render
-        raise. Because ``set_view`` has already persisted that offset, leaving it
-        in place would refuse *every* future turn and the model would never get a
-        chance to ``set_view(offset=0)``. So a feed failure **degrades instead of
-        propagating**: retry once at the live edge (``offset=0``, same
-        timeframe/families), then — if that also fails — return ``(None, reason)``
-        so the turn still completes with the refusal recorded on it.
-        """
-        try:
-            return registry.initial_render(), ""
-        except Exception as exc:  # noqa: BLE001 — a feed failure must never escape
-            reason = f"{type(exc).__name__}: {_truncate(exc)}"
-        if int(self.store.data.view.offset or 0) <= 0:
-            return None, reason
-        try:
-            self.store.set_view(offset=0)
-            registry.reset_snapshots()
-            return registry.initial_render(), ""
-        except Exception as exc:  # noqa: BLE001 — a second failure is still a refusal, not a crash
-            return None, f"{type(exc).__name__}: {_truncate(exc)}"
-
     # ------------------------------------------------------------------ step 4
+
+    def _emit_activity(self, event: str, **payload: Any) -> None:
+        if self._activity is None:
+            return
+        try:
+            self._activity(event, payload)
+        except Exception:
+            # UI telemetry must never interrupt an agent turn.
+            pass
 
     def _tool_phase(self, registry: ToolRegistry, request: AgentRequest) -> _ToolPhase:
         """Step 4: call the model, execute its tools, feed results back, repeat.
@@ -552,9 +752,49 @@ class AgentLoop:
         cost = 0.0
         executed = 0
         reply = AgentReply()
-        for _ in range(MAX_TOOL_ROUNDS):
+        deferred_output: Dict[str, Any] = {}
+        require_watch = "mnsr" in self._playbook[:300].lower()
+        # The model round budget is a settings knob (AGENT_MAX_TOOL_ROUNDS),
+        # re-read per turn so the user's edits apply without a restart.
+        # leash read encompassing the turn's caps: {tool_calls, rounds, renders},
+        # injected (config lives outside the pure core) and validated here so a
+        # bad setting can never unbound the loop. (The render bound is consumed
+        # by the registry constructed in run_turn — same leash, same rule.)
+        bounds = self._leash_of()
+        try:
+            tool_cap = max(1, int(bounds.get("tool_calls", MAX_TOOL_CALLS_PER_TURN)))
+        except (TypeError, ValueError):
+            tool_cap = MAX_TOOL_CALLS_PER_TURN
+        try:
+            rounds = max(1, int(bounds.get("rounds", MAX_TOOL_ROUNDS)))
+        except (TypeError, ValueError):
+            rounds = MAX_TOOL_ROUNDS
+        for round_index in range(rounds):
+            required_before_call = _required_workflow_tool(
+                log, deferred_output, require_watch=require_watch
+            ) if require_watch else ""
+            if required_before_call:
+                request.tools = _workflow_tools(registry, required_before_call)
+                request.tool_choice = _tool_choice(required_before_call)
+                request.briefing["workflow_required"] = required_before_call
+            self._emit_activity(
+                "model_call_started",
+                turn_id=request.turn_id,
+                round=round_index + 1,
+            )
             try:
-                reply = self.client.complete(request)
+                # A per-call snapshot: the request object is updated between
+                # rounds (tools, image, briefing), so the client records what
+                # THIS call actually saw — the model-led turn's history is
+                # honest instead of every record showing the last round.
+                call_request = replace(
+                    request,
+                    manifest=dict(request.manifest or {}),
+                    briefing=dict(request.briefing or {}),
+                    tool_results=list(request.tool_results or []),
+                    tool_calls_made=list(request.tool_calls_made or []),
+                )
+                reply = self.client.complete(call_request)
             except Exception as exc:  # noqa: BLE001 — a failed model call must not crash the loop
                 return _ToolPhase(
                     reply=reply,
@@ -565,27 +805,149 @@ class AgentLoop:
                     renders=registry.renders_used(),
                     error=_failure_reason(exc),
                 )
+            self._emit_activity(
+                "model_response",
+                turn_id=request.turn_id,
+                round=round_index + 1,
+                tool_calls=len(reply.tool_calls),
+                finish_reason=str(reply.finish_reason or ""),
+                output_fields=sorted((reply.output or {}).keys()),
+            )
             tokens += sum(int(v or 0) for v in (reply.tokens or {}).values())
             cost += float(reply.cost_usd or 0.0)
+            if reply.output:
+                deferred_output.update(dict(reply.output))
             if not reply.tool_calls:
+                required = _required_workflow_tool(
+                    log, deferred_output, require_watch=require_watch
+                ) if require_watch else ""
+                if required in {"level_lookup", "add_pin", "add_watch"} and round_index + 1 < rounds:
+                    fallback_call: Optional[ToolCall] = None
+                    if required == "level_lookup":
+                        view = self.store.data.view
+                        context_tf = str(view.panes[0]) if view.panes else str(view.timeframe)
+                        fallback_call = ToolCall(
+                            call_id=new_id("workflow_lookup"),
+                            name="level_lookup",
+                            arguments={"family": "liquidity", "timeframe": context_tf},
+                        )
+                    elif required == "add_pin":
+                        candidate = _workflow_pin_candidate(log)
+                        if candidate:
+                            fallback_call = ToolCall(
+                                call_id=new_id("workflow_pin"),
+                                name="add_pin",
+                                arguments={
+                                    "level_key": candidate["level_key"],
+                                    "timeframe": candidate["timeframe"],
+                                    "reason": "Phoenix context liquidity: preserve the live/swept pool across timeframe views",
+                                },
+                            )
+                    else:
+                        view = self.store.data.view
+                        setup_tf = (
+                            str(view.panes[1])
+                            if view.layout.value == "split" and len(view.panes) == 2
+                            else str(view.timeframe)
+                        )
+                        fallback_call = ToolCall(
+                            call_id=new_id("workflow_watch"),
+                            name="add_watch",
+                            arguments={
+                                "condition": "bos_forms",
+                                "params": {"timeframe": setup_tf},
+                                "ttl_hours": 12.0,
+                                "reason": "Phoenix fallback: wait for a setup-frame BOS before the next trade assessment",
+                            },
+                        )
+                    if fallback_call is not None:
+                        self._emit_activity(
+                            "tool_call", turn_id=request.turn_id,
+                            call_id=fallback_call.call_id, name=fallback_call.name,
+                            arguments=dict(fallback_call.arguments), source="workflow_fallback",
+                        )
+                        result, executed = _execute_tool_call(
+                            registry, fallback_call, executed, truncations, log, tool_cap
+                        )
+                        log[-1]["source"] = "workflow_fallback"
+                        self._emit_activity(
+                            "tool_result", turn_id=request.turn_id,
+                            call_id=fallback_call.call_id, name=fallback_call.name,
+                            ok=result.ok, preview=(result.error or repr(result.result))[:1200],
+                            source="workflow_fallback",
+                        )
+                        request.tool_calls_made.append(fallback_call)
+                        request.tool_results.append(result)
+                        request.tools = registry.schemas()
+                        request.tool_choice = "auto"
+                        workflow_action = {
+                            "level_lookup": "The system looked up the required context liquidity family.",
+                            "add_pin": "The system pinned the nearest live/swept higher-timeframe liquidity level.",
+                            "add_watch": "The system added a conservative watch because no trade proposal or watch was returned before the required workflow step ended.",
+                        }
+                        request.briefing["workflow_action"] = workflow_action[fallback_call.name]
+                        continue
+                if required and round_index + 1 < rounds:
+                    request.tools = _workflow_tools(registry, required)
+                    request.tool_choice = _tool_choice(required)
+                    request.briefing["workflow_required"] = required
+                    request.briefing["workflow_instruction"] = (
+                        f"Complete the required {required} step before ending this strategy analysis."
+                    )
+                    continue
+                if deferred_output:
+                    reply.output = dict(deferred_output)
                 break
             results: List[ToolResult] = []
             made: List[ToolCall] = []
             for call in reply.tool_calls:
                 made.append(call)
+                self._emit_activity(
+                    "tool_call",
+                    turn_id=request.turn_id,
+                    call_id=call.call_id,
+                    name=call.name,
+                    arguments=dict(call.arguments or {}),
+                )
                 result, executed = _execute_tool_call(
-                    registry, call, executed, truncations, log
+                    registry, call, executed, truncations, log, tool_cap
+                )
+                preview = result.error or repr(result.result)
+                self._emit_activity(
+                    "tool_result",
+                    turn_id=request.turn_id,
+                    call_id=call.call_id,
+                    name=call.name,
+                    ok=result.ok,
+                    preview=preview[:1200],
                 )
                 results.append(result)
             request.tool_results = list(request.tool_results) + results
             # The calls that produced those results, in the same order: what a
             # real client needs to rebuild the assistant -> tool message pair.
             request.tool_calls_made = list(request.tool_calls_made) + made
+            required = _required_workflow_tool(
+                log, deferred_output, require_watch=require_watch
+            ) if require_watch else ""
+            if required:
+                request.tools = _workflow_tools(registry, required)
+                request.tool_choice = _tool_choice(required)
+                request.briefing["workflow_required"] = required
+                request.briefing["workflow_instruction"] = (
+                    f"Complete the required {required} step before ending this strategy analysis."
+                )
+            else:
+                request.tools = registry.schemas()
+                request.tool_choice = "auto"
             if registry.last_result is not None:
                 request.image_path = registry.last_result.image_path
                 request.manifest = registry.last_result.manifest
         else:
             truncations.append("rounds")
+        if deferred_output:
+            merged = dict(reply.output or {})
+            merged.update(deferred_output)
+            reply.output = merged
         # The closing call. The tool rounds are over; if they ended with no
         # structured object, ask exactly once more, tool-less and image-less (a
         # shape these models reliably answer — the chart image and a tool-calling
@@ -594,12 +956,15 @@ class AgentLoop:
         # than as assistant/tool messages, so the request stays valid without a
         # ``tools`` array. A failure here is swallowed: the turn then simply ends
         # as it would have, so the closing call can only ever add an output.
-        if CLOSING_CALL and not (reply.output or {}):
+        if CLOSING_CALL and not _has_thesis(reply.output):
             closed = self._closing_call(request, log)
             if closed is not None:
                 tokens += sum(int(v or 0) for v in (closed.tokens or {}).values())
                 cost += float(closed.cost_usd or 0.0)
                 if closed.output:
+                    merged_output = dict(reply.output or {})
+                    merged_output.update(closed.output)
+                    closed.output = merged_output
                     reply = closed
         return _ToolPhase(
             reply=reply,
@@ -642,7 +1007,7 @@ class AgentLoop:
             turn_id=request.turn_id,
             trigger=request.trigger,
             trigger_detail=request.trigger_detail,
-            system_prompt=request.system_prompt,
+            system_prompt=CLOSING_SYSTEM_PROMPT,
             briefing=briefing,
             image_path="",
             manifest={},
@@ -675,6 +1040,7 @@ class AgentLoop:
         if refusal is not None:
             return refusal
         trigger = Trigger(trigger).value
+        self._emit_activity("turn_started", trigger=trigger, detail=detail)
         expired = list(expired) + list(self.store.expire_due(now))
 
         # 3. Briefing + the first render (render #1).
@@ -687,20 +1053,37 @@ class AgentLoop:
             expired=expired,
             retroactive=retroactive,
         )
+        require_workflow = "mnsr" in self._playbook[:300].lower()
+        # The leash is read once per turn here too: its (optional) ``renders``
+        # bound becomes this registry's render budget. A leash without a
+        # ``renders`` key (older injected callables, the shipped default path)
+        # falls back to the shipped constant, exactly as before.
+        try:
+            render_bound = int(self._leash_of().get("renders", MAX_RENDERS_PER_TURN))
+        except (TypeError, ValueError):
+            render_bound = MAX_RENDERS_PER_TURN
         registry = ToolRegistry(
-            self.store, self.feed, self.renderer, clock=self._clock, now=now
+            self.store, self.feed, self.renderer, clock=self._clock, now=now,
+            require_context_view=require_workflow, max_renders=render_bound,
         )
-        initial, render_error = self._initial_render(registry)
 
+        # Step 3 is now model-led perception: the turn opens with the system
+        # prompt + strategy, the briefing and the tool schemas — **no image**.
+        # The model decides what to look at (set_view) and explicitly asks for
+        # its own renders; each successful render then becomes that round's
+        # image + manifest. A feed failure therefore surfaces in-band, as a
+        # refused render tool call the model can react to (reduce the offset),
+        # instead of a pre-turn degrade path the model never saw.
         request = AgentRequest(
             turn_id=new_id("turn"),
             trigger=trigger,
             trigger_detail=detail,
             system_prompt=prompts.build_system_prompt(playbook=self._playbook),
             briefing=briefing,
-            image_path=initial.image_path if initial else "",
-            manifest=initial.manifest if initial else {},
-            tools=registry.schemas(),
+            image_path="",
+            manifest={},
+            tools=_workflow_tools(registry, "set_view") if require_workflow else registry.schemas(),
+            tool_choice={"type": "function", "function": {"name": "set_view"}},
             tool_results=[],
         )
 
@@ -708,9 +1091,9 @@ class AgentLoop:
         phase = self._tool_phase(registry, request)
         if phase.error:
             # A failed model call. Side effects that are *not* the turn record have
-            # already happened: ``expire_due`` retired deadlines in memory and
-            # ``initial_render`` wrote a PNG to disk. "Not recorded" below means no
-            # turn record and no save.
+            # already happened: ``expire_due`` retired deadlines in memory and any
+            # render the model itself asked for wrote a PNG to disk. "Not recorded"
+            # below means no turn record and no save.
             #
             # If earlier rounds succeeded they cost real money, so bill them as a
             # partial turn rather than dropping the spend and under-counting the
@@ -719,9 +1102,7 @@ class AgentLoop:
             if not (phase.tokens or phase.cost):
                 return TurnOutcome(trigger=trigger, ok=False, reason=phase.error)
             output = {"error": phase.error, "partial": True}
-            if render_error:
-                output["render_error"] = render_error
-            final = registry.last_result or initial
+            final = registry.last_result
             record = self.store.record_turn(
                 trigger,
                 trigger_detail=detail,
@@ -751,10 +1132,31 @@ class AgentLoop:
         output["notes"] = registry.notes() + [
             _normalise_note(note, now) for note in (output.get("notes") or [])
         ]
-        if render_error:
-            # The initial render degraded (e.g. a persisted offset past history):
-            # record it on the turn so the model knows why there was no image.
-            output["render_error"] = render_error
+        workflow_missing: List[str] = []
+        if require_workflow:
+            state = _workflow_state(phase.log, output)
+            workflow_missing = [
+                label for key, label in (
+                    ("context_view", "two_timeframe_context_view"),
+                    ("render", "indicator_render"),
+                    ("liquidity_lookup", "liquidity_level_lookup"),
+                    ("pin", "pin_relevant_liquidity"),
+                    ("action", "watch_or_trade_proposal"),
+                ) if not state[key]
+            ]
+        incomplete = not (
+            _has_thesis(output) or _has_thesis_tool_call(phase.log)
+        ) or bool(workflow_missing)
+        if incomplete:
+            output["analysis_status"] = "incomplete"
+            problems = []
+            if not (_has_thesis(output) or _has_thesis_tool_call(phase.log)):
+                problems.append("missing thesis with storyline and explicit invalidation")
+            if workflow_missing:
+                problems.append("workflow steps not completed: " + ", ".join(workflow_missing))
+            output["analysis_error"] = "; ".join(problems)
+            if workflow_missing:
+                output["workflow_missing"] = workflow_missing
         output, apply_errors = _apply_output(self.store, output, now)
         if apply_errors:
             output["apply_errors"] = apply_errors
@@ -776,12 +1178,19 @@ class AgentLoop:
         )
         self.store.save()
 
-        final = registry.last_result or initial
+        final = registry.last_result
+        reason_parts = []
+        if incomplete:
+            reason_parts.append("incomplete_analysis")
+        if workflow_missing:
+            reason_parts.append("workflow_missing: " + ", ".join(workflow_missing))
+        if phase.truncations:
+            reason_parts.append("truncated: " + ", ".join(phase.truncations))
         return TurnOutcome(
             turn_id=record.id,
             trigger=trigger,
-            ok=True,
-            reason=("truncated: " + ", ".join(phase.truncations)) if phase.truncations else "",
+            ok=not incomplete,
+            reason="; ".join(reason_parts),
             renders=registry.renders_used(),
             tool_calls=len(phase.log),
             output=output,

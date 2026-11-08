@@ -186,7 +186,7 @@ def test_indicators_ts_payload_is_json_clean(monkeypatch):
 def test_import_server_keeps_37_routes():
     import server
 
-    assert len(server.app.routes) == 37
+    assert len(server.app.routes) == 40  # 37 pinned + proposal-orders routes + /health
 
 
 def test_sr_render_levels_keeps_real_walls_only():

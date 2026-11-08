@@ -36,11 +36,13 @@ from agent_service import (  # noqa: E402
     AgentService,
     _chat_completions_url,
     _request_headers,
+    _settings_leash,
     build_client,
     make_transport,
 )
 from agentic.agent_loop import MAX_TOOL_ROUNDS, AgentLoop  # noqa: E402
 from agentic.agent_loop import AgentReply, ScriptedAgent  # noqa: E402
+from agentic.tools import ToolCall  # noqa: E402
 from agentic.models import SubscriptionKind, SubscriptionState, Trigger  # noqa: E402
 from agentic.store import ContextStore  # noqa: E402
 from agentic.strategy import StrategyError  # noqa: E402
@@ -164,7 +166,7 @@ def test_the_strategy_reaches_the_loop_s_prompt(tmp_path):
     service.enable()
     outcome = service.run_now("what is the read")
 
-    assert outcome.ok is True
+    assert outcome.ok is False and outcome.reason.startswith("incomplete_analysis")
     assert "STRAT-MINE: scalp the dragon." in agent.requests[0].system_prompt
     assert "PROPOSE-ONLY" in agent.requests[0].system_prompt
 
@@ -199,7 +201,7 @@ def test_panel_reflects_the_store(tmp_path):
         assert panel["model"] == "gpt-4o-mini"
         assert panel["running"] is True
         assert panel["paused"] is False
-        assert panel["view"]["timeframe"] == "M15"
+        assert panel["view"]["timeframe"] == "H1"
         assert panel["thesis"]["bias"] == "bullish"
         assert panel["thesis"]["invalidation"] == "below 4100"
 
@@ -425,7 +427,7 @@ def test_build_client_mock_performs_a_full_zero_spend_turn(tmp_path):
 
     watches = store.open_subscriptions(SubscriptionKind.WATCH)
     assert len(watches) >= 1
-    assert watches[0].condition == "level_forms"
+    assert watches[0].condition == "bos_forms"
 
     assert len(store.data.turns) == 1
     record = store.data.turns[0]
@@ -1002,8 +1004,54 @@ def test_make_transport_floors_a_zero_retry_after(monkeypatch):
     assert slept and slept[0] > 0
 
 
+def test_the_service_feeds_the_live_settings_leash_to_the_loop(tmp_path, monkeypatch):
+    """A settings edit binds the very next turn, end to end.
+
+    ``config.settings`` is read by the service (``_settings_leash``) and injected
+    into the loop, so retuning ``AGENT_MAX_TOOL_ROUNDS`` there — no restart —
+    truncates the next turn after exactly the configured rounds.
+
+    The playbook here is a neutral stub that does not name the model anywhere
+    (the trigger is a plain substring match on the playbook's first 300 chars),
+    so the test measures only the leash, independent of which strategy settings
+    has active — the shipped Alchemist MNSR playbook enforces the MNSR
+    workflow, which would append its own ``workflow_missing`` labels to ``reason``.
+    """
+    import config.settings as settings
+
+    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_ROUNDS", 2, raising=False)
+    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_CALLS", 5, raising=False)
+
+    strategies = tmp_path / "strategies"
+    strategies.mkdir()
+    (strategies / "leash_stub.md").write_text(
+        "STRAT-LEASH-STUB: plain playbook, no enforced workflow here.", encoding="utf-8"
+    )
+
+    clock = FakeClock(at(6, 0))
+    script = [
+        AgentReply(tool_calls=[ToolCall(call_id="c1", name="add_note", arguments={"text": "x"})])
+        for _ in range(6)
+    ]
+    stub = FeedStub(price=4155.0, atr=5.0)
+    stub.set_candles(bars_rows(), timeframe="M15")
+    service = AgentService(
+        _config(tmp_path, strategy_dir=str(strategies), strategy_name="leash_stub"),
+        feed=stub.build(),
+        renderer=FakeRenderer(out_dir=str(tmp_path / "renders"), clock=clock),
+        client=ScriptedAgent(script),
+        clock=clock,
+    )
+    outcome = service.run_now()
+
+    assert outcome.tool_calls == 2                  # bound by the edited setting
+    assert outcome.output["truncated"] == ["rounds"]
+    assert outcome.reason == "incomplete_analysis; truncated: rounds"
+
+
 def test_join_budget_covers_a_worst_case_retried_turn(tmp_path):
-    """C4: ``stop``'s join budget must include the transport's retry sleeps.
+    """C4: ``stop``'s join budget must include the transport's retry sleeps —
+    sized from the *live* round count (retunable in config.settings).
 
     One call can block for ``http_timeout_s`` *and* sleep up to
     ``TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S`` between retries, so the old
@@ -1013,8 +1061,13 @@ def test_join_budget_covers_a_worst_case_retried_turn(tmp_path):
     service = _service(tmp_path, clock, http_timeout_s=120.0, poll_s=15.0)
 
     worst_case_call = 120.0 + TRANSPORT_MAX_RETRIES * TRANSPORT_RETRY_CAP_S
-    worst_case_turn = worst_case_call * (MAX_TOOL_ROUNDS + 1) + 15.0
+    # the live round budget (retunable in config.settings) sizes the loop
+    from config import settings
+
+    rounds = _settings_leash().get("rounds", MAX_TOOL_ROUNDS)
+    worst_case_turn = worst_case_call * (rounds + 1) + 15.0
     assert service._join_budget() >= worst_case_turn
+    assert rounds == int(settings.AGENT_MAX_TOOL_ROUNDS)
 
 
 def test_the_shipped_output_cap_leaves_room_for_a_reasoning_runaway():

@@ -223,7 +223,7 @@ class TLDetector:
 
         resistance.sort(key=self._rank_key)
         support.sort(key=self._rank_key)
-        self._lines = resistance[:self.max_lines] + support[:self.max_lines]
+        self._lines = self._select_candidates(resistance) + self._select_candidates(support)
         return self._lines
 
     @property
@@ -238,45 +238,45 @@ class TLDetector:
                   else lv.pivot_index),
                 -lv.apex_points, -lv.touches)
 
+    def _select_candidates(self, lines: List[TLLine]) -> List[TLLine]:
+        """Keep a balanced menu of active, broken, and retested candidates."""
+        ordered = sorted(lines, key=self._rank_key)
+        buckets = [
+            [line for line in ordered if line.flipped],
+            [line for line in ordered if line.state == TLState.ACTIVE],
+            [line for line in ordered if line.state == TLState.BROKEN and not line.retested],
+        ]
+        selected: List[TLLine] = []
+        seen = set()
+        while len(selected) < self.max_lines and any(buckets):
+            for bucket in buckets:
+                while bucket:
+                    line = bucket.pop(0)
+                    key = (line.pivot_index, line.second_anchor_index)
+                    if key not in seen:
+                        selected.append(line)
+                        seen.add(key)
+                        break
+                if len(selected) >= self.max_lines:
+                    break
+        return selected
+
     # ------------------------------------------------------------------
     # Apex run construction
     # ------------------------------------------------------------------
 
     def _side_lines(self, side, apexes, o, h, l, c, times, last,
                     engulf) -> List[TLLine]:
-        """Walk consecutive apexes into 2-3 point runs, build each line."""
+        """Build candidates from every eligible pair of close-price apexes."""
         out: List[TLLine] = []
-        seen: set = set()
-        m = len(apexes)
-        i = 0
-        while i < m - 1:
-            p1, p2 = apexes[i], apexes[i + 1]
-            if p2 - p1 < self.min_anchor_gap:
-                i += 1
-                continue
-            line = self._try_build(side, p1, p2, o, h, l, c, times, last,
-                                   engulf)
-            if line is None:
-                i += 1
-                continue
-            # Extend the run while the next apex lands on the current line
-            # (a line carries at most 3 apexes).
-            k = i + 1
-            while (k + 1 < m and (k - i + 1) < 3
-                   and apexes[k + 1] - p1 >= self.min_anchor_gap
-                   and self._on_line(line, apexes[k + 1], c)):
-                cand = self._try_build(side, p1, apexes[k + 1], o, h, l, c,
-                                       times, last, engulf)
-                if cand is None:
-                    break
-                k += 1
-                line = cand
-            line.apex_points = k - i + 1
-            key = (side.value, p1, line.second_anchor_index)
-            if key not in seen:
-                seen.add(key)
-                out.append(line)
-            i = k  # continue from the last apex of this run
+        for i, p1 in enumerate(apexes[:-1]):
+            for p2 in apexes[i + 1:]:
+                if p2 - p1 < self.min_anchor_gap:
+                    continue
+                line = self._try_build(side, p1, p2, o, h, l, c, times,
+                                       last, engulf)
+                if line is not None:
+                    out.append(line)
         return out
 
     def _on_line(self, line: TLLine, idx: int, c) -> bool:

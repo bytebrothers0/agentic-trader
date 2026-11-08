@@ -96,6 +96,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnAgent = document.getElementById("btnAgent");
   const agentDrawer = document.getElementById("agentDrawer");
   const agentBackdrop = document.getElementById("agentBackdrop");
+  const agentRenderModal = document.getElementById("agentRenderModal");
+  const agentRenderModalImage = document.getElementById("agentRenderModalImage");
+  const btnCloseAgentRenderModal = document.getElementById("btnCloseAgentRenderModal");
   const btnCloseAgent = document.getElementById("btnCloseAgent");
   const agentEnableToggle = document.getElementById("agentEnableToggle");
   const agentMode = document.getElementById("agentMode");
@@ -104,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const agentRunState = document.getElementById("agentRunState");
   const btnAgentPause = document.getElementById("btnAgentPause");
   const btnAgentRunNow = document.getElementById("btnAgentRunNow");
+  const btnAgentResetContext = document.getElementById("btnAgentResetContext");
   const agentError = document.getElementById("agentError");
   const agentView = document.getElementById("agentView");
   const agentThesis = document.getElementById("agentThesis");
@@ -115,6 +119,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const agentProposalsCountBadge = document.getElementById("agentProposalsCountBadge");
   const agentBudget = document.getElementById("agentBudget");
   const agentTurns = document.getElementById("agentTurns");
+  const agentActivity = document.getElementById("agentActivity");
   const agentRender = document.getElementById("agentRender");
   const agentChatInput = document.getElementById("agentChatInput");
   const btnAgentSend = document.getElementById("btnAgentSend");
@@ -390,8 +395,8 @@ document.addEventListener("DOMContentLoaded", () => {
       await fetchAccountMetrics();
       await fetchLivePositions();
 
-      // 3. Indicators — TS/SR/QM/IDM (new strategy) fetch even while the
-      // rest of the old MSNR stack is disabled. Legacy OCL/Apex stay empty.
+      // 3. Indicators — each enabled detector runs independently on the
+      // selected chart timeframe.
       const wantTS = TS_ENABLED && state.indicators.ts;
       const wantSR = (SR_ENABLED || INDICATORS_ENABLED) && state.indicators.sr;
       const wantQM = (QM_ENABLED || INDICATORS_ENABLED) && state.indicators.qm;
@@ -1286,6 +1291,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let agentPollTimer = null;
   let agentLastPanel = null;
+  let agentEventSource = null;
+  let agentLastEventId = 0;
 
   function openAgent() {
     if (agentDrawer) agentDrawer.classList.add("open");
@@ -1298,6 +1305,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderAgentStatus({ enabled: AGENT_ENABLED, running: false, paused: false });
     }
     fetchAgentPanel();
+    startAgentEventStream();
     if (!agentPollTimer) {
       agentPollTimer = setInterval(() => {
         if (agentDrawer && agentDrawer.classList.contains("open")) fetchAgentPanel();
@@ -1311,6 +1319,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (agentPollTimer) {
       clearInterval(agentPollTimer);
       agentPollTimer = null;
+    }
+    if (agentEventSource) {
+      const lastId = Number(agentEventSource.lastEventId || 0);
+      if (lastId > agentLastEventId) agentLastEventId = lastId;
+      agentEventSource.close();
+      agentEventSource = null;
     }
   }
 
@@ -1571,17 +1585,103 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     agentRender.textContent = "";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "agent-render-preview";
+    preview.title = "Click to expand chart preview";
+    preview.setAttribute("aria-label", "Expand agent chart preview");
     const img = document.createElement("img");
     img.className = "agent-render-img";
     img.loading = "lazy";
     img.alt = `Render ${lr.render_id}`;
     img.src = `/api/agent/render?render_id=${encodeURIComponent(lr.render_id)}`;
-    agentRender.appendChild(img);
+    preview.appendChild(img);
+    preview.addEventListener("click", () => openAgentRenderPreview(img.src, img.alt));
+    agentRender.appendChild(preview);
     const m = lr.manifest || {};
     const meta = document.createElement("span");
     meta.className = "agent-updated";
     meta.textContent = [m.symbol, m.timeframe, m.rendered_at].filter(Boolean).join(" · ") || lr.render_id;
     agentRender.appendChild(meta);
+  }
+
+  function openAgentRenderPreview(src, alt) {
+    if (!agentRenderModal || !agentRenderModalImage) return;
+    agentRenderModalImage.src = src;
+    agentRenderModalImage.alt = alt || "Expanded agent chart render";
+    agentRenderModal.hidden = false;
+    agentRenderModal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("agent-render-modal-open");
+    if (btnCloseAgentRenderModal) btnCloseAgentRenderModal.focus();
+  }
+
+  function closeAgentRenderPreview() {
+    if (!agentRenderModal) return;
+    agentRenderModal.hidden = true;
+    agentRenderModal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("agent-render-modal-open");
+    if (agentRenderModalImage) agentRenderModalImage.removeAttribute("src");
+  }
+
+  function startAgentEventStream() {
+    if (agentEventSource || !window.EventSource) return;
+    const source = new EventSource(`/api/agent/events?after=${encodeURIComponent(agentLastEventId)}`);
+    agentEventSource = source;
+    source.addEventListener("activity", (event) => {
+      let item;
+      try { item = JSON.parse(event.data); } catch (_) { return; }
+      const seq = Number(event.lastEventId || item.id || 0);
+      if (seq > agentLastEventId) agentLastEventId = seq;
+      appendAgentActivity(item);
+    });
+    // EventSource retries automatically; keep the panel usable during reconnects.
+  }
+
+  function appendAgentActivity(item) {
+    if (!agentActivity) return;
+    const empty = agentActivity.querySelector(".empty-state");
+    if (empty) empty.remove();
+    const data = item && item.data ? item.data : {};
+    const row = document.createElement("div");
+    row.className = `agent-activity-row${item.type === "tool_call" ? " is-tool-call" : ""}`;
+    const at = document.createElement("span");
+    at.className = "agent-updated";
+    const date = item.at ? new Date(item.at) : null;
+    at.textContent = date && !isNaN(date.getTime()) ? date.toLocaleTimeString() : "";
+    const message = document.createElement("div");
+    message.className = "agent-activity-message";
+    if (item.type === "turn_started") {
+      message.textContent = `Analysis started (${data.trigger || "turn"})`;
+    } else if (item.type === "model_call_started") {
+      message.textContent = `Agent thinking · model round ${data.round || "?"}`;
+    } else if (item.type === "model_response") {
+      const fields = Array.isArray(data.output_fields) && data.output_fields.length
+        ? ` · output: ${data.output_fields.join(", ")}` : "";
+      const finish = data.finish_reason ? ` · ${data.finish_reason}` : "";
+      message.textContent = `Model returned ${data.tool_calls || 0} tool call(s)${finish}${fields}`;
+    } else if (item.type === "tool_call") {
+      const args = JSON.stringify(data.arguments || {});
+      const source = data.source === "workflow_fallback" ? "Workflow fallback: " : "";
+      message.textContent = `${source}calling ${data.name || "tool"}(${args.length > 420 ? `${args.slice(0, 420)}…` : args})`;
+    } else if (item.type === "tool_result") {
+      const source = data.source === "workflow_fallback" ? "Workflow fallback: " : "";
+      message.textContent = `${source}${data.name || "Tool"} ${data.ok ? "completed" : "failed"}${data.preview ? ` · ${data.preview}` : ""}`;
+    } else if (item.type === "turn_finished") {
+      const status = data.analysis_status || (data.ok ? "complete" : "incomplete");
+      const actions = ` · ${data.proposals || 0} proposal(s), ${data.pins || 0} pin(s), ${data.watches || 0} watch(es)`;
+      const missing = Array.isArray(data.workflow_missing) && data.workflow_missing.length
+        ? ` · missing: ${data.workflow_missing.join(", ")}` : "";
+      message.textContent = `Analysis ${status} · ${data.tool_calls || 0} tool call(s)${actions}${missing}${data.reason ? ` · ${data.reason}` : ""}`;
+    } else if (item.type === "turn_failed") {
+      message.textContent = `Analysis failed · ${data.reason || "unknown error"}`;
+    } else {
+      message.textContent = item.type || "Agent activity";
+    }
+    row.appendChild(at);
+    row.appendChild(message);
+    agentActivity.appendChild(row);
+    while (agentActivity.children.length > 80) agentActivity.firstElementChild.remove();
+    agentActivity.scrollTop = agentActivity.scrollHeight;
   }
 
   function renderAgentStatus(panel) {
@@ -1688,8 +1788,33 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function agentRunNow(message) {
+  async function agentResetContext() {
+    const confirmed = window.confirm(
+      "Reset the agent's analysis context? This clears its thesis, watches and pins, proposals, turn history, and last render. The chart view, enabled/paused state, and daily budget are kept."
+    );
+    if (!confirmed) return;
+    if (btnAgentResetContext) btnAgentResetContext.disabled = true;
+    try {
+      const res = await fetch("/api/agent/reset-context", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      await fetchAgentPanel();
+    } catch (err) {
+      agentShowError(`Could not reset agent context: ${err.message}`);
+    } finally {
+      if (btnAgentResetContext) btnAgentResetContext.disabled = false;
+    }
+  }
+
+  async function agentRunNow(message, actionButton = btnAgentRunNow) {
     const text = (message || "").trim();
+    const oldLabel = actionButton ? actionButton.innerHTML : "";
+    if (actionButton) {
+      actionButton.disabled = true;
+      actionButton.classList.add("is-loading");
+      actionButton.innerHTML = '<span class="agent-spinner" aria-hidden="true"></span> Analyzing…';
+    }
+    if (actionButton === btnAgentSend && agentChatInput) agentChatInput.disabled = true;
     try {
       const url = text
         ? `/api/agent/run-now?message=${encodeURIComponent(text)}`
@@ -1707,12 +1832,32 @@ document.addEventListener("DOMContentLoaded", () => {
       await fetchAgentPanel();
     } catch (err) {
       agentShowError(`Run failed: ${err.message}`);
+    } finally {
+      if (actionButton) {
+        actionButton.disabled = false;
+        actionButton.classList.remove("is-loading");
+        actionButton.innerHTML = oldLabel;
+      }
+      if (actionButton === btnAgentSend && agentChatInput) agentChatInput.disabled = false;
     }
   }
 
   if (btnAgent) btnAgent.addEventListener("click", openAgent);
   if (btnCloseAgent) btnCloseAgent.addEventListener("click", closeAgent);
   if (agentBackdrop) agentBackdrop.addEventListener("click", closeAgent);
+  if (btnCloseAgentRenderModal) btnCloseAgentRenderModal.addEventListener("click", closeAgentRenderPreview);
+  if (agentRenderModal) {
+    agentRenderModal.addEventListener("click", (event) => {
+      if (event.target === agentRenderModal || event.target.closest("[data-agent-render-close]")) {
+        closeAgentRenderPreview();
+      }
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && agentRenderModal && !agentRenderModal.hidden) {
+      closeAgentRenderPreview();
+    }
+  });
   if (agentEnableToggle) {
     agentEnableToggle.addEventListener("change", () =>
       agentSetEnabled(agentEnableToggle.checked, agentEnableToggle)
@@ -1720,9 +1865,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (btnAgentPause) btnAgentPause.addEventListener("click", agentTogglePause);
   if (btnAgentRunNow) btnAgentRunNow.addEventListener("click", () => agentRunNow(""));
+  if (btnAgentResetContext) btnAgentResetContext.addEventListener("click", agentResetContext);
   if (btnAgentSend) {
     btnAgentSend.addEventListener("click", () => {
-      agentRunNow(agentChatInput ? agentChatInput.value : "");
+      agentRunNow(agentChatInput ? agentChatInput.value : "", btnAgentSend);
       if (agentChatInput) agentChatInput.value = "";
     });
   }

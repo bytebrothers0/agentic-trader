@@ -540,6 +540,71 @@ def test_leash_caps_daily_spend(tmp_path):
     assert exc.value.reason == "max_spend_per_day"
 
 
+def test_injected_leash_limits_override_the_turn_caps(tmp_path):
+    """The service layer retunes the turn-rate leash live; the store obeys.
+
+    Same shape as ``AgentLoop(leash=…)``: the pure store takes a callable
+    (``set_leash_limits``), ``config`` never enters this module. A lowered
+    ``max_turns_per_hour`` binds even though the shipped constant allows more.
+    """
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+    store.set_leash_limits(lambda: {"max_turns_per_hour": 1, "min_turn_interval_s": 0})
+    clock.advance(seconds=1)  # interval disabled (0): the second turn may start right after
+    store.record_turn("schedule")
+    with pytest.raises(LeashExceeded) as exc:
+        store.record_turn("schedule")
+    assert exc.value.reason == "max_turns_per_hour"
+    assert "1" in str(exc.value)
+
+
+def test_injected_leash_limits_raise_the_turn_caps(tmp_path):
+    """A raised cap is honoured, not clamped to the shipped constant.
+
+    The shipped minimum interval is MIN_TURN_INTERVAL_S (60s); an injected 5s
+    shows as genuinely 5s — the second record_turn only needs 5 seconds of wait.
+    And a quantity cap above the shipped value permits more turns.
+    """
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+    turns = store_mod.MAX_TURNS_PER_HOUR + 5
+    store.set_leash_limits(lambda: {"min_turn_interval_s": 5, "max_turns_per_hour": turns + 10})
+    for _ in range(turns):
+        store.record_turn("schedule")
+        clock.advance(seconds=5.5)
+    record = store.record_turn("schedule")
+    assert record.trigger.value == "schedule"
+
+
+def test_missing_injected_leash_keys_fall_back_to_the_constants(tmp_path):
+    """An injected dict without a requested key behaves exactly like none at all."""
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+    store.set_leash_limits(lambda: {})  # a live reader that returned nothing
+    store.record_turn("boot")
+    with pytest.raises(LeashExceeded) as exc:
+        store.record_turn("fire")
+    assert exc.value.reason == "min_turn_interval"
+    clock.advance(seconds=store_mod.MIN_TURN_INTERVAL_S + 1)
+    clock.advance(seconds=store_mod.MIN_TURN_INTERVAL_S + 1)
+    assert store.record_turn("schedule").trigger.value == "schedule"
+
+
+def test_a_throwing_leash_injection_degrades_to_the_constants(tmp_path):
+    """A broken injected callable cannot unbound the store — constants rule."""
+    clock = FakeClock()
+    store = _store(tmp_path, clock)
+
+    def bad():
+        raise RuntimeError("broken settings read")
+
+    store.set_leash_limits(bad)
+    store.record_turn("boot")
+    with pytest.raises(LeashExceeded) as exc:
+        store.record_turn("fire")
+    assert exc.value.reason == "min_turn_interval"
+
+
 def test_turn_record_bills_and_snapshots(tmp_path):
     store = _store(tmp_path)
     store.add_subscription("watch", "price_crosses", {"price": 4160.0})

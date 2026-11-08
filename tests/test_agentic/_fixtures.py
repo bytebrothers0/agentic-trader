@@ -147,7 +147,9 @@ class FeedStub:
         self.levels = {}
         self.candles = {}
         self.snapshot_calls = []
+        self.snapshot_families = []
         self.bars_calls = []
+        self.bars_requests = []
         #: The ``offset`` each provider call was made with (parallel to the call
         #: lists above), so an offset test can prove the slice was requested.
         self.snapshot_offsets = []
@@ -164,6 +166,7 @@ class FeedStub:
     def build(self) -> Feed:
         def provider(*, symbol, timeframe, families=None, bars=300, offset=0, **kwargs):
             self.snapshot_calls.append((symbol, timeframe))
+            self.snapshot_families.append(list(families or []))
             self.snapshot_offsets.append(int(offset))
             return snapshot_payload(
                 self.levels.get(timeframe, []),
@@ -175,6 +178,7 @@ class FeedStub:
 
         def candles_provider(*, symbol, timeframe, bars=300, offset=0, **kwargs):
             self.bars_calls.append((symbol, timeframe))
+            self.bars_requests.append((symbol, timeframe, int(bars), int(offset)))
             self.bars_offsets.append(int(offset))
             rows = self.candles.get(timeframe, [])
             if offset:
