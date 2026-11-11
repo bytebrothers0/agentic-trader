@@ -1,0 +1,7 @@
+[
+  "what is the current bias on gold right now, and what invalidation would flip it? label every structure level you cite as internal or external.",
+  "has there been a liquidity sweep recently? how do you know it was a sweep and not a break? use the detector's level states (swept/taken vs broken) and level_lookup prices in your answer.",
+  "is price in premium or discount right now? how do you know?",
+  "where is liquidity resting above and below price right now? name the levels and say which pool price is being pulled toward.",
+  "what would change your mind about the bias?"
+]

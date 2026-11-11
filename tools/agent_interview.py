@@ -50,7 +50,12 @@ DEFAULT_QUESTIONS = [
 
 
 def _build_service(strategy_name: str, work_dir: str):
-    """An isolated AgentService: copied store, own renders, chosen playbook."""
+    """An isolated AgentService: copied store, own renders, chosen playbook.
+
+    If ``work_dir`` already carries a copied state file (a resumed run), it is
+    kept as-is — so the agent's chat history from the earlier interview is
+    still in the briefing and follow-up questions continue the conversation.
+    """
     import server
     from agent_service import AgentConfig, AgentService
     from agentic.store import ContextStore
@@ -64,7 +69,9 @@ def _build_service(strategy_name: str, work_dir: str):
     tmp_renders = os.path.join(work_dir, "renders")
     os.makedirs(tmp_state, exist_ok=True)
     os.makedirs(tmp_renders, exist_ok=True)
-    shutil.copy2(live_store, os.path.join(tmp_state, os.path.basename(live_store)))
+    copied = os.path.join(tmp_state, os.path.basename(live_store))
+    if not os.path.isfile(copied):
+        shutil.copy2(live_store, copied)
 
     model, api_base, api_key_env = server.AGENT_MODEL, server.AGENT_API_BASE, server.AGENT_API_KEY_ENV
     if str(server.AGENT_MODE or "").strip().lower() == "live":
@@ -94,7 +101,7 @@ def _build_service(strategy_name: str, work_dir: str):
     return AgentService(config), tmp_renders
 
 
-def _run_question(service, question: str) -> dict:
+def _one_turn(service, question: str) -> dict:
     """One chat turn; returns the collected evidence."""
     final = None
     events = []
@@ -114,8 +121,31 @@ def _run_question(service, question: str) -> dict:
         "turn_id": str(final.get("turn_id") or ""),
         "events": events,
         "seconds": round(took, 1),
-        "ok": bool(final.get("ok", True)),
+        "ok": (
+            bool(final.get("ok", True))
+            and bool(str(final.get("response") or "").strip())
+            and str(final.get("response")).strip() != "(no response)"
+        ),
     }
+
+
+def _run_question(service, question: str, attempts: int = 3) -> dict:
+    """One chat turn, retried on provider failure (gateway read timeouts).
+
+    Each attempt is its own recorded turn (audit trail intact); a timeout
+    leaves an empty response in the log, which the next attempt's briefing
+    simply ignores. Returns the first good answer, else the last failure.
+    """
+    last = None
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            print(f"    retry {attempt}/{attempts - 1} (previous attempt failed)")
+        last = _one_turn(service, question)
+        if last["ok"]:
+            return last
+        time.sleep(3.0)  # brief cool-off before hammering the gateway again
+    last["retries"] = max(0, attempts - 1)
+    return last
 
 
 def _transcript(label: str, strategy: str, results: list, out_dir: str) -> str:
@@ -150,12 +180,22 @@ def _transcript(label: str, strategy: str, results: list, out_dir: str) -> str:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252: model answers contain arrows and
+    # dashes, so force UTF-8 with replacement instead of crashing mid-run.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", default="trader_core", help="playbook to wear")
     parser.add_argument("--label", default=None, help="output subdirectory name")
     parser.add_argument("--baseline", action="store_true",
                         help="run the active strategy AND trader_core, for comparison")
     parser.add_argument("--questions", default=None, help="json file with a list of questions")
+    parser.add_argument("--out-dir", default=None,
+                        help="resume an existing run dir (state kept: the agent remembers "
+                             "the earlier interview; new turns append to it)")
+    parser.add_argument("--attempts", type=int, default=3, help="retries per question on failure")
     args = parser.parse_args()
 
     if os.path.isfile(args.questions or ""):
@@ -170,19 +210,21 @@ def main() -> int:
         runs = [(args.strategy, args.label or args.strategy)]
 
     for strategy, label in runs:
-        out_dir = os.path.join(RESEARCH_DIR, f"{stamp}-{label}")
+        if args.out_dir:
+            out_dir = os.path.join(RESEARCH_DIR, args.out_dir)
+        else:
+            out_dir = os.path.join(RESEARCH_DIR, f"{stamp}-{label}")
         os.makedirs(out_dir, exist_ok=True)
         print(f"=== interview: {strategy} -> {out_dir} ===")
         service, renders_dir = _build_service(strategy, out_dir)
         results = []
         for q in questions:
             print(f"  Q: {q}")
-            r = _run_question(service, q)
+            r = _run_question(service, q, attempts=args.attempts)
             print(f"  -> {r['seconds']}s, tools: {len(r['tool_calls'])}, ok: {r['ok']}")
             print(f"  -> {r['answer'][:160]}...")
             results.append(r)
             if r["render_id"]:
-                from agent_service import DEFAULT_RENDER_DIR  # noqa: F401 (path comes from config)
                 src = os.path.join(renders_dir, f"{r['render_id']}.png")
                 if os.path.isfile(src):
                     print(f"  -> render saved: {os.path.relpath(src, ROOT)}")

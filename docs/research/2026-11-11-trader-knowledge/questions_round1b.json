@@ -1,0 +1,5 @@
+[
+  "has there been a liquidity sweep recently? how do you know it was a sweep and not a break? use the detector's level states (swept/taken vs broken) and level_lookup prices in your answer.",
+  "earlier you said your bearish frame comes from the H4 CHoCH at 4084.31 and the D1 BOS at 4073.20. check the detector tags on those levels: do they carry an I- prefix? what does that make them - internal or external structure? and what does the EXTERNAL H4 CHOCH at 4082.907 (tagged BULLISH) say?",
+  "given your answer about internal vs external, is your bearish bias still valid? state the frame again properly - external structure first - with the invalidation."
+]
