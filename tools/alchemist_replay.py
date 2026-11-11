@@ -43,18 +43,25 @@ SYMBOL = "XAUUSDm"
 #: spend them on ONE split view + ONE render, then answer completely).
 #: Simplified replay prompt: text-first, single lean set_view, tight budget
 #: so the free provider can actually complete the turn.
+#: Replay prompt: lean tool set — ONE set_view (M15 + D1, bars=120) for the
+#: split view, ONE level_lookup for the key POI price, then a complete answer.
+#: No render (it balloons the briefing and chokes the free provider on
+#: H4-scale turns), no invented numbers — every price must come from a tool.
 REPLAY_PROMPT = (
     "You are analysing the chart as it stands right now (the data you see is "
-    "your present; you know nothing about the future). Keep tool use to ONE "
-    "lean set_view (M15 + D1, bars=120) only — skip the render entirely. Then "
-    "answer completely in one final message.\n\n"
+    "your present; you know nothing about the future). Keep tool use tight: "
+    "ONE set_view covering your two most important timeframes (bars=120), and "
+    "at most ONE level_lookup for the exact price of the key POI you decide "
+    "on. Then answer completely in a single final message — do not narrate "
+    "intermediate steps, and never invent a price: every number you state must "
+    "come from a tool result this turn.\n\n"
     "Walk the Alchemist MSNR loop: storyline per timeframe, the POIs that "
     "matter now, and the session script (Asia consolidates, London "
     "manipulates, New York delivers). Then give me your call: for the next few "
     "hours, is gold more likely to move UP or DOWN from where it is now, the "
     "trade you would plan (entry, stop, target), and what invalidation kills "
     "it. End with exactly one of: 'CALL: UP', 'CALL: DOWN', or 'CALL: "
-    "NO-TRADE'."
+    "NO-TRADE' (if the frames genuinely disagree)."
 )
 
 
