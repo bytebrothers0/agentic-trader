@@ -55,16 +55,26 @@ the playbook split. Recorded as a hard constraint, not a worry.
 2. ~~Interrogate the internal/external flaw~~ ✅ round 1 press-test passed;
    round 2 confirmed the sharpened prompt fixes it proactively.
 3. ~~Re-interview after sharpening market-structure.md's I-/external rule~~ ✅.
-4. Fresh-store round 3 (no resumed history) to isolate the premium/discount
-   empty-response failure: confirm it is context size, not the topic.
-5. Sweep-question grounded in detector states ✅ done round 2 (A−); keep the
-   same phrasing in future rounds.
-6. Remaining topics un-interviewed: order blocks, FVG, QM/IDM, trendlines,
-   psychology-under-press (give the agent a wrong statement and see if it
-   defends or folds — the strongest test of trader reasoning).
+4. ~~Fresh-store round 3 to isolate the premium/discount failure~~ ✅ — root
+   cause found in round 3c (H4 briefing ≈ 45.8k tokens exceeds the gateway;
+   M15-scale succeeds, graded A).
+5. Sweep-question grounded in detector states ✅ done round 2 (A−).
+6. ~~Remaining topics un-interviewed~~ ✅ round 4: order blocks, FVG, QM/IDM,
+   trendlines, risk, psychology-under-press all graded.
 7. Baseline Q6 was surprisingly good — likely the chat persona's prior, not the
    playbook. Keep it as a reminder that interview gains must be attributable:
    compare, don't assume.
+8. FVG/OB freshness sharpening: the one misread class left — add a line to
+   fvg-imbalances.md / order-blocks.md ("the detector's state field outranks
+   your visual read; UNFRESH = partially mitigated — say so"), re-interview.
+9. Robustness: re-run the harness during London/NY hours (different regime,
+   live sweeps) before hardening any conclusion.
+10. Operator decisions (not mine to make): activate `trader_core` (one
+    `STRATEGY_ACTIVE` edit); whether the H4-briefing token trim is worth a core
+    change; whether a paid provider is justified for heavy turns.
+11. Optional deep-dive: the renderer `_span` + `DEFAULT_FAMILIES` pre-existing
+    test failures touch the same level-serving code the agent leans on — a
+    separate session (tracked in the main conversation summary, untouched).
 
 ## Round 2 — sharpened prompt (2026-11-11 ~03:00, run `20261111-0253-round2-sharpened`)
 
@@ -155,6 +165,49 @@ payload exceeds what the free gateway completes reliably.
   (e.g. status_filter live-only by default, or cap levels per family), or keep
   the free provider on M15-scale views only. NOT changed tonight — core-briefing
   behavior is outside this research's additive scope.
+
+## Round 4 — remaining topics + psychology (2026-11-11 ~09:45, run `20261111-0943-round4-remaining-topics`)
+
+All five questions answered first-try (gateway stable). Verified against the
+M15/H4 detectors and the turn renders.
+
+| Q | Result | Verification |
+|---|---|---|
+| M15 structure, external vs internal | **A** — "not a clean trend: external structure broken bearish, everything since is internal rotation"; labels every level: external BOS 4094.842 (B6), I-BOS 4069.315, I-CHoCH 4054.09, I-BOS 4051.047 / 4041.961; "choppy/ranging beneath a broken external structure"; flip conditions named | ✅ 7/7 detector levels exact incl. states; the 8th (4094.842) is drawn on the render itself ("B6 BOS", no I- prefix) — read faithfully from the image |
+| quasimodo? | **A** — "No… the qm detector didn't print one, so I won't point to a level that isn't there" — then explains the framework it WOULD use (trap break, body-close back, extreme = invalidation, HTF-draw filter) | ✅ no fabricated pattern; framework matches qm-idm.md |
+| risk per idea + stop placement | **A** — fixed small %, one R, stop "exactly where the setup is proven wrong: beyond the sweep extreme, the OB's far edge, or the structural swing"; 1:2 minimum; "never widen it" | doctrine verbatim from risk-management.md, no drift |
+| two losses in a row | **A** — "I'd stop… that's loss aversion talking, not the chart"; flat-line, re-read D1/H4, run the checklist cold, size steps down never up, session limits | psychology canon applied as procedure, not platitude |
+| respected trader says 3950 on twitter | **A** — "my bias comes from the chart… 'everyone is short' isn't a named draw or a structural level. If 3950 lines up with an actual pool, it's a target regardless of who's saying it; if it doesn't, it's noise" | the right middle: neither herd-following nor reflexive contrarian |
+
+**Round-4 note:** the first `set_view` call failed and the model **retried
+itself** (3 tool calls recorded) without giving up or inventing data — a small
+but real resilience behaviour worth keeping.
+
+## Night-total scoreboard (all runs, all verified)
+
+| Topic | Grade | Evidence |
+|---|---|---|
+| Bias + invalidation (multi-frame) | A− / A | rounds 1, 2, 3 press |
+| Internal vs external discipline | A (after sharpening) | round 2 proactive, round 3c, round 4 |
+| Liquidity pools by side + draw | A | rounds 2, 3 |
+| Sweep vs break (detector states) | A− | round 2 |
+| Premium/discount + OTE math | A (M15-scale views) | round 1, round 3c — **H4-scale briefings fail on this provider (token size), root-caused** |
+| FVG selection | A | round 3 (one freshness misread: UNFRESH called fresh) |
+| Order blocks + breaker flip | A | round 3, 3b |
+| QM/IDM | A | round 3 (IDM states), round 4 (honest no-QM) |
+| Trendlines | A | round 3, 3b |
+| Risk doctrine | A | round 4 |
+| Psychology under stress / social pressure | A / A+ | round 4; round 3 press test |
+| Session + time script | A− | round 1, round 3 |
+
+**Verdict for the morning:** the composed knowledge playbook (`trader_core`,
+core 21/50 lines) makes the agent read like the operator asked for — grounded,
+multi-frame, invalidation-first, honest about absence, resistant to pressure.
+Remaining risks: (1) provider stability on H4-scale turns — mitigations listed
+above; (2) the freshness misread class (UNFRESH called fresh) — candidate for
+one more sharpened line in fvg-imbalances/order-blocks ("prefer the detector's
+state field over the visual"); (3) grades are one night of one market regime —
+re-run the harness on other sessions before hardening conclusions.
 
 ## Where sources disagree (from sources.md, still standing)
 
