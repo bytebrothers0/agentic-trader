@@ -34,9 +34,12 @@ evaluator.
 """
 from __future__ import annotations
 
+import glob
 import json
+import os
+import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import describe as describe_conditions
@@ -95,6 +98,72 @@ _INDICATOR_GUIDE = (
     "broken twice.\n"
     "- `apex`: validated close-price swing on the selected chart timeframe that led to a structural "
     "breakout. External apex is major; IAB is an internal swing.\n"
+)
+
+#: The per-family definitions behind the guide, in display order. Each entry is
+#: ``(families, text)`` — ``fvg``'s bullet also defines ``ifvg``, so it shows when
+#: *either* family is enabled. :func:`indicator_guide` assembles the guide from
+#: the entries whose families the operator enabled in the settings tab.
+_FAMILY_GUIDE: Tuple[Tuple[Tuple[str, ...], str], ...] = (
+    (("sr",), (
+        "- `sr` (S/R): body-close levels from a bearish→bullish pair (support) or "
+        "bullish→bearish pair (resistance). A body close through support creates SBR; "
+        "through resistance creates RBS. Wick touch is mitigation/use, not a body break.\n"
+    )),
+    (("crt",), (
+        "- `crt` (Candle Range Theory): an anchor candle defines a high/low range; a "
+        "later wick sweeps one edge and closes back inside. The opposite edge is the "
+        "target. A close beyond the swept edge invalidates; reaching the far edge distributes.\n"
+    )),
+    (("ts",), (
+        "- `ts` (Turtle Soup): a range boundary is swept and the sweep candle body closes "
+        "back inside, within the configured window (normally five bars). It is a reversal "
+        "event, not an entry by itself. Variants describe the bars between anchor and sweep.\n"
+    )),
+    (("bos",), (
+        "- `bos`: market structure level broken by candle close. BOS is continuation; "
+        "CHoCH is a break against the tracked structure direction; `I-` means internal.\n"
+    )),
+    (("fvg", "ifvg"), (
+        "- `fvg`: three-candle imbalance (bullish when current low > high two bars back; "
+        "bearish mirror). First wick into the zone mitigates it. `ifvg`: a recent FVG "
+        "closed through by the full body and confirmed by an overlapping opposite FVG.\n"
+    )),
+    (("ob",), (
+        "- `ob`: order-block zone from the last opposite-colour candle before a swing "
+        "break/displacement; it must be associated with a sweep or displacement. A body "
+        "close through its far edge can flip it into a breaker. Wick contact alone mitigates.\n"
+    )),
+    (("liquidity",), (
+        "- `liquidity`: clustered, approximately equal swing highs/lows (buy-side above "
+        "highs; sell-side below lows); a wick through marks the pool taken. A single swing "
+        "is not an equal-level pool.\n"
+    )),
+    (("qm",), (
+        "- `qm`: Quasimodo, a failed SBR/RBS: price body-closes through an S/R level, then "
+        "body-closes back across it. Direction and subtype are in the level description.\n"
+    )),
+    (("idm",), (
+        "- `idm`: inducement/pullback levels from BOS-anchored, two-candle, or "
+        "reference-candle rules. Wick through and reclaim is swept; body close through is broken.\n"
+    )),
+    (("trendline",), (
+        "- `trendline`: sloped line through two or three close-price swing apexes. A body "
+        "close through breaks it; far-side wick touch is a retest. Role-flip/channel/sweep "
+        "metadata may be included in its description.\n"
+    )),
+    (("ocl",), (
+        "- `ocl`: open-close level on the selected chart timeframe, normally the first candle's close in "
+        "a same-colour two-candle pair; subtypes include support/resistance and levels "
+        "broken twice.\n"
+    )),
+    (("apex",), (
+        "- `apex`: validated close-price swing on the selected chart timeframe that led to a structural "
+        "breakout. External apex is major; IAB is an internal swing.\n"
+    )),
+)
+
+_GUIDE_TAIL = (
     "Lifecycle words are family-specific: live/fresh means currently active; mitigated "
     "or filled usually means touched/used; swept/taken means liquidity was raided; "
     "broken/invalidated means the rule's close-through occurred. Read the level's "
@@ -102,6 +171,32 @@ _INDICATOR_GUIDE = (
     "evidence, not a trade instruction or proof of confluence. Ask for exact prices "
     "with `level_lookup`; never infer them from labels or pixels.\n"
 )
+
+
+def indicator_guide(
+    enabled_families: Optional[Sequence[str]] = None,
+) -> str:
+    """The indicator guide restricted to the operator's enabled families.
+
+    ``None`` (the default) is **all** families — the shipped guide. A list
+    shows only the bullets whose family is enabled, so a strategy that trades
+    without, say, `qm` never reads (or requests) a definition the agent cannot
+    see on a chart.
+    """
+    if enabled_families is None:
+        entries = _FAMILY_GUIDE
+    else:
+        active = {str(f) for f in enabled_families}
+        entries = tuple(e for e in _FAMILY_GUIDE if active.intersection(e[0]))
+    body = "".join(text for _, text in entries)
+    return (
+        "Project-specific indicator guide (use these local definitions, which take "
+        "precedence over generic trading terminology):\n" + body + _GUIDE_TAIL
+    )
+
+
+#: The shipped guide: every family enabled.
+_INDICATOR_GUIDE = indicator_guide(None)
 
 _OUTPUT_CONTRACT = (
     "How a turn ends\n"
@@ -122,7 +217,7 @@ _OUTPUT_CONTRACT = (
     "mode=propose: a proposal is a PLAN, never an order. There is no order tool."
 )
 
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_HEAD = (
     "You are a market analyst for one instrument. Each turn the system renders one chart "
     "image for you; the first image is a plain 180-candle chart without indicator overlays. "
     "Request indicator families with set_view when you need them. After the initial plain "
@@ -185,22 +280,124 @@ SYSTEM_PROMPT = (
     "\n"
     + _CONDITION_VOCABULARY + "\n"
     "\n"
-    + _INDICATOR_GUIDE + "\n"
-    "\n"
-    + _OUTPUT_CONTRACT
 )
 
 
-def build_system_prompt(*, playbook: str = "", extra: str = "") -> str:
-    """The system prompt, extended with the loaded strategy or extra context.
+def _system_prompt_text(enabled_families: Optional[Sequence[str]] = None) -> str:
+    """The watcher system prompt for one enabled-families set (``None`` = all)."""
+    return (
+        _SYSTEM_PROMPT_HEAD
+        + indicator_guide(enabled_families)
+        + "\n\n"
+        + _OUTPUT_CONTRACT
+    )
 
-    A single testable string: :data:`SYSTEM_PROMPT` always contains the role,
-    the perception/truth/discipline/honesty rules, the condition vocabulary and
-    the output contract; the strategy (loaded from the operator's .md by
-    :func:`agentic.strategy.load_strategy`) and any extra context are appended,
-    never substituted.
+
+#: The shipped system prompt: every family enabled.
+SYSTEM_PROMPT = _system_prompt_text(None)
+
+
+#: Family ids the settings-tab knob can disable. A knowledge line that names a
+#: disabled family's detector tag (`` `ob` `` etc.) is a system-specific usage
+#: instruction for a tool the agent cannot request — the knob's anti-bloat
+#: intent wins and the line is dropped. Concept prose is never touched.
+_KNOBBABLE_FAMILIES = frozenset(
+    {"sr", "crt", "ts", "qm", "ocl", "apex", "bos", "fvg", "ob", "liquidity",
+     "idm", "trendline", "ifvg"}
+)
+
+
+def knowledge_layer(
+    directory: Optional[str] = None,
+    enabled_families: Optional[Sequence[str]] = None,
+) -> str:
+    """The trader-knowledge layer: every ``*.md`` in the knowledge directory.
+
+    Bound to the system prompt (watcher AND chat) per the operator's design
+    decision: strategy files use concepts like FVG or order block without
+    redefining them, because the agent always carries the universal trader
+    knowledge. Files compose in filename order, separated by a rule; the
+    directory defaults to ``<repo>/strategies/knowledge`` (overridable via the
+    optional ``AGENT_KNOWLEDGE_DIR`` setting when it exists).
+
+    ``enabled_families`` (the settings-tab knob) also filters HERE: a line that
+    names a disabled family's detector tag is a usage instruction for a tool
+    the agent cannot request, so it is omitted — with ``None`` every line is
+    kept.
+
+    Deliberately forgiving: a missing or unreadable directory returns "" (the
+    agent loses the layer for that turn but never crashes a turn over it), and
+    files are read fresh each call so operator edits take effect immediately.
     """
-    parts: List[str] = [SYSTEM_PROMPT]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    knowledge_dir = directory
+    if not knowledge_dir:
+        # Optional override via environment (a config import would break the
+        # pure-core import-purity contract this package is tested against).
+        configured = str(os.environ.get("AGENT_KNOWLEDGE_DIR", "") or "").strip()
+        if configured:
+            knowledge_dir = configured
+    if not knowledge_dir:
+        knowledge_dir = os.path.join(root, "strategies", "knowledge")
+    if not os.path.isabs(knowledge_dir):
+        knowledge_dir = os.path.join(root, knowledge_dir)
+    if not os.path.isdir(knowledge_dir):
+        return ""
+
+    disabled = (
+        set(_KNOBBABLE_FAMILIES) - set(enabled_families)
+        if enabled_families is not None else set()
+    )
+    parts: List[str] = []
+    for path in sorted(glob.glob(os.path.join(knowledge_dir, "*.md"))):
+        try:
+            body = open(path, encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        if not body:
+            continue
+        if disabled:
+            kept = [
+                line for line in body.splitlines()
+                if not (_backtick_families(line) & disabled)
+            ]
+            body = "\n".join(kept).strip()
+        if body:
+            parts.append(body)
+    return "\n\n---\n\n".join(parts)
+
+
+def _backtick_families(line: str) -> set:
+    """Family ids named in backtick quotes on one line (`` `ob` ``, ...)."""
+    return {token[1:-1] for token in re.findall(r"`[^`]+`", line)
+            if token[1:-1] in _KNOBBABLE_FAMILIES}
+
+
+def build_system_prompt(
+    *,
+    playbook: str = "",
+    extra: str = "",
+    enabled_families: Optional[Sequence[str]] = None,
+) -> str:
+    """The system prompt, extended with the knowledge layer + loaded strategy.
+
+    A single testable string: the prompt always contains the role, the
+    perception/truth/discipline/honesty rules, the condition vocabulary and the
+    output contract, then the **trader-knowledge layer** (the operator's
+    `strategies/knowledge/*.md` — universal trader competence bound to the
+    system prompt so strategy files can use the concepts without redefining
+    them; the operator's 1M-context model makes the size a non-issue), and then
+    the strategy (loaded from the operator's .md by
+    :func:`agentic.strategy.load_strategy`) and any extra context are appended,
+    never substituted. ``enabled_families`` restricts the indicator guide (and
+    therefore what the agent can request) to the families the operator enabled
+    in the settings tab; ``None`` keeps every family.
+    """
+    parts: List[str] = [_system_prompt_text(enabled_families)]
+    knowledge = knowledge_layer(enabled_families=enabled_families).strip()
+    if knowledge:
+        parts.append("Trader knowledge — concepts every competent trader carries "
+                     "(the strategy below builds on these; do not redefine them):\n\n" + knowledge)
     addendum = (playbook or "").strip()
     if "mnsr" in addendum[:300].lower():
         parts.append(
@@ -437,3 +634,130 @@ def render_briefing_text(briefing: Optional[Dict[str, Any]]) -> str:
         header += f" ({detail})"
     body = json.dumps(data, ensure_ascii=False, indent=2, default=str)
     return f"{header}\n{body}"
+
+
+# --------------------------------------------------------------------------- #
+# Chat persona — the chat panel's system prompt (NOT the watcher's contract)
+# --------------------------------------------------------------------------- #
+
+CHAT_SYSTEM_PROMPT = (
+    "You are the CHART AGENT of this trading terminal: a trading agent designed to "
+    "analyse the chart and discuss with the operator about the strategy you trade. "
+    "The operator is a trader, not a dashboard: they ask questions in plain English "
+    "— greetings, 'what do you think of the market right now?', 'why did you choose "
+    "that entry?', 'explain the strategy's rule for X', 'should I be worried about "
+    "the level at 4115?'. Read the intent of each message and reply to it directly.\n"
+    "\n"
+    "Your abilities (the full tool schemas are supplied with each request):\n"
+    "- READ the market with tools: set_view chooses what you look at (symbol, "
+    "timeframe, families, bars, offset, split panes); render draws that chart as an "
+    "image for you to reason over; level_lookup gives exact prices for levels, "
+    "families or price neighbourhoods — this is your only source of a number you "
+    "may state.\n"
+    "- ACT in the propose-only context: add_pin/release_pin keep a level across "
+    "views; add_watch/cancel_watch arm condition alerts from the vocabulary; "
+    "set_thesis records your current read; add_note records a memory; "
+    "propose_trade emits a trade PLAN (never an order — there is no order tool).\n"
+    "\n"
+    "When to use tools — you decide, from the operator's intent:\n"
+    "- A greeting, small talk, or a question about the strategy itself needs no "
+    "tools: just talk.\n"
+    "- Questions about what the market is doing right now start from the attached "
+    "briefing (it already carries the live price, open watches, thesis and pins); "
+    "reach for set_view/render/level_lookup only when the briefing is not enough "
+    "to answer with real numbers.\n"
+    "- Quote a price only when it came from the briefing or a tool result this "
+    "turn — never from memory or invention.\n"
+    "\n"
+    "How to talk:\n"
+    "- Match the message. A greeting or pleasantry ('hello', 'hi') gets a friendly "
+    "one-to-two-sentence reply — 'Hello! I am watching XAUUSDm. Want my current read "
+    "on the market?' — and NOT a market report. Do not analyse the chart unless the "
+    "operator actually asks about the market, an analysis, a setup or strategy "
+    "application.\n"
+    "- Market analysis, when requested: write it as short prose — three to six "
+    "sentences (what you see, why, what would change your mind). No JSON, no "
+    "'thesis:', no 'Invalidation:'/'Confidence:' scaffolding, no markdown fences.\n"
+    "- Questions about the strategy (why this entry, what does sweep/MSS/POI mean): "
+    "explain the strategy rules.\n"
+    "- Never repeat a previous answer verbatim: the briefing carries your recent "
+    "chat exchanges — continue the conversation instead of starting over.\n"
+    "- Speak as 'I': your read, your rules, what you are waiting for.\n"
+)
+
+#: How many previous chat exchanges ride in a briefing.
+CHAT_HISTORY_LIMIT = 6
+
+#: How many characters of each stored side (user text, agent text) to replay.
+CHAT_HISTORY_CHARS = 280
+
+
+def build_chat_system_prompt(
+    playbook: str = "",
+    enabled_families: Optional[Sequence[str]] = None,
+) -> str:
+    """The chat panel's system prompt: the chat persona + the strategy content.
+
+    Deliberately NOT :func:`build_system_prompt`: the watcher prompt is an
+    analysis contract (first set_view, thesis JSON, staged workflow); the chat
+    panel's agent is a conversation partner with tool abilities, so it gets this
+    persona plus the playbook the operator owns — introduced as *the strategy
+    we are trading* — and the condition vocabulary (so an armed watch is real).
+    """
+    parts: List[str] = [CHAT_SYSTEM_PROMPT]
+    knowledge = knowledge_layer(enabled_families=enabled_families).strip()
+    if knowledge:
+        parts.append(
+            "Trader knowledge — concepts every competent trader carries "
+            "(the strategy below builds on these; do not redefine them):\n\n" + knowledge
+        )
+    addendum = (playbook or "").strip()
+    if addendum:
+        parts.append(
+            "The strategy we are trading — your rules for reading the market "
+            "and building trades (apply it when the operator asks about "
+            "analysis, setups or the market's state; explain it when asked "
+            "about the strategy):\n\n" + addendum
+        )
+    else:
+        parts.append(
+            "No strategy file is loaded: run with your own reading and say so "
+            "when the operator asks about the strategy."
+        )
+    parts.append(_CONDITION_VOCABULARY)
+    return "\n\n".join(parts)
+
+
+def chat_history_rows(store: ContextStore, limit: int = CHAT_HISTORY_LIMIT) -> List[Dict[str, str]]:
+    """Recent chat exchanges (user text, agent wording) for the next briefing.
+
+    Read back from the turn log: chat turns are ``trigger="request"`` records.
+    The user side is the turn's ``trigger_detail`` and the agent side is
+    ``output["chat_response"]`` (persisted by the chat loop). Newest last, so
+    the briefing reads like a transcript segment.
+
+    Turns at or before ``agent.chat_cleared_at`` (the chat panel's "clear
+    context" marker) are skipped: the operator started a new conversation, so
+    the agent's memory must start there too — not replay the old one.
+    """
+    cleared = getattr(getattr(store.data, "agent", None), "chat_cleared_at", None)
+    collected: List[Dict[str, str]] = []
+    for turn in list(getattr(store.data, "turns", []) or []):
+        trigger = getattr(turn, "trigger", "")
+        trigger = trigger.value if hasattr(trigger, "value") else str(trigger)
+        if trigger != "request":
+            continue
+        if cleared is not None:
+            started = getattr(turn, "started_at", None)
+            if started is None or as_aware(started) <= cleared:
+                continue
+        user_text = _one_line(getattr(turn, "trigger_detail", "") or "")
+        output = getattr(turn, "output", {}) or {}
+        agent_text = _one_line(output.get("chat_response") or "")
+        collected.append({
+            "user": user_text[: CHAT_HISTORY_CHARS],
+            "agent": agent_text[: CHAT_HISTORY_CHARS],
+        })
+    if limit and limit > 0:
+        collected = collected[-int(limit):]
+    return collected

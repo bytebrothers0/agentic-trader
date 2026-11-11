@@ -75,6 +75,17 @@ from agentic.watchdog import Watchdog
 #: on purpose: a loop is a leash in itself.
 MAX_TOOL_ROUNDS = 7
 
+# --------------------------------------------------------------------------- #
+# Chat-turn leash (AgentLoop.chat_turn)
+# --------------------------------------------------------------------------- #
+# A chat question must answer in seconds. The autonomous watcher's settings
+# (config.settings AGENT_MAX_TOOL_ROUNDS, shipped at 400 for the staged MNSR
+# workflow) would let a chatty model grind through minutes of tool rounds per
+# message; the chat turn caps its own leash below, regardless of those settings.
+CHAT_MAX_TOOL_ROUNDS = 4       # model round-trips per chat turn
+CHAT_MAX_TOOL_CALLS = 10       # executed tool calls per chat turn
+CHAT_MAX_RENDERS = 2           # chart renders per chat turn
+
 
 def default_leash() -> Dict[str, int]:
     """How ``AgentLoop`` bounds a turn when nobody injected a leash: the shipped
@@ -518,6 +529,26 @@ class TurnOutcome(Serde):
 
 
 @dataclass
+class ChatTurnResult(Serde):
+    """The result of one free-form chat turn.
+
+    Unlike :class:`TurnOutcome`, this carries the assistant's *raw text* so a
+    chat UI can show a straight conversation. Tool calls, renders and the final
+    image are included so the UI can surface evidence alongside the reply.
+    """
+
+    turn_id: str = ""
+    ok: bool = True
+    reason: str = ""
+    response: str = ""
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    renders: int = 0
+    image_path: str = ""
+    manifest: Dict[str, Any] = field(default_factory=dict)
+    output: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class _ToolPhase:
     """The outcome of step 4 (the LLM + tool phase), before output is applied."""
 
@@ -644,6 +675,7 @@ class AgentLoop:
         playbook: str = "",
         activity: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         leash: Optional[Callable[[], Dict[str, int]]] = None,
+        families: Optional[Callable[[], Sequence[str]]] = None,
     ):
         self.store = store
         self.feed = feed
@@ -655,9 +687,37 @@ class AgentLoop:
         # The leash is injected so a non-pure layer can retune the caps live
         # (config.settings); the loop itself stays free of any config import.
         self._leash_of = leash or default_leash
+        # The operator's enabled indicator families (settings tab), injected the
+        # same way: read fresh at each turn start, so a settings toggle applies
+        # on the next turn without a restart. ``None`` (no callable) = all
+        # families — the shipped default and the degraded fallback.
+        self._families_of = families
         # The operator's strategy (strategies/*.md via agentic.strategy), fixed
         # for this loop's lifetime: a turn never mixes strategies.
         self._playbook = str(playbook or "")
+        # Chat turns run with this False→True swap (scoped, under the turn
+        # lock): a chat turn must never trigger the MNSR staged-workflow
+        # forcing in _tool_phase — the agent reads the operator's intent and
+        # picks its own tools (or none), instead of being handed a required
+        # set_view/render/lookup/pin/watch sequence.
+        self._chat_mode = False
+
+    # ------------------------------------------------------------------ families
+
+    def _enabled_families(self) -> Optional[List[str]]:
+        """The operator's enabled indicator families for this turn.
+
+        Read fresh from the injected callable (settings tab state), so a toggle
+        applies on the next turn with no restart. A broken callable degrades to
+        ``None`` — every family — exactly like a broken leash degrades to the
+        shipped caps.
+        """
+        if self._families_of is None:
+            return None
+        try:
+            return list(self._families_of())
+        except Exception:  # noqa: BLE001 — a broken knob must not brick a turn
+            return None
 
     # ------------------------------------------------------------------ gate
 
@@ -753,7 +813,11 @@ class AgentLoop:
         executed = 0
         reply = AgentReply()
         deferred_output: Dict[str, Any] = {}
-        require_watch = "mnsr" in self._playbook[:300].lower()
+        # The staged MNSR workflow is a watcher-turn contract. A chat turn
+        # (_chat_mode) answers the operator's actual question: the model reads
+        # the intent and may call tools or not — the harness never forces one,
+        # and never fabricates workflow fallback calls on its behalf.
+        require_watch = (not self._chat_mode) and "mnsr" in self._playbook[:300].lower()
         # The model round budget is a settings knob (AGENT_MAX_TOOL_ROUNDS),
         # re-read per turn so the user's edits apply without a restart.
         # leash read encompassing the turn's caps: {tool_calls, rounds, renders},
@@ -956,7 +1020,11 @@ class AgentLoop:
         # than as assistant/tool messages, so the request stays valid without a
         # ``tools`` array. A failure here is swallowed: the turn then simply ends
         # as it would have, so the closing call can only ever add an output.
-        if CLOSING_CALL and not _has_thesis(reply.output):
+        #
+        # Chat turns skip it: their contract IS plain conversational text, and
+        # forcing a "reply with ONLY the strict JSON thesis" ask over a perfectly
+        # good chat answer is what turned every greeting into an analysis dump.
+        if CLOSING_CALL and (not self._chat_mode) and not _has_thesis(reply.output):
             closed = self._closing_call(request, log)
             if closed is not None:
                 tokens += sum(int(v or 0) for v in (closed.tokens or {}).values())
@@ -1062,9 +1130,11 @@ class AgentLoop:
             render_bound = int(self._leash_of().get("renders", MAX_RENDERS_PER_TURN))
         except (TypeError, ValueError):
             render_bound = MAX_RENDERS_PER_TURN
+        enabled_families = self._enabled_families()
         registry = ToolRegistry(
             self.store, self.feed, self.renderer, clock=self._clock, now=now,
             require_context_view=require_workflow, max_renders=render_bound,
+            enabled_families=enabled_families,
         )
 
         # Step 3 is now model-led perception: the turn opens with the system
@@ -1078,7 +1148,9 @@ class AgentLoop:
             turn_id=new_id("turn"),
             trigger=trigger,
             trigger_detail=detail,
-            system_prompt=prompts.build_system_prompt(playbook=self._playbook),
+            system_prompt=prompts.build_system_prompt(
+                playbook=self._playbook, enabled_families=enabled_families,
+            ),
             briefing=briefing,
             image_path="",
             manifest={},
@@ -1196,4 +1268,259 @@ class AgentLoop:
             output=output,
             image_path=final.image_path if final else "",
             manifest=final.manifest if final else {},
+        )
+
+    # ------------------------------------------------------------------ chat
+
+    def chat_turn(
+        self,
+        message: str,
+        *,
+        now: Optional[datetime] = None,
+        activity: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> ChatTurnResult:
+        """A free-form chat turn: the human asks, the agent answers using tools.
+
+        Unlike :meth:`run_turn`, **no workflow is forced** — the model chooses
+        which tools (if any) to call, and may answer text-only. The assistant's
+        raw text is returned alongside any tool calls and renders, so a chat UI
+        can show a straight conversation.
+
+        A ``request`` turn always passes the gate (the human asked), even when
+        the agent runtime is disabled or paused.
+
+        Pacing: the store's ``min_turn_interval_s`` is relaxed to 0 for a chat
+        turn — a human deliberately asking is not the same as the watchdog
+        hammering — while ``max_turns_per_hour``/``max_turns_per_day`` and the
+        spend cap stay enforced. The original injection is restored afterwards.
+
+        ``activity`` (optional) receives the loop's live progress events
+        (``turn_started``/``model_call_started``/``model_response``/
+        ``tool_call``/``tool_result``, plus a ``chat_render`` when a chart is
+        drawn) alongside the panel feed, so a chat UI can stream them.
+        """
+        instant = as_aware(now or self._clock())
+
+        # Scoped swaps — leash relax, chat-mode flag, event hook — all restored
+        # in finally so the autonomous watcher keeps its own personality. A
+        # chat turn never runs concurrently with one (the service turn lock).
+        original_limits = getattr(self.store, "_leash_limits", None)
+        limits_swapped = False
+        if callable(original_limits):
+            def chat_limits() -> Dict[str, Any]:
+                limits = dict(original_limits() or {})
+                limits["min_turn_interval_s"] = 0.0
+                return limits
+            self.store.set_leash_limits(chat_limits)
+            limits_swapped = True
+
+        original_activity = self._activity
+        if activity is not None:
+            def chat_emit(event: str, payload: Dict[str, Any]) -> None:
+                try:
+                    activity(event, dict(payload or {}))
+                except Exception:  # noqa: BLE001 — a chat hook must never break the turn
+                    pass
+                if original_activity is not None:
+                    try:
+                        original_activity(event, dict(payload or {}))
+                    except Exception:  # noqa: BLE001 — UI telemetry
+                        pass
+            self._activity = chat_emit
+
+        self._chat_mode = True
+        try:
+            return self._chat_turn_body(message, instant=instant)
+        finally:
+            self._chat_mode = False
+            self._activity = original_activity
+            if limits_swapped:
+                self.store.set_leash_limits(original_limits)
+
+    def _chat_turn_body(self, message: str, *, instant: datetime) -> ChatTurnResult:
+        # Gate: request turns are always allowed.
+        refusal = self._gate(Trigger.REQUEST.value, instant)
+        if refusal is not None:
+            return ChatTurnResult(
+                ok=False, reason=refusal.reason, response="",
+            )
+
+        expired = list(self.store.expire_due(instant))
+        briefing = prompts.build_briefing(
+            self.store,
+            trigger=Trigger.REQUEST.value,
+            detail=message,
+            now=instant,
+            expired=expired,
+        )
+
+        try:
+            render_bound = int(self._leash_of().get("renders", MAX_RENDERS_PER_TURN))
+        except (TypeError, ValueError):
+            render_bound = MAX_RENDERS_PER_TURN
+
+        # The chat turn carries its own tight leash. The autonomous watcher's
+        # settings (AGENT_MAX_TOOL_ROUNDS, shipped at 400) exist so a staged
+        # MNSR workflow can retry long-running perception work; a chat question
+        # must answer in seconds, not grind through hundreds of tool rounds at
+        # the model's pace. Bounded below the autonomous leash, but the same
+        # tools stay available.
+        try:
+            autonomous_leash = dict(self._leash_of())
+        except Exception:  # noqa: BLE001 — a broken injected leash degrades to shipped caps
+            autonomous_leash = dict(default_leash())
+
+        def _cap(key: str, shipped: int, limit: int) -> int:
+            try:
+                value = int(autonomous_leash.get(key, shipped))
+            except (TypeError, ValueError):
+                value = shipped
+            return max(1, min(value, limit))
+
+        chat_leash = {
+            "tool_calls": _cap("tool_calls", MAX_TOOL_CALLS_PER_TURN, CHAT_MAX_TOOL_CALLS),
+            "rounds": _cap("rounds", MAX_TOOL_ROUNDS, CHAT_MAX_TOOL_ROUNDS),
+            "renders": _cap("renders", MAX_RENDERS_PER_TURN, CHAT_MAX_RENDERS),
+        }
+
+        registry = ToolRegistry(
+            self.store, self.feed, self.renderer, clock=self._clock, now=instant,
+            require_context_view=False, max_renders=chat_leash["renders"],
+            enabled_families=self._enabled_families(),
+        )
+
+        # Conversation memory: the last few chat exchanges ride in the briefing
+        # so the agent answers QA about *this* conversation, not the same
+        # analysis from scratch (that is why "hello"/"hi" used to repeat).
+        briefing["chat_history"] = prompts.chat_history_rows(self.store)
+
+        request = AgentRequest(
+            turn_id=new_id("chat"),
+            trigger=Trigger.REQUEST.value,
+            trigger_detail=message,
+            # The chat persona — NOT the watcher's analysis contract: persona +
+            # abilities + the trader-knowledge layer + "the strategy we are
+            # trading" + condition vocabulary. The knob filters the knowledge
+            # layer here too: no usage instructions for tools the chat agent
+            # cannot call.
+            system_prompt=prompts.build_chat_system_prompt(
+                playbook=self._playbook, enabled_families=self._enabled_families(),
+            ),
+            briefing=briefing,
+            image_path="",
+            manifest={},
+            tools=registry.schemas(),
+            tool_choice="auto",
+            tool_results=[],
+        )
+
+        # Step 4: LLM + tool phase — no workflow forcing, tool_choice="auto",
+        # and the chat leash swapped in for the duration (restored after: the
+        # autonomous watcher keeps its own settings untouched).
+        original_leash = self._leash_of
+        self._leash_of = lambda: chat_leash  # noqa: E731 — scoped swap, under the turn lock
+        try:
+            phase = self._tool_phase(registry, request)
+        finally:
+            self._leash_of = original_leash
+
+        # Stream the render as soon as it exists (the SSE hook forwards it).
+        final = registry.last_result
+        if final and (final.render_id or final.image_path):
+            self._emit_activity(
+                "chat_render",
+                turn_id=request.turn_id,
+                render_id=str(final.render_id or ""),
+                timeframe=str(getattr(final.manifest or {}, "timeframe", "") or ""),
+                bars=len((final.manifest or {}).get("tags") or {}),
+            )
+
+        if phase.error:
+            # A failed model call. If earlier rounds succeeded they cost real
+            # money; bill them as a partial turn rather than dropping the spend.
+            if not (phase.tokens or phase.cost):
+                return ChatTurnResult(
+                    ok=False, reason=phase.error, response="",
+                )
+            output: Dict[str, Any] = {"error": phase.error, "partial": True}
+        else:
+            output = dict(phase.reply.output or {})
+            output["notes"] = registry.notes() + [
+                _normalise_note(note, instant) for note in (output.get("notes") or [])
+            ]
+            output, apply_errors = _apply_output(self.store, output, instant)
+            if apply_errors:
+                output["apply_errors"] = apply_errors
+
+        final = registry.last_result
+        response_text = phase.reply.text or ""
+
+        # A chat-mode model may still emit the playbook's structured JSON
+        # despite the chat persona. If the reply is a JSON blob, unwrap the
+        # human-readable fields so the panel shows a sentence, not raw JSON.
+        if response_text.strip().startswith("{"):
+            try:
+                blob = json.loads(response_text)
+            except ValueError:
+                blob = None
+            if isinstance(blob, dict):
+                jt = blob.get("thesis") if isinstance(blob.get("thesis"), dict) else {}
+                bits = [str(v) for v in (
+                    jt.get("storyline"),
+                    jt.get("invalidation") and f"Invalidation: {jt['invalidation']}",
+                    jt.get("confidence") is not None and f"Confidence: {jt['confidence']}",
+                    blob.get("reasoning"),
+                ) if v]
+                if bits:
+                    response_text = " ".join(bits)
+
+        # If the model gave no raw text but structured output exists, render a
+        # readable summary so the chat still shows something useful.
+        if not response_text and output:
+            parts: List[str] = []
+            thesis = output.get("thesis")
+            if isinstance(thesis, dict):
+                if thesis.get("storyline"):
+                    parts.append(str(thesis["storyline"]))
+                if thesis.get("invalidation"):
+                    parts.append(f"Invalidation: {thesis['invalidation']}")
+                if thesis.get("confidence"):
+                    parts.append(f"Confidence: {thesis['confidence']}")
+            if output.get("reasoning"):
+                parts.append(str(output["reasoning"]))
+            if output.get("proposals"):
+                parts.append(f"{len(output['proposals'])} proposal(s).")
+            response_text = " ".join(parts) or "(no response)"
+
+        # Persist the agent's chat wording BEFORE the turn is recorded, so the
+        # next briefing's chat_history replay carries this side of the exchange.
+        output["chat_response"] = response_text
+        if final and final.render_id:
+            # Durable pointer to the turn's chart render: the PNG lives on disk
+            # in the render dir and /api/agent/render serves it by id, so the
+            # chat history shows the image across server restarts.
+            output["render_id"] = final.render_id
+
+        record = self.store.record_turn(
+            Trigger.REQUEST.value,
+            trigger_detail=message,
+            renders=registry.renders_used(),
+            tool_calls=phase.log,
+            tokens=phase.tokens,
+            cost_usd=phase.cost,
+            output=output,
+            now=instant,
+        )
+        self.store.save()
+
+        return ChatTurnResult(
+            ok=not phase.error,
+            reason=phase.error or "",
+            response=response_text,
+            turn_id=record.id,
+            tool_calls=[call.to_dict() if hasattr(call, "to_dict") else dict(call) for call in phase.log],
+            renders=registry.renders_used(),
+            image_path=final.image_path if final else "",
+            manifest=final.manifest if final else {},
+            output=output,
         )

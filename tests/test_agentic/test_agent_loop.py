@@ -1453,10 +1453,44 @@ def test_system_prompt_contains_the_contract():
     assert "thesis" in prompt and "proposals" in prompt  # output contract
     assert "mode=propose" in prompt
 
-    assert prompts.build_system_prompt() == prompt
+    assert prompts.build_system_prompt() == prompt + _knowledge_suffix()
     extended = prompts.build_system_prompt(playbook="Be patient.", extra="Symbol is gold.")
     assert extended.startswith(prompt)
     assert "Be patient." in extended and "Symbol is gold." in extended
+
+
+def _knowledge_suffix() -> str:
+    """The knowledge layer's exact rendering inside the system prompt."""
+    layer = prompts.knowledge_layer().strip()
+    if not layer:
+        return ""
+    return (
+        "\n\nTrader knowledge — concepts every competent trader carries "
+        "(the strategy below builds on these; do not redefine them):\n\n" + layer
+    )
+
+
+def test_knowledge_layer_binds_the_trader_knowledge():
+    """strategies/knowledge/*.md ride the system prompt (operator decision)."""
+    layer = prompts.knowledge_layer()
+    assert layer, "knowledge layer missing: strategies/knowledge/*.md"
+    assert "FVG" in layer or "Fair Value" in layer  # concept file present
+
+    prompt = prompts.build_system_prompt()
+    assert "Trader knowledge" in prompt
+    assert "FVG" in prompt or "Fair Value" in prompt
+    # both personas carry it: the chat prompt too
+    chat = prompts.build_chat_system_prompt(playbook="The Alchemist loop.")
+    assert "Trader knowledge" in chat and "The Alchemist loop." in chat
+    # knowledge BEFORE the playbook: strategy files may lean on it
+    assert prompt.index("Trader knowledge") < prompt.index("Playbook") if "Playbook" in prompt else True
+
+
+def test_knowledge_layer_degrades_when_directory_is_missing(tmp_path):
+    empty = prompts.knowledge_layer(directory=str(tmp_path / "nope"))
+    assert empty == ""
+    empty_dir = prompts.knowledge_layer(directory=str(tmp_path))
+    assert empty_dir == ""
 
 
 def test_the_loop_injects_the_loaded_strategy_into_the_prompt(tmp_path):
