@@ -41,21 +41,20 @@ SYMBOL = "XAUUSDm"
 #: Replay prompt: the Alchemist loop, no future knowledge, explicit horizon,
 #: and a tool budget that fits the chat leash (the loop allows few rounds —
 #: spend them on ONE split view + ONE render, then answer completely).
+#: Simplified replay prompt: text-first, single lean set_view, tight budget
+#: so the free provider can actually complete the turn.
 REPLAY_PROMPT = (
     "You are analysing the chart as it stands right now (the data you see is "
-    "your present; you know nothing about the future). You have a tight tool "
-    "budget: at most TWO tool calls - ONE set_view covering your two most "
-    "important timeframes (bars=120), and ONE render only if the view data "
-    "alone is not enough. Then answer completely in a single final message; do "
-    "not narrate intermediate steps. Prefer D1 (or W1) for the higher frame "
-    "and M15 or H1 for detail.\n\n"
-    "Walk the Alchemist MSNR loop in that final message: storyline per "
-    "timeframe, the POIs that matter now, and the session script (Asia "
-    "consolidates, London manipulates, New York delivers). Then give me your "
-    "call: for the next few hours, is gold more likely to move UP or DOWN from "
-    "where it is now, the trade you would plan (entry, stop, target), and what "
-    "invalidation kills it. End with exactly one of: 'CALL: UP', 'CALL: DOWN', "
-    "or 'CALL: NO-TRADE' (if the frames genuinely disagree)."
+    "your present; you know nothing about the future). Keep tool use to ONE "
+    "lean set_view (M15 + D1, bars=120) only — skip the render entirely. Then "
+    "answer completely in one final message.\n\n"
+    "Walk the Alchemist MSNR loop: storyline per timeframe, the POIs that "
+    "matter now, and the session script (Asia consolidates, London "
+    "manipulates, New York delivers). Then give me your call: for the next few "
+    "hours, is gold more likely to move UP or DOWN from where it is now, the "
+    "trade you would plan (entry, stop, target), and what invalidation kills "
+    "it. End with exactly one of: 'CALL: UP', 'CALL: DOWN', or 'CALL: "
+    "NO-TRADE'."
 )
 
 
