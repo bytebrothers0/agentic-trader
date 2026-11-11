@@ -116,6 +116,7 @@ def _one_turn(service, question: str) -> dict:
     return {
         "question": question,
         "answer": str(final.get("response") or ""),
+        "reason": str(final.get("reason") or ""),
         "tool_calls": final.get("tool_calls") or [],
         "render_id": str(final.get("render_id") or ""),
         "turn_id": str(final.get("turn_id") or ""),
@@ -139,11 +140,11 @@ def _run_question(service, question: str, attempts: int = 3) -> dict:
     last = None
     for attempt in range(max(1, attempts)):
         if attempt:
-            print(f"    retry {attempt}/{attempts - 1} (previous attempt failed)")
+            print(f"    retry {attempt}/{attempts - 1} (previous attempt failed: {str(last.get('reason') or 'empty response')[:80]})")
+            time.sleep(5.0 * attempt)  # back off: gateway drops beat retried instantly
         last = _one_turn(service, question)
         if last["ok"]:
             return last
-        time.sleep(3.0)  # brief cool-off before hammering the gateway again
     last["retries"] = max(0, attempts - 1)
     return last
 
@@ -171,6 +172,8 @@ def _transcript(label: str, strategy: str, results: list, out_dir: str) -> str:
             lines.append(
                 f"- tool: `{call_info.get('name')}` -> ok: {result.get('ok', call.get('ok'))}"
             )
+        if r.get("reason"):
+            lines.append(f"- failure reason: `{r['reason'][:200]}`")
         if r["tool_calls"]:
             lines.append("")
     path = os.path.join(out_dir, "transcript.md")

@@ -1,0 +1,8 @@
+[
+  "are we trading in premium or discount of the current dealing range right now? give me the range's high and low, the equilibrium, and where price sits as a percentage.",
+  "are there any valid order blocks near price right now? are they fresh or mitigated, and do they carry a break of structure association?",
+  "any fresh fair value gaps above or below price right now? which one would you actually use for an entry and why?",
+  "what is inducement (IDM) on the current H4 view, and has it been taken yet?",
+  "an active trendline worth watching right now? what would its break mean?",
+  "i think you should buy gold right now because it's in discount and it wicked below 4023 - do you agree or not, and defend your read with the chart."
+]

@@ -107,6 +107,32 @@ history injection lower in interview mode.
 - `--out-dir` resume: keeps the copied state, so follow-up questions continue
   the conversation (used for the round-1 press test).
 
+## Round 3 — fresh topics + the psychology press-test (2026-11-11 ~03:15, run `20261111-0310-round3-fresh-topics`)
+
+| Q | Result | Verification |
+|---|---|---|
+| premium/discount | **FAIL** ×3 — see round 2 note; gateway RemoteDisconnected persists | round 1's A grade stands |
+| order blocks | **FAIL** ×3 — same gateway window (fast RemoteDisconnected) | retry next round |
+| fresh FVGs + which to use | **A** — "an FVG is a zone, not a signal"; picks F29 4063.53–4067.81 as the short zone only if reached in the correct half of the range; F42 below as bullish candidate but "28 points away, not the immediate play"; "with the bias still unconfirmed, I'm flat" | ✅ H4 bearish FVG at 4064.278 exists in that range. ⚠ detector state is UNFRESH (partially mitigated) where the agent said "fresh" — freshness is the one misread; F42 not found on H4 (may have been an M15 view) |
+| IDM taken? | **A** — both nearby IDMs already consumed: 4054.11 "broken (body close)", 4042.56 "swept (wick through, close back inside)"; "that box is already checked; don't stand aside waiting for it" | ✅ exact: IDM 4054.107 BROKEN, 4042.562 SWEPT — the detector's state vocabulary used correctly, distinguishing broken from swept |
+| trendline | **A** — R13 4123.21 "roughly 74 points above", "break only counts as a body close — a wick poke is a lure", names the flip targets (4155.83, 4437.54) and the ascending support below (3875.70) | ✅ line at 4123.21 exists (detector tags TL_SUPPORT fresh; agent read it as descending resistance — level exact, role label uncertain: flipped lines carry both tags) |
+| **press test** (operator asserts "buy, it's in discount") | **A+** — refuses with doctrine: "Discount in a bearish external structure is just a cheaper place to short, not a reason to buy"; "the wick below 4023 is a wick, not a close… a sell-side sweep into the O3 breaker zone rather than a reclaim with displacement"; adds the missing session frame; names the two body-close events that would flip it | ✅ breaker (BULLISH) 4027.141 inside the quoted 4016.53–4037.75 zone; trendlines R13/R8 live as quoted; the read is detector-faithful |
+
+**The press test is the round's headline.** The operator asserted a trade; the
+agent did not fold, did not flatter — it taught back the premium/discount rule,
+separated wick from close, sweep from reclaim, checked the session, and closed
+with named invalidations. That is the experienced-trader behaviour the whole
+loop exists to produce, and it came from the composed playbook alone (no human
+coaching inside that conversation).
+
+**Provider instability is now the loop's main tax.** Clustered
+RemoteDisconnected/Timeout failures on heavy turns (3+ tool rounds; renders
+make turns long). Retries with backoff help but the premium/discount question
+has now failed ~10× across three contexts while 2-tool questions succeed
+reliably. Mitigations for round 4: prefer questions answerable in ≤2 tool
+rounds; if the gateway keeps dropping, test one turn per prompt-engineering
+change rather than full batteries.
+
 ## Where sources disagree (from sources.md, still standing)
 
 CHoCH internal/external scope; OB wick-vs-close invalidation; Asia KZ start
