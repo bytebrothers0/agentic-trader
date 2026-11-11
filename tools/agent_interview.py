@@ -130,18 +130,21 @@ def _one_turn(service, question: str) -> dict:
     }
 
 
-def _run_question(service, question: str, attempts: int = 3) -> dict:
+def _run_question(service, question: str, attempts: int = 3, backoff_s: float = 60.0) -> dict:
     """One chat turn, retried on provider failure (gateway read timeouts).
 
     Each attempt is its own recorded turn (audit trail intact); a timeout
     leaves an empty response in the log, which the next attempt's briefing
     simply ignores. Returns the first good answer, else the last failure.
+    ``backoff_s`` (default 60 per the operator's instruction) is the wait
+    between attempts — the gateway drops under sustained load, so patience
+    beats hammering.
     """
     last = None
     for attempt in range(max(1, attempts)):
         if attempt:
             print(f"    retry {attempt}/{attempts - 1} (previous attempt failed: {str(last.get('reason') or 'empty response')[:80]})")
-            time.sleep(5.0 * attempt)  # back off: gateway drops beat retried instantly
+            time.sleep(backoff_s)
         last = _one_turn(service, question)
         if last["ok"]:
             return last
@@ -199,6 +202,8 @@ def main() -> int:
                         help="resume an existing run dir (state kept: the agent remembers "
                              "the earlier interview; new turns append to it)")
     parser.add_argument("--attempts", type=int, default=3, help="retries per question on failure")
+    parser.add_argument("--backoff", type=float, default=60.0,
+                        help="seconds to wait between retry attempts (operator default 60)")
     args = parser.parse_args()
 
     if os.path.isfile(args.questions or ""):
@@ -223,7 +228,7 @@ def main() -> int:
         results = []
         for q in questions:
             print(f"  Q: {q}")
-            r = _run_question(service, q, attempts=args.attempts)
+            r = _run_question(service, q, attempts=args.attempts, backoff_s=args.backoff)
             print(f"  -> {r['seconds']}s, tools: {len(r['tool_calls'])}, ok: {r['ok']}")
             print(f"  -> {r['answer'][:160]}...")
             results.append(r)

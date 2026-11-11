@@ -134,6 +134,28 @@ reliably. Mitigations for round 4: prefer questions answerable in ≤2 tool
 rounds; if the gateway keeps dropping, test one turn per prompt-engineering
 change rather than full batteries.
 
+**Premium/discount ROOT CAUSE FOUND (round 3c).** The failure is not the topic,
+not the prompt, and not random: every failing turn built an **H4 bos view,
+whose briefing embeds ~517 levels ≈ 45.8k tokens** (the same figure repeats to
+within 400 tokens across all failures), then dropped mid-stream
+(RemoteDisconnected) or emitted an empty final. Asking the same question on the
+**M15 view** (~26k-token briefing) succeeded on attempt 2. The H4 + image
+payload exceeds what the free gateway completes reliably.
+
+- **Round 3c grade: A.** "Range 4133.84 → 4013.44, ~120 points, EQ 4073.64,
+  price 4048.20 = ~29% of range from the low → discount, inside the ~71%
+  retracement of the decline." Every number verified: EQ exact
+  ((4133.84+4013.44)/2 = 4073.64), percentage exact (28.8%), 4133.843 is a live
+  M15 I-CHOCH level, and 4013.443 is the exact recent M15 candle wick low.
+  Invalidations named. (Caveat: it called the wick low a "confirmed swing" —
+  generous; and didn't flag 4133.84 as internal.)
+- **Production implication for the live chat UI:** on this provider, H4-scale
+  questions (briefing ~500 levels) will fail while M15-scale succeed. Options
+  to evaluate later: trim the H4 briefing's embedded level count
+  (e.g. status_filter live-only by default, or cap levels per family), or keep
+  the free provider on M15-scale views only. NOT changed tonight — core-briefing
+  behavior is outside this research's additive scope.
+
 ## Where sources disagree (from sources.md, still standing)
 
 CHoCH internal/external scope; OB wick-vs-close invalidation; Asia KZ start
