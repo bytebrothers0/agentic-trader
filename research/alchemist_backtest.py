@@ -55,6 +55,7 @@ P = dict(
     uses_d1=4,
     require_fresh=True,
     story_pivot=3,
+    bias_mode="d1_h1",        # "d1_h1" (strict) | "d1" (D1-only direction)
     swing_pivot=2,
     trig_after_touch=8,       # trigger close must be within N M30 bars of the touch
     swing_near_atr=0.75,      # broken minor swing must sit within X ATR of the level
@@ -125,16 +126,22 @@ def _pivot_break_dir(c: np.ndarray, w: int) -> int:
 
 def storyline(d1: pd.DataFrame, h1: pd.DataFrame, ts: pd.Timestamp) -> int:
     d1i, d1c = d1.index, d1["close"].values
-    h1i, h1c = h1.index, h1["close"].values
     dp = d1i.searchsorted(ts)          # bars closed before ts
-    hp = h1i.searchsorted(ts)
     d1v = d1c[max(0, dp - 120): dp]    # EA parity: 120 D1 closes
-    h1v = h1c[max(0, hp - 400): hp]
-    if len(d1v) < 60 or len(h1v) < 60:
+    if len(d1v) < 60:
         return 0
     a = _pivot_break_dir(d1v, P["story_pivot"])
+    if a == 0:
+        return 0
+    if P.get("bias_mode", "d1_h1") == "d1":
+        return a
+    h1c = h1["close"].values
+    hp = h1.index.searchsorted(ts)
+    h1v = h1c[max(0, hp - 400): hp]
+    if len(h1v) < 60:
+        return 0
     b = _pivot_break_dir(h1v, P["story_pivot"])
-    if a != 0 and a == b:
+    if a == b:
         return a
     return 0
 
