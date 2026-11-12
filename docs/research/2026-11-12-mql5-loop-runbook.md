@@ -71,7 +71,7 @@ ShutdownTerminal=1
 |---|---|---|---|---|---|---|
 | v1.00 baseline (2025.11.01→2026.11.10) | defaults, TP=nearest level | 26 | 23.1% | −359.44 (−3.6%) | 0.64 | 4.33% |
 | v1.01 sequencing sweep | genetic, custom criterion | **aborted** — swept a buggy EA | — | — | — | — |
-| v1.02 freshness fix | replay scans bars AFTER birth | running | — | — | — | — |
+| v1.02 freshness fix (fresh-only) | replay scans bars AFTER birth | **0** | — | 0.00 | — | 0.00% |
 
 **Bug log (the loop working as intended):**
 1. **v1.00/v1.01 freshness direction bug** — `ReplayLife` mixed chronological
@@ -80,6 +80,13 @@ ShutdownTerminal=1
    win rate). Found by cross-checking against the Python scout, whose strict
    replay found ~0 valid entries over the same window. v1.02 converts the
    iBarShift series shift to a chronological position and replays forward.
-2. The Alchemist sequence constraints added in v1.01 remain: trigger within
+2. **v1.02 teaches the selectivity lesson**: fresh-only (never-touched) is
+   so rare that the EA trades zero times in a year. The Alchemist doctrine's
+   **2-times (H4) / 4-times (D1) rules** exist for exactly this — a level
+   remains usable after wick touches as long as no body close breaks it.
+   `InpRequireFresh=false` activates the use budgets; the grid probe
+   (`research/grid_probe.py`) is finding the right operating point, and the
+   genetic sweep validates it in the MT5 tester.
+3. The Alchemist sequence constraints added in v1.01 remain: trigger within
    N bars after the touch, broken swing at the level (≤ X ATR), optional
    sweep requirement.
