@@ -70,10 +70,16 @@ ShutdownTerminal=1
 | Run | Config | Trades | Win rate | Net | PF | Max DD |
 |---|---|---|---|---|---|---|
 | v1.00 baseline (2025.11.01→2026.11.10) | defaults, TP=nearest level | 26 | 23.1% | −359.44 (−3.6%) | 0.64 | 4.33% |
-| v1.01 sequencing sweep | genetic, custom criterion | running | — | — | — | — |
+| v1.01 sequencing sweep | genetic, custom criterion | **aborted** — swept a buggy EA | — | — | — | — |
+| v1.02 freshness fix | replay scans bars AFTER birth | running | — | — | — | — |
 
-Baseline diagnosis: the asymmetry is right (avg win ≈ 2.1× avg loss) but the
-trigger fired on any minor-swing break near price. v1.01 adds the Alchemist
-sequence constraints: **trigger within N bars after the level touch**, the
-**broken swing must sit at the level** (≤ X ATR), optional **sweep
-requirement** (wick through + close back), and a wider touch-lookback window.
+**Bug log (the loop working as intended):**
+1. **v1.00/v1.01 freshness direction bug** — `ReplayLife` mixed chronological
+   and series indexing and scanned bars *before* a level's birth, so levels
+   stayed wrongly fresh and the trigger fired far too often (26 trades, 23%
+   win rate). Found by cross-checking against the Python scout, whose strict
+   replay found ~0 valid entries over the same window. v1.02 converts the
+   iBarShift series shift to a chronological position and replays forward.
+2. The Alchemist sequence constraints added in v1.01 remain: trigger within
+   N bars after the touch, broken swing at the level (≤ X ATR), optional
+   sweep requirement.

@@ -300,10 +300,12 @@ void ScanLevels(const ENUM_TIMEFRAMES tf, const int max_bars, const int tf_id,
 // Lifecycle replay on the level's native timeframe:
 //   wick touch  -> consumes freshness (fresh=false, touches++)
 //   body close beyond price + buffer -> level broken (dead)
+// born_idx is the CHRONOLOGICAL position of the birth bar; bars strictly
+// AFTER birth (born_idx+1 .. n-1) drive the lifecycle.
 void ReplayLife(SLevel &lv, const MqlRates &r[], const int n,
                 const int born_idx, const double buf)
   {
-   for(int j = born_idx - 1; j >= 1; j--)     // closed bars after birth
+   for(int j = born_idx + 1; j < n; j++)      // closed bars after birth
      {
       bool touched = false;
       if(lv.side == SIDE_SUPPORT)
@@ -331,15 +333,17 @@ void RebuildBook()
    int nh = CopyRates(_Symbol, PERIOD_H4, 0, InpH4Bars + 2, rh);
    if(nh < 10) return;
    ScanLevels(PERIOD_H4, InpH4Bars, 0, InpGapMinATR, InpOclRunMin, g_atr_h4);
-   // age filter + lifecycle for H4 levels
+   // age filter + lifecycle for H4 levels (chronological positions!)
    double buf_h4 = InpBreakBufATR * AtrAt(g_atr_h4, nh - 2, nh);
    for(int k = 0; k < g_book_n; k++)
      {
       if(g_book[k].tf != 0) continue;
       if(g_book[k].born < rh[0].time) { g_book[k].active = false; continue; }
-      int born_idx = iBarShift(_Symbol, PERIOD_H4, g_book[k].born, false);
-      if(born_idx < 0 || born_idx > nh - 3) { g_book[k].active = false; continue; }
-      ReplayLife(g_book[k], rh, nh, born_idx, buf_h4);
+      int born_series = iBarShift(_Symbol, PERIOD_H4, g_book[k].born, false);
+      if(born_series < 0) { g_book[k].active = false; continue; }
+      int born_chrono = nh - 1 - born_series;   // iBarShift counts from the newest
+      if(born_chrono < 1 || born_chrono > nh - 3) { g_book[k].active = false; continue; }
+      ReplayLife(g_book[k], rh, nh, born_chrono, buf_h4);
      }
    g_book_built = rh[nh - 2].time;   // last closed H4 bar
 
@@ -353,9 +357,11 @@ void RebuildBook()
    for(int k = d1_before; k < g_book_n; k++)
      {
       if(g_book[k].born < rd[0].time) { g_book[k].active = false; continue; }
-      int born_idx = iBarShift(_Symbol, PERIOD_D1, g_book[k].born, false);
-      if(born_idx < 0 || born_idx > nd - 3) { g_book[k].active = false; continue; }
-      ReplayLife(g_book[k], rd, nd, born_idx, buf_d1);
+      int born_series = iBarShift(_Symbol, PERIOD_D1, g_book[k].born, false);
+      if(born_series < 0) { g_book[k].active = false; continue; }
+      int born_chrono = nd - 1 - born_series;
+      if(born_chrono < 1 || born_chrono > nd - 3) { g_book[k].active = false; continue; }
+      ReplayLife(g_book[k], rd, nd, born_chrono, buf_d1);
      }
 
    if(InpVerbose)

@@ -95,26 +95,27 @@ def atr_series(df: pd.DataFrame, period=14) -> pd.Series:
 
 # ------------------------------------------------------------------ storyline
 def _pivot_break_dir(c: np.ndarray, w: int) -> int:
-    """Last confirmed close-pivot break direction: +1 up, -1 down, 0 none."""
+    """Last confirmed close-pivot break direction: +1 up, -1 down, 0 none.
+    Vectorized: pivot high = close equals the max of its centred window
+    (ties allowed — matches the EA's PivotBias)."""
     n = len(c)
-    last_h = last_l = -1
-    for j in range(w, n - w):
-        win = c[j - w: j + w + 1]
-        if c[j] == win.max() and (win == win.max()).sum() == 1:
-            last_h = j
-        elif c[j] == win.min() and (win == win.min()).sum() == 1:
-            last_l = j
-    if last_h < 0 or last_l < 0:
+    s = pd.Series(c)
+    win_hi = s.rolling(2 * w + 1, center=True, min_periods=2 * w + 1).max().values
+    win_lo = s.rolling(2 * w + 1, center=True, min_periods=2 * w + 1).min().values
+    is_h = np.nan_to_num(win_hi, nan=np.inf) <= c      # c == window max (no NaN edges)
+    is_l = np.nan_to_num(win_lo, nan=-np.inf) >= c
+    hi_idx = np.flatnonzero(is_h)
+    lo_idx = np.flatnonzero(is_l)
+    if hi_idx.size == 0 or lo_idx.size == 0:
         return 0
+    last_h, last_l = int(hi_idx[-1]), int(lo_idx[-1])
     iu = idn = -1
-    for x in range(last_h + 1, n):
-        if c[x] > c[last_h]:
-            iu = x
-            break
-    for x in range(last_l + 1, n):
-        if c[x] < c[last_l]:
-            idn = x
-            break
+    after_h = c[last_h + 1:] > c[last_h]
+    after_l = c[last_l + 1:] < c[last_l]
+    if after_h.any():
+        iu = last_h + 1 + int(np.argmax(after_h))
+    if after_l.any():
+        idn = last_l + 1 + int(np.argmax(after_l))
     if iu < 0 and idn < 0:
         return 0
     if idn < 0 or (iu >= 0 and iu >= idn):
@@ -123,12 +124,16 @@ def _pivot_break_dir(c: np.ndarray, w: int) -> int:
 
 
 def storyline(d1: pd.DataFrame, h1: pd.DataFrame, ts: pd.Timestamp) -> int:
-    d1v = d1[d1.index < ts]["close"].values
-    h1v = h1[h1.index < ts]["close"].values
+    d1i, d1c = d1.index, d1["close"].values
+    h1i, h1c = h1.index, h1["close"].values
+    dp = d1i.searchsorted(ts)          # bars closed before ts
+    hp = h1i.searchsorted(ts)
+    d1v = d1c[max(0, dp - 120): dp]    # EA parity: 120 D1 closes
+    h1v = h1c[max(0, hp - 400): hp]
     if len(d1v) < 60 or len(h1v) < 60:
         return 0
-    a = _pivot_break_dir(d1v[-250:], P["story_pivot"])
-    b = _pivot_break_dir(h1v[-400:], P["story_pivot"])
+    a = _pivot_break_dir(d1v, P["story_pivot"])
+    b = _pivot_break_dir(h1v, P["story_pivot"])
     if a != 0 and a == b:
         return a
     return 0
@@ -148,7 +153,8 @@ class Level:
 
 
 def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
-             a: pd.Series, out: List[Level]) -> None:
+             a: pd.Series, out: List[tuple]) -> None:
+    """Scan closed bars; out appends (Level, birth_position_in_df)."""
     n = len(df)
     o, h, l, c = df["open"].values, df["high"].values, df["low"].values, df["close"].values
     av = a.values
@@ -162,15 +168,15 @@ def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
         col_j = c[i + 1] > o[i + 1]
         born = t
         if col_i and not col_j:
-            out.append(Level(c[i], RESIST, born, tf, "A"))
+            out.append((Level(c[i], RESIST, born, tf, "A"), i))
         elif not col_i and col_j:
-            out.append(Level(c[i], SUPPORT, born, tf, "V"))
+            out.append((Level(c[i], SUPPORT, born, tf, "V"), i))
         elif col_i and col_j:
             if o[i + 1] - c[i] >= gap_min_atr * av_i:
-                out.append(Level(c[i], SUPPORT, born, tf, "GAP"))
+                out.append((Level(c[i], SUPPORT, born, tf, "GAP"), i))
         else:
             if c[i] - o[i + 1] >= gap_min_atr * av_i:
-                out.append(Level(c[i], RESIST, born, tf, "GAP"))
+                out.append((Level(c[i], RESIST, born, tf, "GAP"), i))
         # OCL: one level per run — the first candle of a same-colour run
         run = 1
         j = i + 1
@@ -178,31 +184,29 @@ def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
             run += 1
             j += 1
         if run >= ocl_run_min:
-            out.append(Level(c[i], SUPPORT if col_i else RESIST, born, tf, "OCL"))
+            out.append((Level(c[i], SUPPORT if col_i else RESIST, born, tf, "OCL"), i))
 
 
-def _replay_life(lv: Level, df: pd.DataFrame, born_i: int, buf: float) -> None:
-    hi = df["high"].values
-    lo = df["low"].values
-    cl = df["close"].values
-    n = len(df)
-    for j in range(born_i + 1, n):          # bars strictly after birth
-        touched = False
-        if lv.side == SUPPORT:
-            if lo[j] <= lv.price:
-                touched = True
-            if cl[j] < lv.price - buf:
-                lv.broken = True
-                break
-        else:
-            if hi[j] >= lv.price:
-                touched = True
-            if cl[j] > lv.price + buf:
-                lv.broken = True
-                break
-        if touched:
-            lv.fresh = False
-            lv.touches += 1
+def _replay_life(lv: Level, hi: np.ndarray, lo: np.ndarray, cl: np.ndarray,
+                 born_i: int, buf: float) -> None:
+    """Vectorized lifecycle: touches counted up to the first body break.
+    Arrays are the level's native-TF OHLC closes; born_i = birth position."""
+    n = len(cl)
+    if born_i + 1 >= n:
+        return
+    if lv.side == SUPPORT:
+        touches = lo[born_i + 1:] <= lv.price
+        breaks = cl[born_i + 1:] < lv.price - buf
+    else:
+        touches = hi[born_i + 1:] >= lv.price
+        breaks = cl[born_i + 1:] > lv.price + buf
+    if breaks.any():
+        first_break = int(np.argmax(breaks))
+        lv.broken = True
+        lv.touches = int(touches[: first_break + 1].sum())
+    else:
+        lv.touches = int(touches.sum())
+    lv.fresh = lv.touches == 0
 
 
 class Book:
@@ -223,25 +227,25 @@ class Book:
             return
         h4 = h4.tail(P["h4_bars"])
         d1 = d1.tail(P["d1_bars"])
-        lvls: List[Level] = []
+        lvls: List[tuple] = []
         a4 = self.a_h4.reindex(h4.index)
         ad = self.a_d1.reindex(d1.index)
         _scan_tf(h4, "H4", P["gap_min_atr"], P["ocl_run_min"], a4, lvls)
         _scan_tf(d1, "D1", P["gap_min_atr"] * 2.0, P["ocl_run_min"], ad, lvls)
-        # age filter + lifecycle on native TF
+        # age filter + lifecycle on native TF (positions come straight from the scan)
+        hi4, lo4, cl4 = h4["high"].values, h4["low"].values, h4["close"].values
+        hid, lod, cld = d1["high"].values, d1["low"].values, d1["close"].values
+        buf4 = P["break_buf_atr"] * float(a4.iloc[-1])
+        bufd = P["break_buf_atr"] * float(ad.iloc[-1])
         keep: List[Level] = []
-        for lv in lvls:
-            src = h4 if lv.tf == "H4" else d1
-            age = (ts - lv.born) / (timedelta(hours=4) if lv.tf == "H4" else timedelta(days=1))
+        for lv, born_i in lvls:
+            age = (h4 if lv.tf == "H4" else d1).shape[0] - 1 - born_i
             if age > P["level_max_age"]:
                 continue
-            pos = src.index.get_loc(lv.born)
-            if not isinstance(pos, (int, np.integer)):
-                continue
-            buf = P["break_buf_atr"] * float((a4 if lv.tf == "H4" else ad).iloc[-1])
-            if np.isnan(buf) or buf <= 0:
-                continue
-            _replay_life(lv, src, int(pos), buf)
+            _replay_life(lv, hi4 if lv.tf == "H4" else hid,
+                         lo4 if lv.tf == "H4" else lod,
+                         cl4 if lv.tf == "H4" else cld,
+                         born_i, buf4 if lv.tf == "H4" else bufd)
             keep.append(lv)
         self.levels = keep
         self.built_on = h4.index[-1]
@@ -274,11 +278,19 @@ def run(start, end, params=None):
     entry_i: Optional[int] = None
 
     a30 = atr_series(m30)
+    a30v = a30.values
+    m30_lo = m30["low"].values
+    m30_hi = m30["high"].values
+    m30_cl = m30["close"].values
     m5_lo = m5["low"]
     m5_hi = m5["high"]
     m5i = {t: k for k, t in enumerate(m5.index)}
 
     seg12 = 12   # reaction extreme window (EA parity)
+
+    bias = 0
+    cur_h1_closed: Optional[pd.Timestamp] = None
+    h1_idx = h1.index
 
     for k, t in enumerate(m30.index):
         if not (start <= t < end):
@@ -324,13 +336,17 @@ def run(start, end, params=None):
         if not book.levels:
             continue
 
-        # ---------- storyline per H1 bar (cached by callers) ----------
-        bias = storyline(load("D1"), h1, t)
+        # ---------- storyline per H1 closed bar (cached) ----------
+        pos = h1_idx.searchsorted(t, side="right") - 1
+        h1_closed = h1_idx[pos] if pos >= 0 else None
+        if h1_closed != cur_h1_closed:
+            cur_h1_closed = h1_closed
+            bias = storyline(load("D1"), h1, t) if h1_closed is not None else 0
         if bias == 0:
             continue
 
-        px = m30["close"].iloc[k]
-        atr_k = a30.iloc[k]
+        px = m30_cl[k]
+        atr_k = a30v[k]
         if np.isnan(atr_k) or atr_k <= 0:
             continue
 
@@ -349,23 +365,23 @@ def run(start, end, params=None):
         reached = reacted = False
         touch_bar = -1
         for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
-            a_i = a30.iloc[i]
+            a_i = a30v[i]
             if np.isnan(a_i):
                 continue
             if side == SUPPORT:
-                if m30["low"].iloc[i] <= lv.price + 0.05 * a_i:
+                if m30_lo[i] <= lv.price + 0.05 * a_i:
                     reached = True
                     if touch_bar < 0:
                         touch_bar = i
-                if m30["close"].iloc[i] < lv.price - 0.10 * a_i:
+                if m30_cl[i] < lv.price - 0.10 * a_i:
                     reacted = True
                     break
             else:
-                if m30["high"].iloc[i] >= lv.price - 0.05 * a_i:
+                if m30_hi[i] >= lv.price - 0.05 * a_i:
                     reached = True
                     if touch_bar < 0:
                         touch_bar = i
-                if m30["close"].iloc[i] > lv.price + 0.10 * a_i:
+                if m30_cl[i] > lv.price + 0.10 * a_i:
                     reacted = True
                     break
         if not reached or reacted:
@@ -375,13 +391,13 @@ def run(start, end, params=None):
         if P["require_sweep"]:
             swept = False
             for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
-                a_i = a30.iloc[i]
+                a_i = a30v[i]
                 if side == SUPPORT:
-                    swept = swept or (m30["low"].iloc[i] < lv.price - 0.05 * a_i
-                                      and m30["close"].iloc[i] > lv.price)
+                    swept = swept or (m30_lo[i] < lv.price - 0.05 * a_i
+                                      and m30_cl[i] > lv.price)
                 else:
-                    swept = swept or (m30["high"].iloc[i] > lv.price + 0.05 * a_i
-                                      and m30["close"].iloc[i] < lv.price)
+                    swept = swept or (m30_hi[i] > lv.price + 0.05 * a_i
+                                      and m30_cl[i] < lv.price)
             if not swept:
                 continue
 
@@ -390,8 +406,7 @@ def run(start, end, params=None):
             continue
 
         # ---------- M30 structure-shift trigger ----------
-        cl = m30["close"].values
-        op = m30["open"].values
+        cl = m30_cl
         w = P["swing_pivot"]
         swing_j = -1
         swing_px = 0.0
@@ -420,13 +435,11 @@ def run(start, end, params=None):
 
         # ---------- entry / stop / target ----------
         entry = float(cl[k])
-        lo12 = m30["low"].iloc[k - seg12 + 1: k + 1].min() if dirn > 0 else None
-        hi12 = m30["high"].iloc[k - seg12 + 1: k + 1].max() if dirn < 0 else None
         if dirn > 0:
-            ext = float(lo12)
+            ext = float(m30_lo[k - seg12 + 1: k + 1].min())
             sl = ext - P["sl_buf_atr"] * atr_k
         else:
-            ext = float(hi12)
+            ext = float(m30_hi[k - seg12 + 1: k + 1].max())
             sl = ext + P["sl_buf_atr"] * atr_k
         risk = abs(entry - sl)
         if risk <= 0:
