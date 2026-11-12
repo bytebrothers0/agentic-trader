@@ -1096,3 +1096,80 @@ def test_the_shipped_view_default_is_a_screenshot_within_the_store_cap():
 
     assert MIN_BARS <= AGENT_BARS <= MAX_BARS
 
+
+# --------------------------------------------------------------------------- #
+# Chat "clear context": the durable marker, not a cosmetic wipe
+# --------------------------------------------------------------------------- #
+
+def _chat_record(store, clock, message: str, response: str):
+    """Append one request turn shaped exactly like a chat turn's record.
+
+    The clock advances past the store's turn-rate leash first: two chat turns
+    in one real second are refused by design.
+    """
+    clock.advance(minutes=1)
+    store.record_turn(
+        Trigger.REQUEST.value,
+        trigger_detail=message,
+        renders=0,
+        tool_calls=[],
+        tokens=10,
+        cost_usd=0.001,
+        output={"chat_response": response},
+        now=clock(),
+    )
+
+
+def test_chat_clear_moves_the_marker_and_hides_old_turns(tmp_path):
+    clock = FakeClock(at(8, 0))
+    service = _service(tmp_path, clock)
+    store = service.store
+    _chat_record(store, clock, "hello", "hi there")
+    _chat_record(store, clock, "read the market", "neutral, waiting")
+    assert len(service.chat_turns()) == 2
+
+    result = service.chat_clear()
+    assert result["ok"] is True
+    # the log itself is untouched (audit), but the conversation reads empty
+    assert len(store.data.turns) == 2
+    assert service.chat_turns() == []
+
+    # a turn recorded after the clear shows up again
+    _chat_record(store, clock, "fresh start", "welcome back")
+    rows = service.chat_turns()
+    assert len(rows) == 1
+    assert rows[0]["message"] == "fresh start"
+    assert rows[0]["chat_response"] == "welcome back"
+
+
+def test_chat_clear_persists_across_a_service_rebuild(tmp_path):
+    """The marker lives in the store: a restarted server must not resurrect
+    the cleared conversation."""
+    clock = FakeClock(at(8, 0))
+    service = _service(tmp_path, clock)
+    _chat_record(service.store, clock, "before the clear", "old reply")
+    service.chat_clear()
+
+    rebuilt = _service(tmp_path, clock)
+    assert rebuilt.store.data.agent.chat_cleared_at is not None
+    assert rebuilt.chat_turns() == []
+
+
+def test_chat_history_rows_apply_the_same_marker(tmp_path):
+    """The agent's briefing memory (prompts.chat_history_rows) and the panel's
+    history must agree about what was cleared."""
+    from agentic import prompts
+
+    clock = FakeClock(at(8, 0))
+    service = _service(tmp_path, clock)
+    store = service.store
+    _chat_record(store, clock, "hello", "hi there")
+    assert len(prompts.chat_history_rows(store)) == 1
+
+    service.chat_clear()
+    assert prompts.chat_history_rows(store) == []
+
+    _chat_record(store, clock, "fresh start", "welcome back")
+    rows = prompts.chat_history_rows(store)
+    assert len(rows) == 1 and rows[0]["user"] == "fresh start"
+

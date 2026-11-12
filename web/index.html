@@ -18,7 +18,7 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <link rel="stylesheet" href="/static/style.css?v=18" />
+  <link rel="stylesheet" href="/static/style.css?v=21" />
 </head>
 <body class="dark-theme">
   
@@ -104,6 +104,9 @@
       </button>
       <button class="action-btn" id="btnAgent" title="Agent (panel & chat)">
         <i data-lucide="bot"></i>
+      </button>
+      <button class="action-btn" id="btnAgentChat" title="Agent chat — strategy refinement conversation">
+        <i data-lucide="message-circle"></i>
       </button>
       <a class="action-btn" href="/backtest" title="Backtest review (journal replay)" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;">
         <i data-lucide="flag"></i>
@@ -467,6 +470,14 @@
     <div class="modules-list" id="modulesList">
       <div class="empty-state">Loading modules...</div>
     </div>
+    <div class="section-header-bar">
+      <span class="section-label"><i data-lucide="layers"></i> AGENT INDICATORS</span>
+      <span class="badge" id="familiesCountBadge">0 on</span>
+    </div>
+    <p class="section-hint">Only enabled families are offered to the chart agent (its tools, chart fetches and prompt). Dashboard sidebar layers are unaffected.</p>
+    <div class="modules-list" id="familiesList">
+      <div class="empty-state">Loading indicators...</div>
+    </div>
   </aside>
 
   <!-- Agent drawer: reads the agent store (thesis, subscriptions, turns) — never duplicates it -->
@@ -580,6 +591,31 @@
     </div>
   </aside>
 
+  <!-- Agent Chat slider panel — full conversation UI for strategy refinement -->
+  <div class="agent-chat-slider" id="agentChatSlider" hidden aria-hidden="true">
+    <div class="agent-chat-slider-scrim" data-agent-chat-close></div>
+    <section class="agent-chat-slider-dialog" role="dialog" aria-modal="true" aria-label="Agent chat">
+      <div class="agent-chat-slider-header">
+        <h3><i data-lucide="message-circle"></i> Agent Chat</h3>
+        <div class="agent-chat-slider-header-actions">
+          <button class="action-pill agent-chat-clear" id="btnAgentChatClear" title="Clear chat history">
+            <i data-lucide="trash-2"></i> Clear
+          </button>
+          <button class="action-pill agent-chat-close" id="btnAgentChatClose" title="Close chat">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+      </div>
+      <div class="agent-chat-messages" id="agentChatMessages">
+        <div class="agent-chat-empty">Ask the agent about the market. Same prompt, same tools — it can render charts, look up levels, set watches, and propose trades. Use it to refine your strategy prompt.</div>
+      </div>
+      <div class="agent-chat-input-row">
+        <input type="text" id="agentChatInputSlider" class="agent-chat-input" placeholder="Ask the agent…" autocomplete="off" />
+        <button class="action-pill" id="btnAgentSendSlider">Send</button>
+      </div>
+    </section>
+  </div>
+
   <div class="agent-render-modal" id="agentRenderModal" hidden aria-hidden="true">
     <div class="agent-render-modal-scrim" data-agent-render-close></div>
     <section class="agent-render-modal-dialog" role="dialog" aria-modal="true" aria-label="Agent chart preview">
@@ -590,6 +626,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=32"></script>
+  <script src="/static/app.js?v=41"></script>
 </body>
 </html>

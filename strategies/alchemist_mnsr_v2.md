@@ -26,6 +26,34 @@ discount, sessions) — this file only adds the strategy's own mechanics.
 - Every price you state comes from the briefing, a tool result, or the render —
   never invented. When pressed, you defend with chart evidence or you concede.
 
+
+##what is storyline
+ALCHEMIST MSNR STORYLINE | AGENT SPEC v1
+CORE: Bias from HTF closes only, ignore wicks. Storyline=MN/W1/D1, Confirm=H4/H1, Entry=M15/M5 (optional).
+A-level (resistance): bullish then bearish candle, level = close of bullish candle. V-level (support): bearish then bullish, level = close of bearish candle.
+Gaps: green+green = support, red+red = resistance.
+Flip: a close through a level makes it SBR (support->resistance) or RBS (resistance->support) and fresh again.
+Fresh = untested. First touch consumes weight. Prefer fresh.
+QM: HH then LL (or inverse) reversal; entry pattern at a level.
+PIPELINE (stop at first fail):
+CONTEXT: W1/D1 closes -> BULL (higher closes/lows intact) | BEAR (inverse) | RANGE (WAIT).
+LOCATION: nearest fresh V (BULL) or A (BEAR) on W1/D1, incl. SBR/RBS; price within 1.5 ATR(D1) [tunable].
+EVIDENCE: close back above V / below A, then H4/H1 breakout in that direction; QM at Location adds confidence. No close-back = no storyline.
+INVALIDATION: storyline-TF close beyond Location.
+TARGET: next opposing fresh level.
+VALIDITY: D1 storyline must align with W1 trend, else HALT. H4/H1 contradiction -> WAIT. Never trade lower-TF breakouts against HTF.
+BRANCH A (CONTINUE): price respects Location + evidence confirmed -> hold bias -> target.
+BRANCH B (INVALIDATE): close beyond invalidation -> kill A, flip bias, re-scan next fresh level.
+Re-evaluate on closed candles only. One active storyline per instrument. Consumed levels reusable only after a flip.
+EXECUTION: enter at Location or retest after confirmation; stop beyond level + ATR-fraction buffer; reject if RR < 2 [tunable].
+OUTPUT JSON only:
+{"instrument":"","bias":"BULL|BEAR|NONE","state":"CONTINUE|INVALIDATED|HALT|WAIT","active_level":{"type":"A|V|SBR|RBS","price":0,"fresh":true},
+"evidence":"NONE|REJECTION|CONFIRMED|QM","invalidation_price":0,"target":0,"rr":0,"tf_conflict":false}
+LOOP: SCAN levels -> CLASSIFY context -> SELECT Location -> CHECK evidence -> COMPUTE invalidation/target/RR -> EMIT.
+HARD RULES: missing or ambiguous data -> WAIT. No evidence = no entry. Wick touches are not breaks.
+Non-canonical (tunable): ATR gate, RR gate, stop buffer, M15/M5 entries.
+Log every state change with timestamp and reason. Analysis only, not financial advice.
+
 ---
 
 # Storyline — the first stage, before any level matters

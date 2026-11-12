@@ -339,6 +339,13 @@ class AgentMeta(Serde):
     model: str = ""
     spec_version: str = SPEC_VERSION
     last_evaluated_at: Optional[datetime] = None
+    #: When the operator last cleared the chat conversation ("clear context" in
+    #: the chat panel). The turn log is append-only audit — never deleted — so
+    #: both the chat history endpoint and the briefing's chat-memory replay
+    #: (``prompts.chat_history_rows``) read only turns *after* this instant.
+    #: ``None`` (the default, and what older state files load as) means the
+    #: whole log is still the conversation.
+    chat_cleared_at: Optional[datetime] = None
 
 
 @dataclass

@@ -1,0 +1,15 @@
+{
+  "sr": true,
+  "crt": true,
+  "ts": true,
+  "bos": true,
+  "fvg": true,
+  "ob": true,
+  "liquidity": true,
+  "qm": true,
+  "idm": true,
+  "trendline": true,
+  "ocl": true,
+  "apex": true,
+  "ifvg": true
+}

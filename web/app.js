@@ -92,6 +92,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const modulesCountBadge = document.getElementById("modulesCountBadge");
   const btnModulesAll = document.getElementById("btnModulesAll");
   const btnModulesNone = document.getElementById("btnModulesNone");
+  // Agent indicator-families knob (settings tab): which families the chart
+  // agent is offered at all — schema, validation, fetches and prompt guide.
+  const familiesList = document.getElementById("familiesList");
+  const familiesCountBadge = document.getElementById("familiesCountBadge");
   // Agent panel + chat (all optional — the drawer degrades gracefully if absent)
   const btnAgent = document.getElementById("btnAgent");
   const agentDrawer = document.getElementById("agentDrawer");
@@ -123,6 +127,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const agentRender = document.getElementById("agentRender");
   const agentChatInput = document.getElementById("agentChatInput");
   const btnAgentSend = document.getElementById("btnAgentSend");
+  const btnAgentChat = document.getElementById("btnAgentChat");
+  const agentChatSlider = document.getElementById("agentChatSlider");
+  const agentChatSliderClose = document.querySelector("[data-agent-chat-close]");
+  const btnAgentChatClose = document.getElementById("btnAgentChatClose");
+  const btnAgentChatClear = document.getElementById("btnAgentChatClear");
+  const agentChatInputSlider = document.getElementById("agentChatInputSlider");
+  const btnAgentSendSlider = document.getElementById("btnAgentSendSlider");
+  const agentChatMessages = document.getElementById("agentChatMessages");
   const connectionStatus = document.getElementById("connectionStatus");
   const connectionStatusText = connectionStatus ? connectionStatus.querySelector(".status-text") : null;
   // Only real chart-mode pills carry data-mode. Drawer action buttons (settings
@@ -1177,6 +1189,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (settingsDrawer) settingsDrawer.classList.add("open");
     if (settingsBackdrop) settingsBackdrop.classList.add("open");
     fetchModules();
+    fetchFamilies();
   }
 
   function closeSettings() {
@@ -1264,6 +1277,72 @@ document.addEventListener("DOMContentLoaded", () => {
       fetchModules();
       refreshData();
     } catch (err) {}
+  }
+
+  // =========================================================================
+  // Bot Settings drawer — agent indicator families (what the agent is offered)
+  // =========================================================================
+
+  async function fetchFamilies() {
+    if (!familiesList) return;
+    try {
+      const res = await fetch("/api/settings/families");
+      if (!res.ok) throw new Error("families API unavailable");
+      const data = await res.json();
+      renderFamiliesList(data.families || []);
+    } catch (err) {
+      familiesList.innerHTML = `<div class="empty-state">Could not load indicator families.</div>`;
+    }
+  }
+
+  function renderFamiliesList(families) {
+    const on = families.filter((f) => f.enabled).length;
+    if (familiesCountBadge) familiesCountBadge.textContent = `${on} on`;
+    if (!families.length) {
+      familiesList.innerHTML = `<div class="empty-state">No indicator families registered.</div>`;
+      return;
+    }
+    familiesList.innerHTML = "";
+    families.forEach((fam) => {
+      const row = document.createElement("div");
+      row.className = "module-row";
+      const info = document.createElement("div");
+      info.className = "module-info";
+      const name = document.createElement("span");
+      name.className = "module-name";
+      name.textContent = fam.name || fam.id;
+      const desc = document.createElement("span");
+      desc.className = "module-desc";
+      desc.textContent = fam.description || fam.id;
+      info.appendChild(name);
+      info.appendChild(desc);
+      const toggle = document.createElement("label");
+      toggle.className = "switch";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!fam.enabled;
+      input.addEventListener("change", () => toggleFamily(fam.id, input.checked, input));
+      const slider = document.createElement("span");
+      slider.className = "slider round";
+      toggle.appendChild(input);
+      toggle.appendChild(slider);
+      row.appendChild(info);
+      row.appendChild(toggle);
+      familiesList.appendChild(row);
+    });
+  }
+
+  async function toggleFamily(id, enabled, input) {
+    try {
+      const res = await fetch(
+        `/api/settings/families/${encodeURIComponent(id)}?enabled=${enabled}`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error("toggle failed");
+      fetchFamilies();
+    } catch (err) {
+      if (input) input.checked = !enabled;
+    }
   }
 
   if (btnSettings) btnSettings.addEventListener("click", openSettings);
@@ -1840,6 +1919,370 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (actionButton === btnAgentSend && agentChatInput) agentChatInput.disabled = false;
     }
+  }
+
+  // ------------------------------------------------------------------ agent chat slider panel
+
+  let agentChatHistory = [];
+  let agentChatSending = false;
+
+  function openAgentChat() {
+    if (agentChatSlider) agentChatSlider.hidden = false;
+    document.body.style.overflow = "hidden";
+    fetchAgentChatHistory();
+  }
+
+  function closeAgentChat() {
+    if (agentChatSlider) agentChatSlider.hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  async function fetchAgentChatHistory() {
+    if (!agentChatMessages) return;
+    try {
+      const res = await fetch("/api/agent/chat/history?limit=50");
+      if (!res.ok) return;
+      const data = await res.json();
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      agentChatHistory = messages;
+      renderAgentChatHistory();
+    } catch (err) {
+      // Chat history is a nice-to-have; never block the panel.
+    }
+  }
+
+  function renderAgentChatHistory() {
+    if (!agentChatMessages) return;
+    agentChatMessages.textContent = "";
+    if (!agentChatHistory.length) {
+      agentChatMessages.innerHTML = `<div class="agent-chat-empty">Ask the agent about the market. Same prompt, same tools — it can render charts, look up levels, set watches, and propose trades. Use it to refine your strategy prompt.</div>`;
+      return;
+    }
+    // Newest first from the API; render oldest first. Every field shown here
+    // comes from the durable turn log, so the conversation (texts, evidence,
+    // render images) survives a server restart.
+    [...agentChatHistory].reverse().forEach((turn) => {
+      const output = turn.output || {};
+      const summaryFallback = turn.summary || output.reasoning || output.analysis_error || output.conclusion || "";
+
+      // The operator's message.
+      const userText = (turn.message || "").trim();
+      if (userText) {
+        const userMsg = document.createElement("div");
+        userMsg.className = "agent-chat-msg user";
+        const meta = document.createElement("div");
+        meta.className = "agent-chat-meta";
+        const when = document.createElement("span");
+        when.textContent = turn.started_at ? new Date(turn.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+        meta.appendChild(when);
+        userMsg.appendChild(meta);
+        const bubble = document.createElement("div");
+        bubble.className = "agent-chat-bubble";
+        bubble.textContent = userText;
+        userMsg.appendChild(bubble);
+        agentChatMessages.appendChild(userMsg);
+      }
+
+      // The agent's reply.
+      const agentMsg = document.createElement("div");
+      agentMsg.className = "agent-chat-msg agent";
+      const meta = document.createElement("div");
+      meta.className = "agent-chat-meta";
+      const when = document.createElement("span");
+      when.textContent = turn.started_at ? new Date(turn.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+      meta.appendChild(when);
+      agentMsg.appendChild(meta);
+      const bubble = document.createElement("div");
+      bubble.className = "agent-chat-bubble";
+      bubble.textContent = turn.chat_response || summaryFallback || "(no response)";
+      agentMsg.appendChild(bubble);
+
+      // Durable evidence: aggregate tool activity from the turn log.
+      const calls = turn.calls || 0;
+      if (calls > 0) {
+        const ev = document.createElement("div");
+        ev.className = "agent-chat-tool";
+        const head = document.createElement("div");
+        head.className = "agent-chat-tool-head";
+        head.textContent = `evidence · ${calls} tool call${calls !== 1 ? "s" : ""}`;
+        const body = document.createElement("div");
+        body.className = "agent-chat-tool-body";
+        body.textContent = `Renders: ${turn.renders || 0} · tokens: ${turn.tokens || 0} · ${turn.first_call || "—"}`;
+        ev.appendChild(head);
+        ev.appendChild(body);
+        agentMsg.appendChild(ev);
+      }
+
+      // Durable render image: the turn's render_id is stored in the record and
+      // the PNG is served from disk, so this survives a server restart.
+      if (turn.render_id) {
+        agentMsg.appendChild(makeAgentChatRender(
+          `/api/agent/render?render_id=${encodeURIComponent(turn.render_id)}`,
+          "Agent chart render · click to expand",
+        ));
+      }
+      agentChatMessages.appendChild(agentMsg);
+    });
+    agentChatMessages.scrollTop = agentChatMessages.scrollHeight;
+  }
+
+  function renderAgentChatUserMessage(text) {
+    if (!agentChatMessages) return;
+    // Clear only the empty-state placeholder, not the conversation history.
+    const empty = agentChatMessages.querySelector(".agent-chat-empty");
+    if (empty) empty.remove();
+    const msg = document.createElement("div");
+    msg.className = "agent-chat-msg user";
+    const meta = document.createElement("div");
+    meta.className = "agent-chat-meta";
+    const when = document.createElement("span");
+    when.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    meta.appendChild(when);
+    msg.appendChild(meta);
+    const bubble = document.createElement("div");
+    bubble.className = "agent-chat-bubble";
+    bubble.textContent = text;
+    msg.appendChild(bubble);
+    agentChatMessages.appendChild(msg);
+    agentChatMessages.scrollTop = agentChatMessages.scrollHeight;
+    return msg;
+  }
+
+  function appendAgentChatAgentBubble(container, text) {
+    const bubble = document.createElement("div");
+    bubble.className = "agent-chat-bubble";
+    bubble.textContent = text || "(no response)";
+    container.appendChild(bubble);
+    return bubble;
+  }
+
+  // One chat chart render; the image opens the full-size preview modal on click.
+  function makeAgentChatRender(src, caption) {
+    const rd = document.createElement("div");
+    rd.className = "agent-chat-render";
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = "Agent chart render";
+    img.loading = "lazy";
+    img.title = "Click to expand";
+    img.addEventListener("click", () => openAgentRenderPreview(img.src, img.alt));
+    rd.appendChild(img);
+    const cap = document.createElement("div");
+    cap.className = "agent-chat-render-cap";
+    cap.textContent = caption || "Agent chart render · click to expand";
+    rd.appendChild(cap);
+    return rd;
+  }
+
+  async function agentSendChat(message) {
+    const input = agentChatInputSlider || agentChatInput;
+    if (!input) return;
+    const text = (message || input.value || "").trim();
+    if (!text) return;
+    if (agentChatSending) return;
+    agentChatSending = true;
+
+    renderAgentChatUserMessage(text);
+    input.value = "";
+
+    // Loading state: the Send button becomes a spinner, both inputs disable.
+    const sendBtn = btnAgentSendSlider || btnAgentSend;
+    const oldBtnLabel = sendBtn ? sendBtn.innerHTML : "";
+    if (sendBtn) {
+      sendBtn.disabled = true;
+      sendBtn.classList.add("is-loading");
+      sendBtn.innerHTML = '<span class="agent-spinner" aria-hidden="true"></span>';
+    }
+    input.disabled = true;
+
+    const agentMsg = document.createElement("div");
+    agentMsg.className = "agent-chat-msg agent";
+    const meta = document.createElement("div");
+    meta.className = "agent-chat-meta";
+    const when = document.createElement("span");
+    when.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    meta.appendChild(when);
+    agentMsg.appendChild(meta);
+    const evidence = document.createElement("div");
+    evidence.className = "agent-chat-evidence";
+    agentMsg.appendChild(evidence);
+    agentChatMessages.appendChild(agentMsg);
+    agentChatMessages.scrollTop = agentChatMessages.scrollHeight;
+
+    // Placeholder bubble replaced by the final reply.
+    const placeholder = document.createElement("div");
+    placeholder.className = "agent-chat-bubble agent-chat-thinking";
+    placeholder.textContent = "thinking…";
+    agentMsg.appendChild(placeholder);
+
+    function scrollChatBottom() {
+      agentChatMessages.scrollTop = agentChatMessages.scrollHeight;
+    }
+
+    function addEventRow(kind, lines) {
+      const row = document.createElement("div");
+      row.className = `agent-chat-evt is-${kind}`;
+      row.textContent = lines.replace(/\s+/g, " ").slice(0, 220);
+      evidence.appendChild(row);
+      scrollChatBottom();
+    }
+
+    function addRender(data) {
+      const renderId = data.render_id || "";
+      if (!renderId || evidence.querySelector(`[data-render-id="${renderId}"]`)) {
+        addEventRow("info", `chart rendered (${data.bars || "?"} tags)`);
+        return;
+      }
+      const rd = makeAgentChatRender(
+        `/api/agent/render?render_id=${encodeURIComponent(renderId)}`,
+        "Agent chart render" + (data.timeframe ? ` · ${data.timeframe}` : "") + " · click to expand",
+      );
+      rd.dataset.renderId = renderId;
+      evidence.appendChild(rd);
+      scrollChatBottom();
+    }
+
+    function handleStreamEvent(evName, data) {
+      if (evName === "model_call_started") {
+        addEventRow("round", `model round ${data.round || "?"} — thinking`);
+      } else if (evName === "model_response") {
+        addEventRow("round", `model round ${data.round || "?"} done · finish=${data.finish_reason || "?"} · ${data.tool_calls || 0} tool call(s)`);
+      } else if (evName === "tool_call") {
+        const args = JSON.stringify(data.arguments || {});
+        addEventRow("tool", `Δ ${data.name || "tool"}(${args})`);
+      } else if (evName === "tool_result") {
+        addEventRow(data.ok ? "ok" : "err", `${data.ok ? "✓" : "✗"} ${data.name || "tool"} — ${(data.preview || "").slice(0, 160)}`);
+      } else if (evName === "chat_render") {
+        addRender(data);
+      }
+      // "start" and "done"/"error" are handled by the caller.
+    }
+
+    let finalData = null;
+    let ok = true;
+    try {
+      const res = await fetch(`/api/agent/chat?message=${encodeURIComponent(text)}`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream") && res.body) {
+        // Parse the SSE body progressively: blocks split on blank lines,
+        // `event:` and `data:` fields per the SSE wire format.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let started = false;
+        while (true) {
+          const { value, done: streamDone } = await reader.read();
+          if (streamDone) break;
+          buffer += decoder.decode(value, { stream: true });
+          let blockEnd;
+          while ((blockEnd = buffer.indexOf("\n\n")) >= 0) {
+            const block = buffer.slice(0, blockEnd);
+            buffer = buffer.slice(blockEnd + 2);
+            let evName = "";
+            const dataLines = [];
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event:")) evName = line.slice(6).trim();
+              else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+            }
+            if (!evName || !dataLines.length) continue;
+            let data = {};
+            try { data = JSON.parse(dataLines.join("\n")); } catch (err) { data = {}; }
+            if (evName === "start") {
+              started = true;
+              placeholder.textContent = "thinking… (agent is reading the chart)";
+            } else if (evName === "done") {
+              finalData = data;
+            } else {
+              handleStreamEvent(evName, data);
+            }
+          }
+        }
+        if (!started && !finalData) throw new Error("empty chat stream");
+      } else {
+        // Fallback: plain JSON body (an older server or an error payload).
+        finalData = await res.json();
+      }
+
+      ok = !!(finalData && finalData.ok !== false);
+      placeholder.remove();
+      appendAgentChatAgentBubble(agentMsg, (finalData && finalData.response) || "(no response)");
+      if (!ok) {
+        const err = document.createElement("div");
+        err.className = "agent-chat-tool-err";
+        err.textContent = `turn not run: ${(finalData && finalData.reason) || "refused"}`;
+        agentMsg.appendChild(err);
+      }
+      await fetchAgentChatHistory();
+    } catch (exc) {
+      placeholder.remove();
+      const err = document.createElement("div");
+      err.className = "agent-chat-tool-err";
+      err.textContent = `chat failed: ${exc.message}`;
+      agentMsg.appendChild(err);
+    } finally {
+      agentChatSending = false;
+      if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.classList.remove("is-loading");
+        sendBtn.innerHTML = oldBtnLabel;
+      }
+      input.disabled = false;
+      scrollChatBottom();
+    }
+  }
+
+  if (btnAgentChat) {
+    btnAgentChat.addEventListener("click", openAgentChat);
+  }
+  if (agentChatSliderClose) {
+    agentChatSliderClose.addEventListener("click", closeAgentChat);
+  }
+  if (btnAgentChatClose) {
+    btnAgentChatClose.addEventListener("click", closeAgentChat);
+  }
+  if (btnAgentChatClear) {
+    btnAgentChatClear.addEventListener("click", async () => {
+      // "Clear context" must be durable, not cosmetic: the server moves the
+      // store's clear marker so the history endpoint AND the agent's
+      // briefing memory drop everything before it. Only on success do we
+      // wipe the view — on failure the old conversation stays visible.
+      try {
+        const res = await fetch("/api/agent/chat/clear", { method: "POST" });
+        if (!res.ok) throw new Error("clear failed");
+        agentChatHistory = [];
+        if (agentChatMessages) {
+          agentChatMessages.innerHTML = `<div class="agent-chat-empty">Chat cleared. Start a new conversation.</div>`;
+        }
+      } catch (err) {
+        fetchAgentChatHistory(); // nothing was cleared server-side
+      }
+    });
+  }
+  if (btnAgentSend) {
+    btnAgentSend.addEventListener("click", () => agentSendChat(null));
+  }
+  if (btnAgentSendSlider) {
+    btnAgentSendSlider.addEventListener("click", () => agentSendChat(null));
+  }
+  if (agentChatInput) {
+    agentChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        agentSendChat(null);
+      }
+    });
+  }
+  if (agentChatInputSlider) {
+    agentChatInputSlider.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        agentSendChat(null);
+      }
+    });
   }
 
   if (btnAgent) btnAgent.addEventListener("click", openAgent);

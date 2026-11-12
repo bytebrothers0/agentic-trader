@@ -42,12 +42,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agentic._dialect import coerce_proposal
 from agentic._time import as_aware, seconds_remaining
 from agentic.conditions import ConditionError
-from agentic.feed import Feed, FeedSnapshot, InsufficientHistory, LevelRecord
+from agentic.feed import (
+    KNOWN_FAMILIES,
+    Feed,
+    FeedSnapshot,
+    InsufficientHistory,
+    LevelRecord,
+)
 from agentic.lookup import level_lookup
 from agentic.models import Layout, Serde, Subscription, SubscriptionKind
 from agentic.prompts import subscription_summary
@@ -333,6 +339,7 @@ def resolve_pins(
     snapshot: FeedSnapshot,
     *,
     cache: Optional[Dict[Tuple[str, int, int, str], FeedSnapshot]] = None,
+    allowed_families: Optional[Sequence[str]] = None,
 ) -> List[LevelRecord]:
     """Every open pin resolved to a :class:`LevelRecord` for the render.
 
@@ -344,11 +351,15 @@ def resolve_pins(
     single-fetch path); when the view's ``status_filter`` filtered a pinned
     level out — a pin may deliberately name a now-dead level — one ``"all"``
     snapshot is fetched and retried. Pins are exempt from the status filter the
-    way they are exempt from the renderer's ray budget.
+    way they are exempt from the renderer's ray budget. ``allowed_families``
+    (the operator's indicator knob) restricts the families the fetch asks for.
     """
     view = store.data.view
     symbol = view.symbol or store.data.symbol
     families = list(view.families)
+    if allowed_families is not None:
+        allowed = {str(f) for f in allowed_families}
+        families = [f for f in families if str(f) in allowed]
     bars_count = int(view.bars)
     offset = int(view.offset or 0)
     dial = str(getattr(view, "status_filter", "all") or "all").lower()
@@ -392,6 +403,7 @@ def render_current(
     cache: Optional[Dict[Tuple[str, int, int], FeedSnapshot]] = None,
     include_pins: bool = True,
     plain: bool = False,
+    allowed_families: Optional[Sequence[str]] = None,
 ) -> RenderResult:
     """Render the store's view + pins to an image and its tag manifest.
 
@@ -419,6 +431,11 @@ def render_current(
     # Empty the returned snapshots as well as requesting no families: this keeps
     # custom providers from accidentally leaking levels into the plain chart.
     families = [] if plain else list(view.families)[:MAX_FAMILIES_PER_IMAGE]
+    if allowed_families is not None:
+        # The operator's indicator knob: a persisted view may still name a
+        # family that has since been disabled — never fetch or draw it.
+        allowed = {str(f) for f in allowed_families}
+        families = [f for f in families if str(f) in allowed]
     bars_count = MAX_BARS if plain else int(view.bars)
     offset = int(view.offset or 0)
     status_filter = str(getattr(view, "status_filter", "all") or "all").lower()
@@ -454,7 +471,13 @@ def render_current(
     bars = feed.bars(symbol, timeframe, bars=bars_count, offset=offset)
     if cache is not None:
         cache[_cache_key(timeframe, bars_count, offset, status_filter)] = snapshot
-    pins = resolve_pins(store, feed, snapshot, cache=cache) if include_pins else []
+    pins = (
+        resolve_pins(
+            store, feed, snapshot, cache=cache, allowed_families=allowed_families
+        )
+        if include_pins
+        else []
+    )
     return renderer.render(
         snapshot,
         bars,
@@ -577,6 +600,7 @@ class ToolRegistry:
         now: Optional[datetime] = None,
         require_context_view: bool = False,
         max_renders: int = MAX_RENDERS_PER_TURN,
+        enabled_families: Optional[Sequence[str]] = None,
     ):
         self._store = store
         self._feed = feed
@@ -592,6 +616,18 @@ class ToolRegistry:
         except (TypeError, ValueError):
             cap = MAX_RENDERS_PER_TURN
         self._max_renders = cap if cap >= 1 else MAX_RENDERS_PER_TURN
+        # The indicator families the operator enabled in the settings tab.
+        # ``None`` means every known family (the shipped default); an explicit
+        # list restricts the set_view schema, the set_view validation and every
+        # snapshot/render fetch to exactly those families. Unknown names are
+        # dropped (not an error): the caller's list and the feed's vocabulary
+        # must never disagree enough to brick a turn.
+        if enabled_families is None:
+            self._enabled_families: Optional[Tuple[str, ...]] = None
+        else:
+            self._enabled_families = tuple(dict.fromkeys(
+                str(f) for f in enabled_families if str(f) in KNOWN_FAMILIES
+            ))
 
         self._notes: List[Dict[str, Any]] = []
         self._renders = 0
@@ -611,16 +647,46 @@ class ToolRegistry:
         instant = self._now if self._now is not None else self._clock()
         return as_aware(instant)
 
+    def _active_families(self, families: Sequence[str]) -> List[str]:
+        """The requested families kept only where the operator enabled them."""
+        if self._enabled_families is None:
+            return list(families)
+        allowed = set(self._enabled_families)
+        return [f for f in families if str(f) in allowed]
+
+    def _schema_with_family_enum(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The set_view schema with ``families`` restricted to enabled ones.
+
+        The model must never be offered a family it cannot see on a chart:
+        the enum it is shown *is* the operator's knob.
+        """
+        props = dict(params.get("properties") or {})
+        families = dict(props.get("families") or {})
+        enum = list(self._enabled_families or ())
+        families["enum"] = enum
+        if not enum:
+            families["description"] = (
+                "No indicator families are enabled for this agent. Only [] "
+                "(a plain candle chart) is valid."
+            )
+        props["families"] = families
+        return {**params, "properties": props}
+
     def schemas(self) -> List[Dict[str, Any]]:
         """The tool definitions handed to the model."""
-        return [
-            {
-                "name": name,
-                "description": TOOL_DESCRIPTIONS.get(name, ""),
-                "parameters": TOOL_SCHEMAS.get(name, DEFAULT_TOOL_PARAMETERS),
-            }
-            for name in TOOL_NAMES
-        ]
+        out: List[Dict[str, Any]] = []
+        for name in TOOL_NAMES:
+            params = TOOL_SCHEMAS.get(name, DEFAULT_TOOL_PARAMETERS)
+            if name == "set_view" and self._enabled_families is not None:
+                params = self._schema_with_family_enum(params)
+            out.append(
+                {
+                    "name": name,
+                    "description": TOOL_DESCRIPTIONS.get(name, ""),
+                    "parameters": params,
+                }
+            )
+        return out
 
     def execute(self, call: ToolCall) -> ToolResult:
         """Run one tool call. **Never raises** — a failure is an ``ok=False`` result."""
@@ -701,6 +767,10 @@ class ToolRegistry:
             cache=self._snapshots,
             include_pins=include_pins,
             plain=plain,
+            allowed_families=(
+                None if self._enabled_families is None
+                else list(self._enabled_families)
+            ),
         )
         self._renders += 1
         self.last_result = result
@@ -726,7 +796,7 @@ class ToolRegistry:
             self._snapshots[key] = self._feed.snapshot(
                 symbol,
                 tf,
-                families=list(view.families),
+                families=self._active_families(view.families),
                 bars=bars,
                 offset=offset,
                 status_filter=status_filter,
@@ -752,10 +822,16 @@ class ToolRegistry:
         requested_families = list(dict.fromkeys(
             str(f) for f in (args.get("families", self._store.data.view.families) or [])
         ))
-        families = requested_families
+        # The operator's families knob is enforced here too (the schema enum is
+        # the model-facing half): anything not enabled is dropped, and the
+        # set_view result reports it under ``families_deferred`` so the model
+        # understands why the chart does not show it.
+        families = self._active_families(requested_families)
         if self._require_context_view:
             # Repair the constrained first view at the tool boundary so one
             # imperfect model call cannot consume the entire analysis budget.
+            # The context family (liquidity) is only seeded when the operator
+            # still enables it; otherwise the first enabled family stands in.
             current = str(self._store.data.view.timeframe or "M15")
             panes = list(args.get("panes") or [])
             if len(panes) != 2 or panes[0] == panes[1]:
@@ -763,7 +839,16 @@ class ToolRegistry:
             args["layout"] = "split"
             args["panes"] = panes
             args["timeframe"] = str(panes[0])
-            families = ["liquidity", *[str(f) for f in families if str(f) != "liquidity"][:MAX_FAMILIES_PER_IMAGE - 1]]
+            if self._enabled_families is None or "liquidity" in self._enabled_families:
+                seed = ["liquidity"]
+            elif self._enabled_families:
+                seed = [self._enabled_families[0]]
+            else:
+                seed = []
+            families = [
+                *seed,
+                *[str(f) for f in families if str(f) not in seed],
+            ][:MAX_FAMILIES_PER_IMAGE]
             self._require_context_view = False
         else:
             families = families[:MAX_FAMILIES_PER_IMAGE]

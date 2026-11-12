@@ -111,6 +111,7 @@ from agentic.agent_loop import (
     AgentLoop,
     AgentReply,
     AgentRequest,
+    ChatTurnResult,
     ScriptedAgent,
     TurnOutcome,
 )
@@ -192,6 +193,7 @@ __all__ = [
     "AgentLoop",
     "AgentReply",
     "AgentRequest",
+    "ChatTurnResult",
     "MAX_TOOL_ROUNDS",
     "SYSTEM_PROMPT",
     "ScriptedAgent",

@@ -48,6 +48,7 @@ from agentic.agent_loop import (
     MAX_TOOL_ROUNDS,
     AgentLoop,
     AgentReply,
+    ChatTurnResult,
     ScriptedAgent,
     TurnOutcome,
 )
@@ -146,6 +147,22 @@ def _settings_turn_limits() -> Dict[str, float]:
         "max_turns_per_hour": num("AGENT_MAX_TURNS_PER_HOUR", MAX_TURNS_PER_HOUR),
         "max_turns_per_day": num("AGENT_MAX_TURNS_PER_DAY", MAX_TURNS_PER_DAY),
     }
+
+
+def _settings_families() -> List[str]:
+    """Read the operator's enabled indicator families — live, per turn.
+
+    Injected into the :class:`~agentic.agent_loop.AgentLoop` (``families=``):
+    the loop is a pure module, so this settings-tab read lives here. A failure
+    in the registry degrades in the loop to *all* families, so a broken
+    ``config/families_state.json`` can never silence the agent entirely.
+    """
+    try:
+        from strategy.families_registry import enabled_families
+        return enabled_families()
+    except Exception:  # noqa: BLE001 — degrade to the shipped default
+        from agentic.feed import KNOWN_FAMILIES
+        return list(KNOWN_FAMILIES)
 
 
 @dataclass
@@ -669,6 +686,7 @@ class AgentService:
             playbook=self._strategy.text,
             activity=self.emit_activity,
             leash=_settings_leash,
+            families=_settings_families,
         )
 
     def _record_failure(self, where: str, exc: BaseException) -> None:
@@ -908,6 +926,115 @@ class AgentService:
             self.emit_activity("turn_finished", self._turn_finished_payload(outcome))
             self._resolve_orders("request")
         return outcome
+
+    def chat_turn(self, message: str, emit: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        """A free-form chat turn: the human asks, the agent answers using tools.
+
+        Same prompt, same tools as the autonomous agent — no order tool, no
+        forced workflow. Returns the assistant's text response plus any tool
+        calls and renders so a chat UI can show a straight conversation.
+
+        ``emit`` (optional) receives live progress events from the loop
+        (``turn_started``/``model_call_started``/``model_response``/
+        ``tool_call``/``tool_result``/``chat_render``) while the turn runs.
+        """
+        with self._turn_lock:
+            try:
+                result = self._loop().chat_turn(
+                    str(message or "").strip(), activity=emit,
+                )
+            except Exception as exc:  # noqa: BLE001 — report, never raise out
+                self._record_failure("chat_turn", exc)
+                return {
+                    "ok": False,
+                    "reason": str(exc),
+                    "response": "",
+                    "turn_id": "",
+                    "render_id": "",
+                    "tool_calls": [],
+                    "renders": 0,
+                    "image_path": "",
+                    "manifest": {},
+                    "output": {},
+                }
+            self._remember_render_from_chat(result)
+            self.emit_activity(
+                "chat_turn_finished",
+                {
+                    "turn_id": result.turn_id,
+                    "ok": result.ok,
+                    "reason": result.reason,
+                    "renders": result.renders,
+                    "tool_calls": len(result.tool_calls),
+                },
+            )
+            return {
+                "ok": result.ok,
+                "reason": result.reason,
+                "response": result.response,
+                "turn_id": result.turn_id,
+                "render_id": (result.manifest or {}).get("render_id", ""),
+                "tool_calls": list(result.tool_calls or []),
+                "renders": result.renders,
+                "image_path": result.image_path,
+                "manifest": dict(result.manifest or {}),
+                "output": dict(result.output or {}),
+            }
+
+    def chat_stream(self, message: str):
+        """Yield ``(event, payload)`` pairs for one chat turn, live.
+
+        The turn runs on a daemon thread (it can take a minute or more at a
+        slow provider); loop progress events — ``turn_started``,
+        ``model_call_started``, ``model_response``, ``tool_call``,
+        ``tool_result``, ``chat_render`` — arrive as they happen, and the
+        stream ends with a ``done`` event carrying the full chat payload
+        (response text, tool log, render id) — or an ``error`` event when the
+        turn itself raised. Server-Sent Events wire format is applied in
+        ``server.py``; this generator deals in domain events only.
+        """
+        import queue as _queue
+        import threading as _threading
+
+        q: _queue.Queue = _queue.Queue()
+
+        def emit(event: str, data: Optional[Dict[str, Any]] = None) -> None:
+            try:
+                q.put((str(event), dict(data or {})))
+            except Exception:  # noqa: BLE001 — an SSE hiccup must not kill the turn
+                pass
+
+        def run() -> None:
+            try:
+                emit("start", {"message": str(message or ""), "mode": str(self.config.mode)})
+                result = self.chat_turn(message, emit=emit)
+                emit("done", result)
+            except Exception as exc:  # noqa: BLE001 — every stream must end
+                self._record_failure("chat_stream", exc)
+                emit("done", {
+                    "ok": False, "reason": str(exc) or "chat failed",
+                    "response": "", "turn_id": "", "render_id": "",
+                    "tool_calls": [], "renders": 0, "image_path": "",
+                    "manifest": {}, "output": {},
+                })
+            q.put(None)  # sentinel: stream over
+
+        worker = _threading.Thread(target=run, name="agent-chat-turn", daemon=True)
+        worker.start()
+        while True:
+            item = q.get()
+            if item is None:
+                return
+            yield item
+
+    def _remember_render_from_chat(self, result: ChatTurnResult) -> None:
+        """Cache the last chat render so the panel can serve it."""
+        if result.image_path and result.manifest:
+            self._last_render = {
+                "render_id": result.manifest.get("render_id", ""),
+                "image_path": result.image_path,
+                "manifest": dict(result.manifest or {}),
+            }
 
     def _resolve_orders(self, source: str) -> None:
         """Execute fresh proposals (``AGENT_EXECUTE_TRADES``) and feed the panel.
@@ -1162,39 +1289,91 @@ class AgentService:
         """The turn log, newest first: id, trigger, started_at and the output."""
         return self._turn_rows(limit)
 
+    def chat_turns(self, limit: int = DEFAULT_TURNS_LIMIT) -> List[dict]:
+        """The chat conversation for the chat panel, newest first.
+
+        Only ``request`` turns recorded *after* the operator's last "clear
+        context" (``agent.chat_cleared_at``). The turn log is append-only
+        audit and is never deleted — but a cleared conversation must not come
+        back, neither in the UI nor in the agent's briefing memory
+        (``prompts.chat_history_rows`` applies the same marker).
+        """
+        cleared_raw = getattr(self.store.data.agent, "chat_cleared_at", None)
+        cleared = as_aware(cleared_raw) if cleared_raw is not None else None
+        kept = []
+        for turn in list(self.store.data.turns):
+            trigger = getattr(turn, "trigger", "")
+            trigger = trigger.value if hasattr(trigger, "value") else str(trigger)
+            if trigger != "request":
+                continue
+            if cleared is not None:
+                started = getattr(turn, "started_at", None)
+                if started is None or as_aware(started) <= cleared:
+                    continue
+            kept.append(turn)
+        if limit and limit > 0:
+            kept = kept[-int(limit):]
+        return [self._turn_row(turn) for turn in reversed(kept)]
+
+    def chat_clear(self) -> Dict[str, Any]:
+        """Clear the chat conversation — the chat panel's "clear context".
+
+        The turn log is append-only audit and is never touched; instead the
+        store's ``agent.chat_cleared_at`` marker moves to now. Both readers of
+        the conversation — ``chat_turns`` (the panel's history) and
+        ``chat_history_rows`` (the briefing's chat memory) — only see turns
+        after the marker, so the UI *and* the agent's memory start fresh, and
+        the marker persists across restarts.
+        """
+        store = self.store
+        store.data.agent.chat_cleared_at = as_aware(self._clock())
+        store.save()
+        return {
+            "ok": True,
+            "cleared_at": store.data.agent.chat_cleared_at.isoformat(),
+        }
+
+    def _turn_row(self, turn: Any) -> Dict[str, Any]:
+        """One turn record -> the row the panel and chat history show."""
+        conclusion = turn_conclusion(turn)
+        calls = list(getattr(turn, "tool_calls", []) or [])
+        output = dict(getattr(turn, "output", {}) or {})
+        thesis = output.get("thesis") if isinstance(output.get("thesis"), dict) else {}
+        refused = sum(
+            1 for entry in calls
+            if not ((entry or {}).get("result") or {}).get("ok", True)
+        )
+        return {
+            "id": conclusion["turn_id"],
+            "trigger": conclusion["trigger"],
+            "started_at": conclusion["at"],
+            "output": output,
+            "summary": conclusion["conclusion"],
+            # what the model actually did (the dashboard shows real
+            # activity; the full call log stays in the state file)
+            "calls": len(calls),
+            "refused": refused,
+            "renders": int(getattr(turn, "renders", 0) or 0),
+            "tokens": int(getattr(turn, "tokens", 0) or 0),
+            "cost_usd": float(getattr(turn, "cost_usd", 0.0) or 0.0),
+            "first_call": (
+                ((calls[0] or {}).get("call") or {}).get("name", "") if calls else ""
+            ),
+            "thesis_bias": thesis.get("bias", ""),
+            # Durable chat fields: the UI rebuilds the conversation
+            # after a server restart from exactly these — the operator's
+            # message, the agent's chat wording, and the render id of
+            # the chart the turn drew.
+            "message": str(getattr(turn, "trigger_detail", "") or ""),
+            "chat_response": str(output.get("chat_response") or ""),
+            "render_id": str(output.get("render_id") or ""),
+        }
+
     def _turn_rows(self, limit: int) -> List[Dict[str, Any]]:
         turns = list(self.store.data.turns)
         if limit and limit > 0:
             turns = turns[-int(limit):]
-        rows: List[Dict[str, Any]] = []
-        for turn in reversed(turns):
-            conclusion = turn_conclusion(turn)
-            calls = list(getattr(turn, "tool_calls", []) or [])
-            output = dict(getattr(turn, "output", {}) or {})
-            thesis = output.get("thesis") if isinstance(output.get("thesis"), dict) else {}
-            refused = sum(
-                1 for entry in calls
-                if not ((entry or {}).get("result") or {}).get("ok", True)
-            )
-            rows.append(
-                {
-                    "id": conclusion["turn_id"],
-                    "trigger": conclusion["trigger"],
-                    "started_at": conclusion["at"],
-                    "output": output,
-                    "summary": conclusion["conclusion"],
-                    # what the model actually did (the dashboard shows real
-                    # activity; the full call log stays in the state file)
-                    "calls": len(calls),
-                    "refused": refused,
-                    "renders": int(getattr(turn, "renders", 0) or 0),
-                    "tokens": int(getattr(turn, "tokens", 0) or 0),
-                    "cost_usd": float(getattr(turn, "cost_usd", 0.0) or 0.0),
-                    "first_call": ((calls[0] or {}).get("call") or {}).get("name", ""),
-                    "thesis_bias": thesis.get("bias", ""),
-                }
-            )
-        return rows
+        return [self._turn_row(turn) for turn in reversed(turns)]
 
     def render_path(self, render_id: str) -> Optional[str]:
         """Resolve a render id to its PNG, refusing traversal and unknown ids.

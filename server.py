@@ -1122,6 +1122,71 @@ def agent_run_now(message: str = Query("")):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/agent/chat")
+def agent_chat(message: str = Query("")):
+    """A free-form chat turn, streamed as Server-Sent Events.
+
+    The body is a live progress stream — ``start``, then the loop's
+    ``turn_started``/``model_call_started``/``model_response``/``tool_call``/
+    ``tool_result``/``chat_render`` events as they happen, and a final
+    ``done`` event carrying the full chat payload (the assistant's text
+    response, tool log and render id).
+    """
+    try:
+        service = get_agent_service()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    def sse():
+        yield ": chat stream open\n\n"
+        for event, data in service.chat_stream(message):
+            payload = json.dumps(data, ensure_ascii=False, default=str)
+            yield f"event: {event}\ndata: {payload}\n\n"
+        yield ": chat stream closed\n\n"
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/agent/chat/history")
+def agent_chat_history(limit: int = Query(50, ge=1, le=200)):
+    """Recent chat turns (trigger == "request"), newest first, for the chat panel.
+
+    ``AgentService.chat_turns`` applies the operator's "clear context" marker
+    (``agent.chat_cleared_at``): turns at or before it are conversation that
+    was deliberately cleared and do not come back here — or in the agent's
+    briefing memory.
+    """
+    try:
+        service = get_agent_service()
+        chat = service.chat_turns(limit=int(limit))
+        return {"messages": chat}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/chat/clear")
+def agent_chat_clear():
+    """Clear the chat conversation: move the store's clear marker to now.
+
+    The turn log itself is append-only audit and is never deleted; the marker
+    is what both the chat panel's history and the agent's chat memory read,
+    so the conversation (UI + agent memory) starts fresh and stays cleared
+    across restarts.
+    """
+    try:
+        return get_agent_service().chat_clear()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/settings/modules")
 def get_settings_modules():
     """Entry-module registry for the settings tab."""
@@ -1156,6 +1221,38 @@ def toggle_settings_module(module_id: str, enabled: bool = Query(True)):
         return {"ok": True, "modules": set_enabled(module_id, enabled)}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/settings/families")
+def get_settings_families():
+    """Indicator-family knob rows for the settings tab.
+
+    The enabled set controls what the *agent* is offered (its set_view tool
+    schema, validation, chart fetches and prompt guide) — dashboard sidebar
+    layers are unaffected.
+    """
+    try:
+        from strategy.families_registry import list_families
+        return {"families": list_families()}
+    except Exception:
+        return {"families": []}
+
+
+@app.post("/api/settings/families/{family_id}")
+def toggle_settings_family(family_id: str, enabled: bool = Query(True)):
+    """Enable/disable one indicator family for the agent (persists to config/).
+
+    Nothing else needs to happen at toggle time: the agent reads the enabled
+    set fresh at every turn start, so the change applies on the next turn with
+    no restart.
+    """
+    try:
+        from strategy.families_registry import set_enabled
+        return {"ok": True, "families": set_enabled(family_id, enabled)}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/account")
