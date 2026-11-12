@@ -75,6 +75,8 @@ ShutdownTerminal=1
 | v1.03 operating point (real ticks) | d1+sweep, 2×/4× budgets, RR≥1.0 | 31 | 38.7% | +13.39 | 1.03 | 2.72% |
 | v1.04 closed-bar trigger (real ticks) | forming-bar fix | 58 | 32.8% | −246.93 | 0.69 | 4.90% |
 | scout (fixed look-ahead) | same operating point | 70 | 35.7% | +5.36 R | — | — |
+| v1.05 trigger+operating point (real ticks) | d1 bias, sweep-gate, uses 1/2, sw=3, RR≥1.0 | 24 | **45.8%** | **+55.16 (+0.55%)** | **1.20** | 1.02% |
+| v1.05 genetic refinement | custom criterion WR×PF×√trades | running | — | — | — | — |
 
 **Bug log (the loop working as intended):**
 1. **v1.00/v1.01 freshness direction bug** — `ReplayLife` mixed chronological

@@ -60,6 +60,7 @@ input double InpSlBufATR       = 0.10;   // SL buffer beyond reaction extreme (x
 input double InpMinRR          = 1.0;    // skip trades below this reward:risk
 input int    InpTPMode         = 0;      // 0 = nearest opposing level, 1 = fixed RR
 input double InpFixedRR        = 2.0;    // TP distance in R when TPMode=1
+input int    InpEntryStyle     = 0;      // 0 = trigger (M30 swing break), 1 = sweep (enter at the sweep close)
 input int    InpTimeExitBars   = 200;    // M30 bars before time exit (~4 days)
 input bool   InpSessionFilter  = true;   // London/NY hours only
 input int    InpSessionStart   = 7;      // session start hour (UTC)
@@ -549,42 +550,49 @@ void Pipeline()
 
    // optional CRT-style sweep requirement: a wick THROUGH the level then a
    // close back inside, within the reaction window
+   int sweep_bar = -1;
    if(InpRequireSweep)
      {
-      bool swept = false;
-      for(int i = MathMax(1, last - 5); i <= last; i++)
+      for(int i = MathMax(1, last - InpReachBars + 1); i <= last; i++)
         {
          double a_i = AtrAt(g_atr_m30, i, nm);
+         bool bar_swept;
          if(lv.side == SIDE_SUPPORT)
-            swept = swept || (m30[i].low < lv.price - 0.05 * a_i && m30[i].close > lv.price);
+            bar_swept = (m30[i].low < lv.price - 0.05 * a_i && m30[i].close > lv.price);
          else
-            swept = swept || (m30[i].high > lv.price + 0.05 * a_i && m30[i].close < lv.price);
+            bar_swept = (m30[i].high > lv.price + 0.05 * a_i && m30[i].close < lv.price);
+         if(bar_swept && sweep_bar < 0) sweep_bar = i;
         }
-      if(!swept) return;
+      if(sweep_bar < 0) return;
      }
 
    // --- session filter (Alchemist: London/NY only)
    if(!SessionOk(m30[last].time)) return;
 
-   // --- M30 structure-shift trigger (after the touch, near the level)
-   double swing;
-   if(!SwingTrigger(m30_open, m30_close, nm, last, dir, InpSwingPivot, swing)) return;
-   if(touch_bar >= 0 && (last - touch_bar) > InpTrigAfterTouch) return;   // shift must follow the touch
-   if(MathAbs(swing - lv.price) > InpSwingNearATR * atr30) return;        // the shift must live at the level   // --- entry / stop / target
-   double entry = m30[last].close;
+   double entry = 0.0;
    double ext = 0.0;
-   // reaction extreme: since the level's birth is far back, use the last
-   // 12 M30 bars (the approach into the level) for the extreme
-   int seg_from = MathMax(1, last - 11);
-   if(dir > 0)
+   if(InpEntryStyle == 1)
      {
-      ext = m30[seg_from].low;
-      for(int i = seg_from + 1; i <= last; i++) ext = MathMin(ext, m30[i].low);
+      // sweep-sniper entry (scout parity): the sweep must be the JUST-CLOSED
+      // bar; enter at its close, stop beyond the sweep extreme.
+      if(sweep_bar != last) return;
+      entry = m30[last].close;
+      ext = (dir > 0) ? m30[last].low : m30[last].high;
      }
    else
      {
-      ext = m30[seg_from].high;
-      for(int i = seg_from + 1; i <= last; i++) ext = MathMax(ext, m30[i].high);
+      // --- M30 structure-shift trigger (after the touch, near the level)
+      double swing;
+      if(!SwingTrigger(m30_open, m30_close, nm, last, dir, InpSwingPivot, swing)) return;
+      if(touch_bar >= 0 && (last - touch_bar) > InpTrigAfterTouch) return;   // shift must follow the touch
+      if(MathAbs(swing - lv.price) > InpSwingNearATR * atr30) return;        // the shift must live at the level
+      entry = m30[last].close;
+      // reaction extreme: since the level's birth is far back, use the last
+      // 12 M30 bars (the approach into the level) for the extreme
+      int seg_from = MathMax(1, last - 11);
+      ext = (dir > 0) ? m30[seg_from].low : m30[seg_from].high;
+      for(int i = seg_from + 1; i <= last; i++)
+         ext = (dir > 0) ? MathMin(ext, m30[i].low) : MathMax(ext, m30[i].high);
      }
    double sl = (dir > 0) ? ext - InpSlBufATR * atr30 : ext + InpSlBufATR * atr30;
    double risk = MathAbs(entry - sl);

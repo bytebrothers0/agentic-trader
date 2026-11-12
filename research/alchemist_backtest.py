@@ -430,10 +430,10 @@ def run(start, end, params=None):
                     break
 
         if P.get("entry_style", "trigger") == "sweep":
-            # sniper entry: market at the sweep candle's close (price already
-            # back inside the level); the reaction has begun, no confirmation
-            # giveaway. Stop beyond the sweep extreme; target unchanged.
-            if sweep_bar < 0:
+            # sniper entry: market at the close of the bar right after the
+            # sweep bar closed (strict parity with the EA: the sweep must be
+            # the JUST-CLOSED bar — no stale-price fills).
+            if sweep_bar != k:
                 continue
             entry = float(m30_cl[sweep_bar])
             if dirn > 0:
