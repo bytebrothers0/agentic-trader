@@ -72,6 +72,9 @@ ShutdownTerminal=1
 | v1.00 baseline (2025.11.01→2026.11.10) | defaults, TP=nearest level | 26 | 23.1% | −359.44 (−3.6%) | 0.64 | 4.33% |
 | v1.01 sequencing sweep | genetic, custom criterion | **aborted** — swept a buggy EA | — | — | — | — |
 | v1.02 freshness fix (fresh-only) | replay scans bars AFTER birth | **0** | — | 0.00 | — | 0.00% |
+| v1.03 operating point (real ticks) | d1+sweep, 2×/4× budgets, RR≥1.0 | 31 | 38.7% | +13.39 | 1.03 | 2.72% |
+| v1.04 closed-bar trigger (real ticks) | forming-bar fix | 58 | 32.8% | −246.93 | 0.69 | 4.90% |
+| scout (fixed look-ahead) | same operating point | 70 | 35.7% | +5.36 R | — | — |
 
 **Bug log (the loop working as intended):**
 1. **v1.00/v1.01 freshness direction bug** — `ReplayLife` mixed chronological
@@ -84,9 +87,17 @@ ShutdownTerminal=1
    so rare that the EA trades zero times in a year. The Alchemist doctrine's
    **2-times (H4) / 4-times (D1) rules** exist for exactly this — a level
    remains usable after wick touches as long as no body close breaks it.
-   `InpRequireFresh=false` activates the use budgets; the grid probe
-   (`research/grid_probe.py`) is finding the right operating point, and the
-   genetic sweep validates it in the MT5 tester.
-3. The Alchemist sequence constraints added in v1.01 remain: trigger within
-   N bars after the touch, broken swing at the level (≤ X ATR), optional
-   sweep requirement.
+   `InpRequireFresh=false` activates the use budgets.
+3. **The tester reuses the last-used inputs** when no `ExpertParameters` is
+   given in the INI — the v1.03 year run silently ran OLD defaults (0 trades).
+   Always pass an explicit `.set` file.
+4. **v1.03/v1.04 forming-bar bugs** — the EA treated the forming M30/H4/D1
+   bar as closed: tick-level "swing break" fired entries on wicks. v1.04
+   slices the forming bar off every CopyRates use.
+5. **The scout had a look-ahead** — it included the forming H4/D1 bar
+   (open < decision time) in the book using its FINAL OHLC, i.e. prices up to
+   4 h after the decision. After the fix the scout's 59% WR collapsed to
+   ~36% and matched the EA — the honest baseline is **~33-36% win rate with
+   a small positive edge**. Round-3 probing (grid_probe3.py) hunts filters
+   (uses budgets, reach window, session window, RR gate, bias mode) that
+   raise the win rate legitimately, before the MT5 genetic refinement.
