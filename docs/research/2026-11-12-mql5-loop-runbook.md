@@ -103,3 +103,17 @@ ShutdownTerminal=1
    a small positive edge**. Round-3 probing (grid_probe3.py) hunts filters
    (uses budgets, reach window, session window, RR gate, bias mode) that
    raise the win rate legitimately, before the MT5 genetic refinement.
+6. **Scout sweep entries used unfillable stale prices** — the 52% WR sweep
+   variant entered at the sweep candle's close whenever one appeared inside
+   the 12-bar window. Restricting to the JUST-CLOSED sweep bar (EA parity)
+   gives 18 trades / 33% WR / +6.7R (avg RR 4.25). The honest best is the
+   **trigger-confirm style: 29 trades, 48.3% WR, +12.1R (+0.42R/trade)** —
+   v1.05 implements both styles (`InpEntryStyle` 0=trigger 1=sweep).
+
+## v1.05 validated on real ticks (Model=4 + ExecutionMode=100)
+
+24 trades, **45.8% win rate**, PF 1.20, net +55.16 (+0.55%), max DD 1.02%,
+Sharpe 3.08, avg win $30.52 / avg loss $21.58. Parity with the scout holds
+(scout: 29 trades / 48.3% — M5-vs-real-tick tolerance). This is the honest
+operating point; the genetic refinement (custom criterion WR×PF×√trades,
+min 10 trades) is sweeping the gate parameters around it in the MT5 tester.
