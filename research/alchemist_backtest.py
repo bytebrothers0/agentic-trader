@@ -126,7 +126,8 @@ def _pivot_break_dir(c: np.ndarray, w: int) -> int:
 
 def storyline(d1: pd.DataFrame, h1: pd.DataFrame, ts: pd.Timestamp) -> int:
     d1i, d1c = d1.index, d1["close"].values
-    dp = d1i.searchsorted(ts)          # bars closed before ts
+    # only bars that had CLOSED before ts (exclude the forming bar)
+    dp = d1i.searchsorted(ts - timedelta(days=1), side="right")
     d1v = d1c[max(0, dp - 120): dp]    # EA parity: 120 D1 closes
     if len(d1v) < 60:
         return 0
@@ -136,7 +137,7 @@ def storyline(d1: pd.DataFrame, h1: pd.DataFrame, ts: pd.Timestamp) -> int:
     if P.get("bias_mode", "d1_h1") == "d1":
         return a
     h1c = h1["close"].values
-    hp = h1.index.searchsorted(ts)
+    hp = h1.index.searchsorted(ts - timedelta(hours=1), side="right")
     h1v = h1c[max(0, hp - 400): hp]
     if len(h1v) < 60:
         return 0
@@ -228,8 +229,10 @@ class Book:
         self.built_on: Optional[pd.Timestamp] = None
 
     def rebuild(self, ts: pd.Timestamp) -> None:
-        h4 = self.h4[self.h4.index < ts]
-        d1 = self.d1[self.d1.index < ts]
+        # bars that had CLOSED before the decision instant (no forming bar —
+        # a forming bar's final OHLC reaches hours past ts: look-ahead)
+        h4 = self.h4[self.h4.index + timedelta(hours=4) <= ts]
+        d1 = self.d1[self.d1.index + timedelta(days=1) <= ts]
         if len(h4) < 40 or len(d1) < 20:
             return
         h4 = h4.tail(P["h4_bars"])
@@ -491,10 +494,10 @@ def run(start, end, params=None):
 
 
 def _prev_closed_h4(t: pd.Timestamp) -> pd.Timestamp:
-    """The last H4 bar that closed before or at t (book rebuild marker)."""
+    """The last H4 bar that had CLOSED before t (book rebuild marker)."""
     h4 = load("H4")
     idx = h4.index
-    pos = idx.searchsorted(t, side="right") - 1
+    pos = idx.searchsorted(t - timedelta(hours=4), side="right") - 1
     return idx[pos] if pos >= 0 else idx[0]
 
 

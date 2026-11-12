@@ -1,22 +1,23 @@
-; MSNR_Alchemist tester parameter set (MQL5\Profiles\Tester\MSNR_Alchemist.set)
+; MSNR_Alchemist tester parameter set — v1.03 operating point (grid probe r2 winner)
 ; Format: name=value||start||step||stop||Y/N  (single-run uses the plain value)
-InpGapMinATR=0.10||0.05||0.05||0.50||N
+InpBiasMode=0||0||1||1||N
+InpGapMinATR=0.1||0.05||0.05||0.50||N
 InpOclRunMin=2||2||1||4||N
 InpH4Bars=300||300||100||1000||N
 InpD1Bars=60||60||20||200||N
 InpLevelMaxAgeBars=300||150||50||600||N
-InpBreakBufATR=0.10||0.05||0.05||0.30||N
+InpBreakBufATR=0.1||0.05||0.05||0.30||N
 InpUsesH4=2||1||1||4||N
 InpUsesD1=4||2||1||6||N
-InpRequireFresh=true||false||1||true||N
+InpRequireFresh=false||false||1||true||N
 InpStoryPivot=3||2||1||5||N
 InpSwingPivot=2||1||1||5||N
 InpTrigAfterTouch=8||3||1||12||N
-InpSwingNearATR=0.75||0.25||0.25||1.50||N
-InpRequireSweep=false||false||1||true||N
+InpSwingNearATR=1.5||0.25||0.25||1.50||N
+InpRequireSweep=true||false||1||true||N
 InpReachBars=12||6||3||24||N
-InpSlBufATR=0.10||0.05||0.05||0.30||N
-InpMinRR=1.5||1.0||0.25||3.0||N
+InpSlBufATR=0.1||0.05||0.05||0.30||N
+InpMinRR=1.0||1.0||0.25||3.0||N
 InpTPMode=0||0||1||1||N
 InpFixedRR=2.0||1.5||0.5||4.0||N
 InpTimeExitBars=200||100||50||400||N
@@ -31,3 +32,4 @@ InpUseFixedLot=true||false||1||true||N
 InpFixedLot=0.01||0.01||0.01||0.10||N
 InpRiskPercent=1.0||0.5||0.5||3.0||N
 InpOneTrade=true||false||1||true||N
+InpVerbose=false||false||0||true||N

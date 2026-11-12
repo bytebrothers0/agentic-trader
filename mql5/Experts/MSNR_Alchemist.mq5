@@ -42,6 +42,7 @@ CTrade trade;
 //| Inputs                                                            |
 //+------------------------------------------------------------------+
 input group "=== Strategy core ==="
+input int    InpBiasMode       = 0;      // storyline: 0 = D1 only, 1 = D1+H1 aligned
 input double InpGapMinATR      = 0.10;   // GAP min band size (x ATR of its TF)
 input int    InpOclRunMin      = 2;      // OCL min same-colour candles per run
 input int    InpH4Bars         = 300;    // H4 history scanned for levels
@@ -50,13 +51,13 @@ input int    InpLevelMaxAgeBars= 300;    // level max age (bars of its own TF)
 input double InpBreakBufATR    = 0.10;   // body-break buffer (x ATR of level TF)
 input int    InpUsesH4         = 2;      // H4 level use budget (2-times rule)
 input int    InpUsesD1         = 4;      // D1 level use budget (4-times rule)
-input bool   InpRequireFresh   = true;   // entry only at never-touched levels
+input bool   InpRequireFresh   = false;  // entry only at never-touched levels (else 2x/4x budgets)
 input int    InpStoryPivot     = 3;      // storyline close-pivot window (bars)
 input int    InpSwingPivot     = 2;      // M30 minor swing pivot window
 
 input group "=== Risk & execution ==="
 input double InpSlBufATR       = 0.10;   // SL buffer beyond reaction extreme (x ATR M30)
-input double InpMinRR          = 1.5;    // skip trades below this reward:risk
+input double InpMinRR          = 1.0;    // skip trades below this reward:risk
 input int    InpTPMode         = 0;      // 0 = nearest opposing level, 1 = fixed RR
 input double InpFixedRR        = 2.0;    // TP distance in R when TPMode=1
 input int    InpTimeExitBars   = 200;    // M30 bars before time exit (~4 days)
@@ -76,8 +77,8 @@ input double InpOneTrade       = true;   // one position at a time
 
 input group "=== Sequencing (the Alchemist order: touch -> reaction -> shift) ==="
 input int    InpTrigAfterTouch = 8;      // trigger close must be within N M30 bars of the level touch
-input double InpSwingNearATR   = 0.75;   // broken minor swing must sit within X ATR of the level
-input bool   InpRequireSweep   = false;  // require wick THROUGH the level then close-back (CRT trigger)
+input double InpSwingNearATR   = 1.50;   // broken minor swing must sit within X ATR of the level
+input bool   InpRequireSweep   = true;   // require wick THROUGH the level then close-back (CRT trigger)
 input int    InpReachBars      = 12;     // level-touch lookback window (M30 bars)
 
 input group "=== Debug ==="
@@ -202,19 +203,23 @@ int Storyline()
    MqlRates rd[];
    int nd = CopyRates(_Symbol, PERIOD_D1, 0, need_d1, rd);
    if(nd < 60) return(0);
-   double cd[]; ArrayResize(cd, nd);
-   for(int i = 0; i < nd; i++) cd[i] = rd[i].close;
+   int ndc = nd - 1;                          // closed bars only
+   double cd[]; ArrayResize(cd, ndc);
+   for(int i = 0; i < ndc; i++) cd[i] = rd[i].close;
 
    MqlRates rh[];
    int nh = CopyRates(_Symbol, PERIOD_H1, 0, 400, rh);
    if(nh < 60) return(0);
-   double ch[]; ArrayResize(ch, nh);
-   for(int i = 0; i < nh; i++) ch[i] = rh[i].close;
+   int nhc = nh - 1;
+   double ch[]; ArrayResize(ch, nhc);
+   for(int i = 0; i < nhc; i++) ch[i] = rh[i].close;
 
    int dummy;
-   int d1_dir = PivotBias(cd, nd, InpStoryPivot, dummy);
-   int h1_dir = PivotBias(ch, nh, InpStoryPivot, dummy);
-   if(d1_dir != 0 && d1_dir == h1_dir) return(d1_dir);
+   int d1_dir = PivotBias(cd, ndc, InpStoryPivot, dummy);
+   if(d1_dir == 0) return(0);
+   if(InpBiasMode == 0) return(d1_dir);          // D1-only storyline
+   int h1_dir = PivotBias(ch, nhc, InpStoryPivot, dummy);
+   if(d1_dir == h1_dir) return(d1_dir);
    return(0);
   }
 
@@ -246,15 +251,16 @@ void ScanLevels(const ENUM_TIMEFRAMES tf, const int max_bars, const int tf_id,
    MqlRates r[];
    int n = CopyRates(_Symbol, tf, 0, max_bars + 2, r);
    if(n < 10) return;
+   int nc = n - 1;                           // closed bars only (n-1 = forming)
 
    // ATR series once (chronological)
    double atr_buf[];
-   ArrayResize(atr_buf, n);
-   for(int i = 0; i < n; i++) atr_buf[i] = 0.0;
-   int got = CopyBuffer(handle_atr, 0, 0, n, atr_buf);
+   ArrayResize(atr_buf, nc);
+   for(int i = 0; i < nc; i++) atr_buf[i] = 0.0;
+   int got = CopyBuffer(handle_atr, 0, 0, nc, atr_buf);
    if(got <= 0) return;
 
-   for(int i = 1; i < n - 1; i++)
+   for(int i = 1; i < nc - 1; i++)
      {
       // i = the first candle of the pair (chronological); i+1 the second.
       // Levels born at the close of candle i.
@@ -288,7 +294,7 @@ void ScanLevels(const ENUM_TIMEFRAMES tf, const int max_bars, const int tf_id,
       //     same-colour run of >= ocl_run_min candles)
       int run = 1;
       int j = i + 1;
-      while(j < n && (IsBull(r[j].open, r[j].close) == col_i)) { run++; j++; }
+      while(j < nc && (IsBull(r[j].open, r[j].close) == col_i)) { run++; j++; }
       if(run >= ocl_run_min)
         {
          int ocl_side = col_i ? SIDE_SUPPORT : SIDE_RESIST;
@@ -305,7 +311,7 @@ void ScanLevels(const ENUM_TIMEFRAMES tf, const int max_bars, const int tf_id,
 void ReplayLife(SLevel &lv, const MqlRates &r[], const int n,
                 const int born_idx, const double buf)
   {
-   for(int j = born_idx + 1; j < n; j++)      // closed bars after birth
+   for(int j = born_idx + 1; j < n - 1; j++)   // closed bars after birth
      {
       bool touched = false;
       if(lv.side == SIDE_SUPPORT)
@@ -491,7 +497,7 @@ void Pipeline()
    MqlRates m30[];
    int nm = CopyRates(_Symbol, PERIOD_M30, 0, 60, m30);
    if(nm < 10) return;
-   int last = nm - 1;                        // last closed M30 bar
+   int last = nm - 2;                        // last CLOSED M30 bar (nm-1 = forming)
    double px_now = m30[last].close;
    double atr30 = AtrAt(g_atr_m30, last, nm);
    if(atr30 <= 0) return;
