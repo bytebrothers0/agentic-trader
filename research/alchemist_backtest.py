@@ -65,6 +65,7 @@ P = dict(
     min_rr=1.5,
     tp_mode="level",          # "level" | "fixed_rr"
     fixed_rr=2.0,
+    entry_style="trigger",    # "trigger" (after M30 swing break) | "sweep" (at the close-back)
     time_exit_bars=200,
     session_filter=True,
     session_start=7,
@@ -415,45 +416,73 @@ def run(start, end, params=None):
         if P["session_filter"] and not (P["session_start"] <= t.hour < P["session_end"]):
             continue
 
-        # ---------- M30 structure-shift trigger ----------
-        cl = m30_cl
-        w = P["swing_pivot"]
-        swing_j = -1
-        swing_px = 0.0
-        for j in range(k - w, w, -1):
-            win = cl[j - w: j + w + 1]
-            if dirn > 0 and cl[j] == win.min():
-                swing_j, swing_px = j, cl[j]
-                break
-            if dirn < 0 and cl[j] == win.max():
-                swing_j, swing_px = j, cl[j]
-                break
-        if swing_j < 0:
-            continue
-        trig = False
-        for x in range(swing_j + 1, k + 1):
-            if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
-                trig = True
-                break
-        if not trig:
-            continue
-        # sequencing: the shift must follow the touch and live at the level
-        if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
-            continue
-        if abs(swing_px - lv.price) > P["swing_near_atr"] * atr_k:
-            continue
+        # ---------- entry style ----------
+        sweep_bar = -1
+        for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
+            a_i = a30v[i]
+            if side == SUPPORT:
+                if m30_lo[i] < lv.price - 0.05 * a_i and m30_cl[i] > lv.price:
+                    sweep_bar = i
+                    break
+            else:
+                if m30_hi[i] > lv.price + 0.05 * a_i and m30_cl[i] < lv.price:
+                    sweep_bar = i
+                    break
 
-        # ---------- entry / stop / target ----------
-        entry = float(cl[k])
-        if dirn > 0:
-            ext = float(m30_lo[k - seg12 + 1: k + 1].min())
-            sl = ext - P["sl_buf_atr"] * atr_k
+        if P.get("entry_style", "trigger") == "sweep":
+            # sniper entry: market at the sweep candle's close (price already
+            # back inside the level); the reaction has begun, no confirmation
+            # giveaway. Stop beyond the sweep extreme; target unchanged.
+            if sweep_bar < 0:
+                continue
+            entry = float(m30_cl[sweep_bar])
+            if dirn > 0:
+                ext = float(m30_lo[sweep_bar: k + 1].min())
+                sl = ext - P["sl_buf_atr"] * atr_k
+            else:
+                ext = float(m30_hi[sweep_bar: k + 1].max())
+                sl = ext + P["sl_buf_atr"] * atr_k
+            risk = abs(entry - sl)
+            if risk <= 0:
+                continue
         else:
-            ext = float(m30_hi[k - seg12 + 1: k + 1].max())
-            sl = ext + P["sl_buf_atr"] * atr_k
-        risk = abs(entry - sl)
-        if risk <= 0:
-            continue
+            # ---------- M30 structure-shift trigger ----------
+            cl = m30_cl
+            w = P["swing_pivot"]
+            swing_j = -1
+            swing_px = 0.0
+            for j in range(k - w, w, -1):
+                win = cl[j - w: j + w + 1]
+                if dirn > 0 and cl[j] == win.min():
+                    swing_j, swing_px = j, cl[j]
+                    break
+                if dirn < 0 and cl[j] == win.max():
+                    swing_j, swing_px = j, cl[j]
+                    break
+            if swing_j < 0:
+                continue
+            trig = False
+            for x in range(swing_j + 1, k + 1):
+                if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
+                    trig = True
+                    break
+            if not trig:
+                continue
+            # sequencing: the shift must follow the touch and live at the level
+            if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
+                continue
+            if abs(swing_px - lv.price) > P["swing_near_atr"] * atr_k:
+                continue
+            entry = float(cl[k])
+            if dirn > 0:
+                ext = float(m30_lo[k - seg12 + 1: k + 1].min())
+                sl = ext - P["sl_buf_atr"] * atr_k
+            else:
+                ext = float(m30_hi[k - seg12 + 1: k + 1].max())
+                sl = ext + P["sl_buf_atr"] * atr_k
+            risk = abs(entry - sl)
+            if risk <= 0:
+                continue
 
         if P["tp_mode"] == "level":
             opp = RESIST if dirn > 0 else SUPPORT
