@@ -1,0 +1,54 @@
+; MSNR_Alchemist frequency core — IS window (2025.11 -> 2026.11)
+; Best validated frequency core from research/scan_freq.py:
+;   IS: 147 trades / 39.5% WR / +16.84 R  |  HO: 40 trades / 35.0% WR / +4.70 R
+;   Two-window gate: PASS (both windows net-R positive)
+; Edge is asymmetry (RR ~2.4x), not hit rate. Management layer OFF (grade gate
+; filters frequency setups); InpUseManagement=false preserves v1.07 regression lock.
+InpBiasMode=0||0||0||0||N
+InpGapMinATR=0.1||0.1||0.1||0.1||N
+InpOclRunMin=2||2||2||2||N
+InpH4Bars=300||300||300||300||N
+InpD1Bars=60||60||60||60||N
+InpLevelMaxAgeBars=300||300||300||300||N
+InpBreakBufATR=0.1||0.1||0.1||0.1||N
+InpUsesH4=6||6||6||6||N
+InpUsesD1=12||12||12||12||N
+InpRequireFresh=false||false||false||false||N
+InpStoryPivot=3||3||3||3||N
+InpSwingPivot=4||4||4||4||N
+InpTrigAfterTouch=12||12||12||12||N
+InpSwingNearATR=0.75||0.75||0.75||0.75||N
+InpRequireSweep=false||false||false||false||N
+InpReachBars=12||12||12||12||N
+InpSlBufATR=0.2||0.2||0.2||0.2||N
+InpMinRR=1.0||1.0||1.0||1.0||N
+InpTPMode=0||0||0||0||N
+InpFixedRR=2.0||2.0||2.0||2.0||N
+InpEntryStyle=0||0||0||0||N
+InpTimeExitBars=200||200||200||200||N
+InpSessionFilter=false||false||false||false||N
+InpSessionStart=7||7||7||7||N
+InpSessionEnd=20||20||20||20||N
+InpServerUTCOffs=0||0||0||0||N
+InpMaxSpreadPts=300||300||300||300||N
+InpMagic=999777||999777||999777||999777||N
+InpSlippagePts=50||50||50||50||N
+InpUseFixedLot=true||true||true||true||N
+InpFixedLot=0.01||0.01||0.01||0.01||N
+InpRiskPercent=1.0||1.0||1.0||1.0||N
+InpOneTrade=true||true||true||true||N
+InpVerbose=false||false||false||false||N
+InpUseManagement=false||false||false||false||N
+InpGradeMin=3.0||3.0||3.0||3.0||N
+InpGradeAplus=5.0||5.0||5.0||5.0||N
+InpSizeA=0.7||0.7||0.7||0.7||N
+InpSizeB=0.5||0.5||0.5||0.5||N
+InpTp1RR=1.5||1.5||1.5||1.5||N
+InpTp1ClosePct=50.0||50.0||50.0||50.0||N
+InpTp2ClosePct=30.0||30.0||30.0||30.0||N
+InpMoveToBreakeven=true||true||true||true||N
+InpManagementProfile=1||1||1||1||N
+InpObstacleClosePct=80.0||80.0||80.0||80.0||N
+InpMaxLossesPerDay=2||2||2||2||N
+InpMaxReentryZone=1||1||1||1||N
+InpMaxDistATR=5.0||5.0||5.0||5.0||N

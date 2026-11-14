@@ -88,6 +88,7 @@ input int    InpTrigAfterTouch = 12;     // trigger close must be within N M30 b
 input double InpSwingNearATR   = 0.50;   // broken minor swing must sit within X ATR of the level
 input bool   InpRequireSweep   = false;  // require wick THROUGH the level then close-back (CRT trigger)
 input int    InpReachBars      = 12;     // level-touch lookback window (M30 bars)
+input double InpMaxDistATR     = 3.0;    // max level distance from price (x ATR M30); 3.0 = v1.07 baseline, 5.0 = frequency core
 
 input group "=== Management layer (v2; docs/specs/2026-11-14-management-layer.md) ==="
 input bool   InpUseManagement  = false;  // OFF = regression mode (v1.07 behaviour)
@@ -714,7 +715,7 @@ void Pipeline()
    int want_side = (g_bias > 0) ? SIDE_SUPPORT : SIDE_RESIST;
    int dir = (g_bias > 0) ? 1 : -1;
 
-   double max_dist = 3.0 * atr30;            // level must be nearby
+   double max_dist = InpMaxDistATR * atr30;            // level must be nearby
    int idx[];
    int ncand = Candidates(idx, want_side, InpRequireFresh, px_now, max_dist);
    if(ncand == 0) { if(InpVerbose) Print("MSNR: no fresh right-side level near price"); return; }
