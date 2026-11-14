@@ -78,3 +78,26 @@ PH10-02,MSNR_Part10_Trade_Management_Psychology.md,phoenix,fractional_scale_in,1
 PH10-03,MSNR_Part10_Trade_Management_Psychology.md,phoenix,runner_mgmt,close 50% at first SSL pool -> SL to BE -> trail rest behind M15 lower highs (fractal),50%+BE+trail,yes,management core
 PH10-04,MSNR_Part10_Trade_Management_Psychology.md,phoenix,reliability_threshold,structure narrative from M15/M5 only; M1 = trigger after green light; M1-only signal = false,,yes,
 PH10-05,MSNR_Part10_Trade_Management_Psychology.md,phoenix,tp_above_pool,place TP slightly above/beyond the liquidity pool to ensure fill before bounce,,yes,
+EMS-01,correction rule for all.md,ems,eg_zone_marking,"mark ENGULFED candle + 3-step box; entry key levels must be inside box, closest-to-liquidity wins; bias-side wick clamp rule",,yes,OVERRIDES video notes
+EMS-02,correction rule for all.md,ems,eg_tf_ladder,"zones on W1/D1/H4 -> drop 2 TFs (W1->H4, D1->H1, H4->M15); bot TFs M15/H1/H4/D1/W1",,yes,
+EMS-03,correction rule for all.md,ems,eg_opposite_colors,strict: valid EG zones form from candles of opposite colors,,yes,
+EMS-04,EMS.md,ems,crt_sweep_break,CRT: range=ref candle wicks; sweep=pierce+close back; confirm=close beyond opposite side,,yes,
+EMS-05,EMS.md,ems,engulf_body_def,bullish: Close[1]>Open[2] AND Open[1]<Close[2]; body engulf,,yes,
+EMS-06,EMS_ENGULFING_MSNR_SMC_#2.md,ems,engulf_50_limit,limit at 50% of LTF engulfing candle that caused BOS; SL beyond zone extreme,entry=50%,yes,
+EMS-07,EMS_ENGULFING_MSNR_SMC_#3.md,ems,strong_low_range,range bounded by strong low/high; violated strong low invalidates range,,yes,
+EMS-08,EMS_ENGULFING_MSNR_SMC_#3.md,ems,most_recent_bos,use most recent valid BOS after liquidity sweep; messy structure -> TF up,,yes,
+EMS-09,EMS_ENGULFING_MSNR_SMC_#4.md,ems,sbi_sequence,"Sweep -> BOS -> IND; triggers: engulfing, double candles, stubborn engulfing; invalid: wick>>body engulf",,yes,
+EMS-10,EMS_ENGULFING_MSNR_SMC_#4.md,ems,internal_structure_check,ideal HTF engulf contains own LTF BOS+sweep = strength confirmation,,yes,
+EMS-11,_EMS#ENGULFING #MSNR#SMC.mp4.md,ems,poi_closest_liquidity,pick key level nearest to unmitigated swing (min pip-distance),,yes,
+EMS-12,_EMS#ENGULFING #MSNR#SMC.mp4.md,ems,crt_3candle,touch -> indecision (body<=30% range) -> sweep range side + close back -> entry toward range low/high,body=0.30,yes,
+EMS-13,Part_1 EMS#Engulfing #MSNR#SMC.mp4.md,ems,rejection_body_close,rejection valid only with body close beyond level after tap; wick tap insufficient,,yes,
+EMS-14,Part_1 EMS#Engulfing #MSNR#SMC.mp4.md,ems,fifty_mandatory,price must retrace >=50% into break-leg range before entry (premium/discount),pct=0.5,yes,
+EMS-15,=EMS#ENGULFING #MSNR#SMC#_8.mp4.md,ems,bbma_settings,"BB(20,2.0) + EMA50 + LWMA5/10 High-Low channels; directional candle crossing MA channel = momentum confirm",,optional,default OFF pending probe
+EMS-16,-EMS#ENGULFING #MSNR#SMC_10.mp4.md,ems,swing_needs_bos,swing valid only when subsequent BOS occurs (not fractal-only),,yes,
+EMS-17,-EMS#ENGULFING #MSNR#SMC_10.mp4.md,ems,failed_poi_distance,"next deeper level allowed only if near original sweep; too far = abort storyline, fresh sweep+BOS required",,yes,
+EMS-18,EMS#ENGULFING #MSNR#SMC#7.mp4.md,ems,failed_eg_as_poi,engulfing zones that hit SL become strong future S/R (track EG zone states),,yes,
+EMS-19,EMS#ENGULFING #MSNR#SMC#_6.mp4.md,ems,re_baptize,full candle break+close past unfresh zone = fresh flipped SNR,,yes,same as abax BRAKE
+EMS-20,full strategy for EMS with breakdown of how to use EG and EF for bias part 1#Engulfing #smctrading.md,ems,liquidity_vs_depth,clear liquidity before entry zone -> no deep PD waiting needed; no liquidity -> expect deep pullback,,yes,
+EMS-21,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,ef_zone_flip,"failed bullish engulf = bearish POI, failed bearish = bullish POI; state ACTIVE->FAILED->FLIPPED",,yes,
+EMS-22,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,sweep_before_poi,POI reached without prior liquidity sweep = lower probability (gate),,yes,
+EMS-23,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,third_candle_exception,entry may come candle 4/5+; zone valid while BOS/liquidity intact regardless of candle3 retest,,yes,

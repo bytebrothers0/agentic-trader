@@ -265,49 +265,104 @@
 - **Reliability threshold:** structure narrative (BOS/TS/MSS) from M15/M5 only; M1 = trigger arm after green light; M1-only signal with bullish M15 = false signal, overruled.
 - SMC-confirmed structure integrates best on 5–15 min; below that = more false signals.
 
-## Cluster 3: EMS (Engulfing MSNR SMC)
+## Cluster 3: EMS (ems mnsr) — READ ✔ (14/14)
 
-### correction rule for all.md
-(pending read)
+**Cluster identity:** Engulfing-MSNR-SMC video series. Core engine: HTF engulfing zones (EG) / engulfing-fail zones (EF) as POIs, refined 2 TFs down, executed with LTF sweep+BOS+engulfing trigger. BBMA (Bollinger 20/2 + EMA50 + LWMA5/10 high-low channels) as optional momentum filter.
 
-### EMS.md
-(pending read)
+### correction rule for all.md — READ ✔ (corrections override the video notes)
+- **EG-zone correction (overrides EMS#7/_8 "shadow to shadow" marking):** mark the **ENGULFED candle (candle1)**, not the engulfing candle. Box covers candle1 + 3 steps right (candle1, candle2, and the pullback space of the 3rd step) for the entry.
+- Timeframes for bot internals: **M15, H1, H4, D1, W1**. Zone marked on W1/D1/H4 → drop **two** TFs (W1→H4, D1→H1, H4→M15) for the SMC setup.
+- LTF leg liquidity = low of pullback in the bias leg; must sit **inside the marked box** (else look above/below per bias).
+- After liquidity marked → **one TF higher**: nearest key level (OCL/QMR/SNR/RBS/SBR) **below** liquidity for buys / **above** for sells; the key level **must lie inside the marked box** — outside levels never used; when packed, take the one **closest to the liquidity**.
+- **Wick-exception rule:** if candle1's bias-side wick (upper for buys reversed logic per text: buys → lower wick side, sells → upper wick side) is longer than candle2's (wick or body close), clamp zone to candle1 BODY + bias-side wick only; box height = the larger of candle1/candle2 wick heights on the bias side; else full candle1 wicks. Prevents outlier-wick inflation.
+- **Strict:** valid EG zones form from candles of **opposite colors**.
 
-### EMS_ENGULFING_MSNR_SMC_#2.md
-(pending read)
+### EMS.md — READ ✔
+- EMS = MSNR + SMC + CRT hybrid. A-shape (swing-high resistance) / V-shape (swing-low support) via fractal detection.
+- Bullish engulf: `Close[1] > Open[2] AND Open[1] < Close[2]`; bearish mirrored (body engulf).
+- **CRT:** range = reference candle's wick high/low; sweep = `High[i] > RangeHigh AND Close[i] < RangeHigh`; confirm = break AND **close** beyond opposite side of the range.
+- SMC 4-event entry: sweep → BOS → internal-liquidity trap → QMR/OB mitigation limit entry.
+- Workflow: W1/D1 engulfing rejecting A/V level = bias → H4/D1 OCL/RBS/SBR refine → H1/M15 tap + sweep-BOS-QMR pullback → TP next HTF pool.
 
-### EMS_ENGULFING_MSNR_SMC_#3.md
-(pending read)
+### EMS_ENGULFING_MSNR_SMC_#2.md — READ ✔
+- After LTF BOS/CHoCH from HTF POI tap, find the **engulfing candle that caused the break**; limit at its **50%** (`Low + (High-Low)*0.5`); SL strictly beyond engulfing-zone extreme.
+- 4-state machine: POI tap → LTF BOS → engulf zone → limit at 50%.
 
-### EMS_ENGULFING_MSNR_SMC_#4.md
-(pending read)
+### EMS_ENGULFING_MSNR_SMC_#3.md — READ ✔
+- Valid range bounded by **strong low** (origin of BOS move) / strong high; violated strong low invalidates range → wait for new setup.
+- BOS = body close beyond prior swing's wick; wick-only = sweep (grab) → opposite direction cue.
+- Strongest setup: sweep of low then immediate BOS up.
+- Sniper entries: HTF zone → LTF unmitigated zone inside it; on HTF tap wait for LTF internal sweep + BOS or fresh engulfing; never blind-enter.
+- Chop rule: use the **most recent** valid BOS that occurred **after** a liquidity sweep; if structure messy → go one TF up for cleaner view.
 
-### EMS#ENGULFING #MSNR#SMC#.mp4.md
-(pending read)
+### EMS_ENGULFING_MSNR_SMC_#4.md — READ ✔
+- Storyline SBI sequence: **Sweep → BOS → IND** (inducement created and targeted later).
+- Entry triggers ranked: engulfing candle, double candles (2 strong same-direction), "stubborn engulfing" (wick-heavy).
+- POI = open/close of the engulfing candle or head of wick; enter on retracement tap; SL beyond QMR level; TP = opposing A/V key level (RR up to 1:8–1:13 claimed).
+- Invalid engulfing types: engulfing wick ≫ body, or prior candle wick too long → skip or seek double-candle entry.
+- Ideal HTF engulf contains its **own internal BOS + sweep** when viewed on LTF — internal structure = strength confirmation.
 
-### _EMS#ENGULFING #MSNR#SMC.mp4.md
-(pending read)
+### EMS#ENGULFING #MSNR#SMC#.mp4.md (part 1) — READ ✔
+- Swing structure = the leg that caused a BOS; entry = retrace **back into** the swing-structure zone (not right after BOS); prior structural points = transactional liquidity swept first.
+- Ranging vs trending discrimination needed (equal highs/lows count or ADX).
 
-### Part_1 EMS#Engulfing #MSNR#SMC.mp4.md
-(pending read)
+### _EMS#ENGULFING #MSNR#SMC.mp4.md — READ ✔
+- POI always 1–2 TFs above execution; **pick the key level nearest to liquidity** (min pip-distance to unmitigated swing).
+- **CRT 3-candle:** touch candle → indecision candle (body ≤30% of range, defines Range High/Low) → third candle sweeps range side and closes back → entry toward range low/high.
+- Engulfing: candle2 body engulfs candle1 body; limit at engulfed-candle open or engulfing 50% (never market-on-close).
 
-### =EMS#ENGULFING #MSNR#SMC#_8.mp4.md
-(pending read)
+### Part_1 EMS#Engulfing #MSNR#SMC.mp4.md — READ ✔
+- HTF rejection valid = tap + **body close beyond** the level (wick tap insufficient).
+- **50% retrace mandatory** before entry (Fib 0/0.5/1 on break leg); shorts only above 50% (premium), longs below (discount).
+- FVG confluence inside 50%+ zone (gap between wick1 and wick3); not relied on alone.
+- EG Fail: engulfing zone broken by close → opposite side pulls into failed zone; zone = engulfed candle body.
+- Hack: at 50% with no engulf/FVG → minor A/V key level near EQ → drop to M15 for fresh engulfing sniper entry.
 
-### _EMS#ENGULFING #MSNR#SMC_10.mp4.md
-(pending read)
+### =EMS#ENGULFING #MSNR#SMC#_8.mp4.md — READ ✔
+- HTF engulfing must come from a fresh POI/SNR ("where is price coming from"); drop 2–3 TFs.
+- **Zone = full wick range of the ENGULFED candle** (superseded by correction file).
+- **BBMA settings (verbatim):** BB(20, 2.0, shift 0, close), EMA50 close, LWMA5 High/Low, LWMA10 High/Low; "directional candlestick" crossing the MA 5/10 channel = momentum confirmation for re-entries.
+- POI freshness = zero wick penetrations historically (trace bars).
 
-### EMS#ENGULFING #MSNR#SMC#7.mp4.md
-(pending read)
+### -EMS#ENGULFING #MSNR#SMC_10.mp4.md — READ ✔
+- Multiple OBs/POIs: choose **closest to liquidity**; if LTF noisy → go HTF for a single Daily OCL.
+- Standard model: sweep → BOS → swing range valid **only after BOS** (not fractal-only) → 50% PD filter (sell POI premium / buy POI discount) → internal liquidity (V/A shape) → OCL/Breaker just beyond internal liquidity → 2-TF drop refinement → LTF sweep+BOS confirm.
+- **Failed-POI rule:** next deeper level allowed ONLY if still reasonably near the original sweep; too far = abort storyline, wait for fresh sweep+BOS.
 
-### EMS#ENGULFING #MSNR#SMC#_6.mp4.md
-(pending read)
+### EMS#ENGULFING #MSNR#SMC#7.mp4.md — READ ✔
+- BOS: `Close[1] < Low[Swing]` / `Close[1] > High[Swing]`; sweep: wick pierce + body close inside ("Type 2 liquidity").
+- POI zone = High-to-Low wick range of reference candle (superseded by correction file).
+- **Failed-engulfing zone as future POI:** zones that hit SL become strong S/R for later taps (mechanizable: track EG zones + outcome).
+- IRL/ERL: range = most recent major swing H/L; IRL = minor swings inside; TP at exact ERL price.
+- Tap definition: `High[0] >= POI_Low` for bearish POI → monitoring state for engulfing close.
 
-### full strategy for EMS with breakdown of how to use EG and EF for bias part 1#Engulfing #smctrading.md
-(pending read)
+### EMS#ENGULFING #MSNR#SMC#_6.mp4.md — READ ✔
+- Bias TFs: Weekly/Daily/Monthly; setups: H4/H1/M15.
+- **Re-baptizing:** full candle break+close past an unfresh zone = fresh flipped SNR (matches abax BRAKE).
+- EG Fail execution: on full-candle break of engulfing zone, wait for pullback INTO the failed zone and trade in the BREAKOUT direction (part2 note: flips to opposite POI — logged as a conflict, resolution below).
+- Open-Close SNR when no visible peaks; line-chart V-shape detection = close-only swing detection.
+- Gann box 50% = PD split; discount for buys, premium for sells.
+- BBMA re-entry + momentum candle crossing MAs = confirmation.
 
-### full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md
-(pending read)
+### full strategy for EMS with breakdown of how to use EG and EF for bias part 1 — READ ✔
+- EG mechanic: after valid EG, price pulls back into **engulfed-candle zone** then continues with the engulf direction.
+- EF mechanic: zone broken → pullback into failed zone acts as reversal POI (RBS/SBR flip).
+- Key levels: A-shape, V-shape, OCL, QMR; rejection confirmed only by body close beyond level after tap.
+- Bias protocol: Weekly rejection first; if none → Daily.
+- Entry flow: HTF bias → 4H engulfing in bias direction → 15m/30m pullback into 4H engulf zone → LTF sweep + BOS (or 1H engulfing as final trigger) → limit/market into unmitigated LTF OB/OCL/engulf zone → SL beyond structural swing with breathing room.
+- **Liquidity-vs-depth rule:** if clear liquidity sits before the entry zone, no need to wait for deep premium/discount; if no obvious liquidity, expect deeper pullback to PD/extreme.
+
+### full strategy for EMS ... part 2 — READ ✔
+- Marking rule (pre-correction): cover full engulfing candle; if engulfed wick longer, cover the longer wick; instructor prefers tighter POI within valid BOS zone.
+- **EF flip:** failed bullish engulfing = bearish POI; failed bearish = bullish POI (track zone state machine: ACTIVE→FAILED→FLIPPED).
+- MTF: HTF POI tap → LTF confirmation = sweep + BOS/CHoCH + new LTF engulfing trigger → limit at LTF engulfing open/50%; SL beyond sweep/engulfing wick.
+- **Sweep-before-POI requirement:** POI reached without prior liquidity sweep = lower probability (gate).
+- **Third-candle exception:** entry may come at candle 4, 5+; never invalidate an engulfing zone just because candle 3 didn't retest (valid while BOS/liquidity intact).
+
+**EMS conflicts registered:**
+1. Zone marking: video notes "engulfing candle high-to-low" (part 8, 7, part2-part1) vs correction file "engulfed candle + 3-step box + wick-clamp" — **correction file wins** (it is explicitly labeled as corrections).
+2. EG-fail direction: `_6` says trade breakout direction at pullback; part2 says failed zone flips to opposite-direction POI — both describe the same RBS/SBR flip; canonical = zone flips role; trade on retest respecting new role (i.e., breakout-direction continuation = same thing from the other side). Documented, no code conflict.
+3. BBMA present in _8/_6, absent elsewhere → optional module, default OFF until probe says otherwise.
 
 ## Cluster 4: SMC 15-part course
 
