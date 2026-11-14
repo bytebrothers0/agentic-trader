@@ -71,6 +71,19 @@ P = dict(
     session_start=7,
     session_end=20,
     max_dist_atr=3.0,
+    # ---- QM module (Task 15) ----
+    qm_module=False,          # QM failed-flip levels as strong S/R (OFF = baseline)
+    qm_bos_atr=0.8,           # QM quality gate: breakout body >= 0.8 x ATR (real BOS, not wick)
+    qm_st_multiplier=0.70,    # stQM (second+ retest) size multiplier (ftQM = full)
+    qm_grade_bonus=1.0,       # grade bonus for QM levels (strong S/R)
+    # ---- PD gate (Task 16) ----
+    pd_gate=False,            # long only in D1 discount, short only in premium; EQ = no trade
+    pd_eq_band=0.05,          # equilibrium band around 0.5 (0.45-0.55)
+    # ---- EMS module (Task 17) ----
+    ems_module=False,         # engulfing-fail flipped zones as strong S/R (OFF = baseline)
+    ems_grade_bonus=1.0,      # grade bonus for flipped engulfing zones
+    ems_uses=2,               # EMS zone use budget (2-times rule)
+    ems_buf=0.05,             # flip buffer x ATR (M30)
     # ---- management layer (docs/specs/2026-11-14-management-layer.md) ----
     mgmt=False,             # regression mode: identical to the 2026-11-14 baseline
     grade_min=4.0,          # admission gate (P11-06)
@@ -175,6 +188,33 @@ class Level:
     broken: bool = False
 
 
+@dataclass
+class QMLevel:
+    price: float
+    side: int          # strong role the QM now plays (SUPPORT/RESIST)
+    tf: str
+    born: pd.Timestamp  # bar time of the break that formed the QM
+    tested: int = 0     # retest count since formation
+    armed: bool = True  # waiting for first retest (ftQM vs stQM)
+
+
+@dataclass
+class EMSBox:
+    lo: float           # engulfed candle body low
+    hi: float           # engulfed candle body high
+    side: int           # role the zone plays (SUPPORT=bullish-engulf zone, RESIST=bearish-engulf zone)
+    formed_i: int       # M30 bar index of formation
+    flipped: bool = False
+    tested: int = 0
+
+
+def _ems_pseudo(ez: EMSBox):
+    """Pseudo-level for EMS zone grading (not fresh, M30 TF, touched count)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(tf="EMS", kind="EG", price=0.5 * (ez.lo + ez.hi),
+                           fresh=False, touches=ez.tested)
+
+
 def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
              a: pd.Series, out: List[tuple]) -> None:
     """Scan closed bars; out appends (Level, birth_position_in_df)."""
@@ -210,10 +250,13 @@ def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
             out.append((Level(c[i], SUPPORT if col_i else RESIST, born, tf, "OCL"), i))
 
 
-def _replay_life(lv: Level, hi: np.ndarray, lo: np.ndarray, cl: np.ndarray,
-                 born_i: int, buf: float) -> None:
+def _replay_life(lv: Level, op: np.ndarray, hi: np.ndarray, lo: np.ndarray, cl: np.ndarray,
+                 born_i: int, buf: float, qm_bos_atr: float, atr_val: float,
+                 qms_out: List[QMLevel], tf: str, born_ts: pd.Timestamp) -> None:
     """Vectorized lifecycle: touches counted up to the first body break.
-    Arrays are the level's native-TF OHLC closes; born_i = birth position."""
+    When a level breaks with a real body (breakout body >= qm_bos_atr x ATR)
+    it spawns a QM level at the break price playing the flipped role.
+    Arrays are chronological; born_i = birth position; bars after birth drive lifecycle."""
     n = len(cl)
     if born_i + 1 >= n:
         return
@@ -227,6 +270,13 @@ def _replay_life(lv: Level, hi: np.ndarray, lo: np.ndarray, cl: np.ndarray,
         first_break = int(np.argmax(breaks))
         lv.broken = True
         lv.touches = int(touches[: first_break + 1].sum())
+        # QM quality gate: level must have been touched/tested (failed flip) AND
+        # breakout body >= qm_bos_atr x ATR (real BOS, not a wick)
+        j = born_i + 1 + first_break
+        body = abs(float(cl[j]) - float(op[j]))
+        if lv.touches >= 1 and body >= qm_bos_atr * atr_val:
+            qms_out.append(QMLevel(price=lv.price, side=(-lv.side), tf=tf,
+                                   born=born_ts, tested=0, armed=True))
     else:
         lv.touches = int(touches.sum())
     lv.fresh = lv.touches == 0
@@ -237,6 +287,8 @@ class Book:
 
     def __init__(self):
         self.levels: List[Level] = []
+        self.qms: List[QMLevel] = []
+        self.ems_zones: List[EMSBox] = []
         self.h4 = load("H4")
         self.d1 = load("D1")
         self.a_h4 = atr_series(self.h4)
@@ -259,21 +311,116 @@ class Book:
         _scan_tf(d1, "D1", P["gap_min_atr"] * 2.0, P["ocl_run_min"], ad, lvls)
         # age filter + lifecycle on native TF (positions come straight from the scan)
         hi4, lo4, cl4 = h4["high"].values, h4["low"].values, h4["close"].values
+        op4, opd = h4["open"].values, d1["open"].values
         hid, lod, cld = d1["high"].values, d1["low"].values, d1["close"].values
         buf4 = P["break_buf_atr"] * float(a4.iloc[-1])
         bufd = P["break_buf_atr"] * float(ad.iloc[-1])
+        atr4 = float(a4.iloc[-1]); atrd = float(ad.iloc[-1])
         keep: List[Level] = []
+        qms_collected: List[QMLevel] = []
+        qm_bos = P["qm_bos_atr"] if P["qm_module"] else 999.0  # gate off when module off
         for lv, born_i in lvls:
             age = (h4 if lv.tf == "H4" else d1).shape[0] - 1 - born_i
             if age > P["level_max_age"]:
                 continue
-            _replay_life(lv, hi4 if lv.tf == "H4" else hid,
+            _replay_life(lv, op4 if lv.tf == "H4" else opd,
+                         hi4 if lv.tf == "H4" else hid,
                          lo4 if lv.tf == "H4" else lod,
                          cl4 if lv.tf == "H4" else cld,
-                         born_i, buf4 if lv.tf == "H4" else bufd)
+                         born_i, buf4 if lv.tf == "H4" else bufd,
+                         qm_bos, atr4 if lv.tf == "H4" else atrd,
+                         qms_collected, lv.tf,
+                         h4.index[born_i] if lv.tf == "H4" else d1.index[born_i])
             keep.append(lv)
         self.levels = keep
+        self.qms = qms_collected
         self.built_on = h4.index[-1]
+
+    def qm_candidates(self, side: int, px_now: float, max_dist: float,
+                      k: int, m30_cl: np.ndarray, m30_op: np.ndarray,
+                      m30_hi: np.ndarray, m30_lo: np.ndarray,
+                      a30v: np.ndarray, nm: int) -> List[tuple]:
+        """QM retest candidates near price. A QM is 'retested' when price
+        touches its level within the last reach_bars bars without closing
+        through it (reaction), i.e. the same reaction logic as normal levels.
+        Returns list of (QMLevel, touch_bar_index)."""
+        out: List[tuple] = []
+        reach = P["reach_bars"]
+        for qm in self.qms:
+            if not qm.armed:
+                continue
+            if qm.side != side:
+                continue
+            if abs(qm.price - px_now) > max_dist:
+                continue
+            # retest within reach window: wick reaches QM price, body does not close through
+            reached = False
+            touch_bar = -1
+            for i in range(max(1, k - reach + 1), k + 1):
+                a_i = a30v[i]
+                if np.isnan(a_i):
+                    continue
+                if qm.side == SUPPORT:
+                    if m30_lo[i] <= qm.price + 0.05 * a_i:
+                        reached = True
+                        if touch_bar < 0:
+                            touch_bar = i
+                    if m30_cl[i] < qm.price - 0.10 * a_i:
+                        reached = False   # closed through -> QM invalidated
+                        break
+                else:
+                    if m30_hi[i] >= qm.price - 0.05 * a_i:
+                        reached = True
+                        if touch_bar < 0:
+                            touch_bar = i
+                    if m30_cl[i] > qm.price + 0.10 * a_i:
+                        reached = False
+                        break
+            if reached and touch_bar >= 0:
+                out.append((qm, touch_bar))
+        return out
+
+    def ems_candidates(self, side: int, px_now: float, max_dist: float,
+                       k: int, m30_cl: np.ndarray, m30_hi: np.ndarray,
+                       m30_lo: np.ndarray, a30v: np.ndarray, nm: int) -> List[tuple]:
+        """EMS engulfing-fail flipped zones as strong S/R. Candidate if zone
+        role matches trade side and price retests zone (wick reaches, body
+        does not close through) within reach window."""
+        out: List[tuple] = []
+        reach = P["reach_bars"]
+        for ez in self.ems_zones:
+            if ez.flipped and ez.tested >= P["ems_uses"]:
+                continue
+            if ez.side != side:
+                continue
+            mid = 0.5 * (ez.lo + ez.hi)
+            if abs(mid - px_now) > max_dist:
+                continue
+            reached = False
+            touch_bar = -1
+            for i in range(max(1, k - reach + 1), k + 1):
+                a_i = a30v[i]
+                if np.isnan(a_i):
+                    continue
+                if ez.side == SUPPORT:
+                    if m30_lo[i] <= ez.lo + 0.05 * a_i:
+                        reached = True
+                        if touch_bar < 0:
+                            touch_bar = i
+                    if m30_cl[i] < ez.lo - 0.10 * a_i:
+                        reached = False
+                        break
+                else:
+                    if m30_hi[i] >= ez.hi - 0.05 * a_i:
+                        reached = True
+                        if touch_bar < 0:
+                            touch_bar = i
+                    if m30_cl[i] > ez.hi + 0.10 * a_i:
+                        reached = False
+                        break
+            if reached and touch_bar >= 0:
+                out.append((ez, touch_bar))
+        return out
 
     def candidates(self, side: int, fresh_only: bool, uses: int) -> List[Level]:
         out = []
@@ -289,6 +436,144 @@ class Book:
         return out
 
 
+# ----------------------------------------------------------------------
+# Entry evaluation helper (used by both normal levels and QM retests).
+# Returns dict(entry, sl, tp, risk, rr, touch_bar, sweep_bar) or None.
+# ----------------------------------------------------------------------
+def _eval_entry(side: int, dirn: int, lvl_price: float, k: int,
+                m30_op: np.ndarray, m30_cl: np.ndarray, m30_hi: np.ndarray,
+                m30_lo: np.ndarray, a30v: np.ndarray, nm: int,
+                book_levels: List[Level], atr_k: float, P: dict) -> Optional[dict]:
+    reach = P["reach_bars"]
+    last = k
+
+    # ---------- reaction: level touched in reach window, body not closed through ----------
+    reached = reacted = False
+    touch_bar = -1
+    for i in range(max(1, last - reach + 1), last + 1):
+        a_i = a30v[i]
+        if np.isnan(a_i):
+            continue
+        if side == SUPPORT:
+            if m30_lo[i] <= lvl_price + 0.05 * a_i:
+                reached = True
+                if touch_bar < 0:
+                    touch_bar = i
+            if m30_cl[i] < lvl_price - 0.10 * a_i:
+                reacted = True
+                break
+        else:
+            if m30_hi[i] >= lvl_price - 0.05 * a_i:
+                reached = True
+                if touch_bar < 0:
+                    touch_bar = i
+            if m30_cl[i] > lvl_price + 0.10 * a_i:
+                reacted = True
+                break
+    if not reached or reacted:
+        return(None)
+
+    # ---------- optional CRT-style sweep ----------
+    sweep_bar = -1
+    if P["require_sweep"]:
+        for i in range(max(1, last - reach + 1), last + 1):
+            a_i = a30v[i]
+            if side == SUPPORT:
+                bar_swept = (m30_lo[i] < lvl_price - 0.05 * a_i
+                             and m30_cl[i] > lvl_price)
+            else:
+                bar_swept = (m30_hi[i] > lvl_price + 0.05 * a_i
+                             and m30_cl[i] < lvl_price)
+            if bar_swept and sweep_bar < 0:
+                sweep_bar = i
+        if sweep_bar < 0:
+            return(None)
+
+    # ---------- session filter ----------
+    # (applied in the caller via t.hour; kept here for completeness of gate order)
+
+    # ---------- entry style ----------
+    sweep_bar2 = sweep_bar
+    entry = sl = tp = 0.0
+    if P.get("entry_style", "trigger") == "sweep":
+        if sweep_bar2 != last:
+            return(None)
+        entry = float(m30_cl[last])
+        if dirn > 0:
+            ext = float(m30_lo[sweep_bar2: last + 1].min())
+            sl = ext - P["sl_buf_atr"] * atr_k
+        else:
+            ext = float(m30_hi[sweep_bar2: last + 1].max())
+            sl = ext + P["sl_buf_atr"] * atr_k
+    else:
+        # ---------- M30 structure-shift trigger ----------
+        cl = m30_cl
+        w = P["swing_pivot"]
+        swing_j = -1
+        swing_px = 0.0
+        for j in range(k - w, w, -1):
+            win = cl[j - w: j + w + 1]
+            if dirn > 0 and cl[j] == win.min():
+                swing_j, swing_px = j, cl[j]
+                break
+            if dirn < 0 and cl[j] == win.max():
+                swing_j, swing_px = j, cl[j]
+                break
+        if swing_j < 0:
+            return(None)
+        trig = False
+        for x in range(swing_j + 1, k + 1):
+            if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
+                trig = True
+                break
+        if not trig:
+            return(None)
+        # sequencing: the shift must follow the touch and live at the level
+        if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
+            return(None)
+        if abs(swing_px - lvl_price) > P["swing_near_atr"] * atr_k:
+            return(None)
+        entry = float(cl[k])
+        seg_from = max(1, last - 11)
+        ext = m30_lo[seg_from] if dirn > 0 else m30_hi[seg_from]
+        for i in range(seg_from + 1, last + 1):
+            if dirn > 0:
+                ext = min(ext, float(m30_lo[i]))
+            else:
+                ext = max(ext, float(m30_hi[i]))
+        sl = (ext - P["sl_buf_atr"] * atr_k) if dirn > 0 else (ext + P["sl_buf_atr"] * atr_k)
+
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return(None)
+
+    # ---------- TP ----------
+    if P["tp_mode"] == "level":
+        opp = RESIST if dirn > 0 else SUPPORT
+        best = None
+        best_d = 1e30
+        for o in book_levels:
+            if o.broken or o.side != opp:
+                continue
+            ahead = (o.price - entry) if dirn > 0 else (entry - o.price)
+            if ahead <= risk:
+                continue
+            if ahead < best_d:
+                best_d, best = ahead, o.price
+        if best is None:
+            return(None)
+        tp = best
+    else:
+        tp = entry + dirn * P["fixed_rr"] * risk
+
+    rr = abs(tp - entry) / risk
+    if rr < P["min_rr"]:
+        return(None)
+
+    return({"entry": entry, "sl": sl, "tp": tp, "risk": risk, "rr": rr,
+            "touch_bar": touch_bar, "sweep_bar": sweep_bar})
+
+
 # ---------------------------------------------------------------------- run
 def run(start, end, params=None):
     if params:
@@ -297,6 +582,10 @@ def run(start, end, params=None):
     h1 = load("H1")
     m30 = load(P.get("entry_tf", "M30"))
     m5 = load("M5")
+    d1 = load("D1")
+    nm = len(m30)
+    nd1 = len(d1)
+    d1_idx = d1.index
 
     trades: List[dict] = []
     open_trade: Optional[dict] = None
@@ -455,181 +744,153 @@ def run(start, end, params=None):
         side = SUPPORT if bias > 0 else RESIST
         dirn = bias
 
+        # ---------- PD gate (Task 16): long only in D1 discount, short only in premium ----------
+        if P["pd_gate"]:
+            dpos = int(d1_idx.searchsorted(t, side="right")) - 1
+            if dpos >= 0:
+                d1_hi = float(d1["high"].iloc[dpos])
+                d1_lo = float(d1["low"].iloc[dpos])
+                rng = d1_hi - d1_lo
+                if rng > 0:
+                    pdv = (px - d1_lo) / rng
+                    eq_lo = 0.5 - P["pd_eq_band"]; eq_hi = 0.5 + P["pd_eq_band"]
+                    if pdv < eq_lo:
+                        if dirn < 0:
+                            continue   # short not allowed in discount
+                    elif pdv > eq_hi:
+                        if dirn > 0:
+                            continue   # long not allowed in premium
+                    else:
+                        continue       # equilibrium — no new entries
+
+        # ---------- EMS engulfing-fail zone tracking (Task 17) ----------
+        m30_op = m30["open"].values   # needed by QM / sweep body checks
+        if P["ems_module"]:
+            # engulfing candle detection on current closed bar k vs k-1
+            o1, c1, h1_, l1 = m30_op[k-1], m30_cl[k-1], m30_hi[k-1], m30_lo[k-1]
+            o2, c2, h2_, l2 = m30_op[k],   m30_cl[k],   m30_hi[k],   m30_lo[k]
+            bull_eng = (c1 < o1) and (c2 > o2) and (c2 > o1) and (o2 < c1)   # body engulf
+            bear_eng = (c1 > o1) and (c2 < o2) and (c2 < o1) and (o2 > c1)
+            if bull_eng or bear_eng:
+                # mark zone = engulfed candle body [min(o1,c1)..max(o1,c1)]
+                ez_lo, ez_hi = min(o1, c1), max(o1, c1)
+                # existing zone same price? refresh
+                found = False
+                for ez in book.ems_zones:
+                    if abs(ez.lo - ez_lo) < 1e-9 and abs(ez.hi - ez_hi) < 1e-9:
+                        found = True
+                        ez.side = SUPPORT if bull_eng else RESIST   # role = direction of engulf
+                        ez.flipped = False
+                        ez.tested = 0
+                        break
+                if not found:
+                    book.ems_zones.append(EMSBox(lo=ez_lo, hi=ez_hi,
+                                                 side=SUPPORT if bull_eng else RESIST,
+                                                 formed_i=k))
+            # flip detection: price closes through an armed EMS zone -> flipped role
+            # (skip zones formed on this same bar)
+            for ez in book.ems_zones:
+                if ez.formed_i == k:
+                    continue
+                if ez.flipped or ez.tested >= P["ems_uses"]:
+                    continue
+                if ez.side == SUPPORT and m30_cl[k] < ez.lo - P["ems_buf"] * atr_k:
+                    ez.flipped = True; ez.side = RESIST; ez.tested = 0
+                elif ez.side == RESIST and m30_cl[k] > ez.hi + P["ems_buf"] * atr_k:
+                    ez.flipped = True; ez.side = SUPPORT; ez.tested = 0
+
         cands = book.candidates(side, P["require_fresh"], 10**9)
         if not cands:
             continue
         near = [lv for lv in cands if abs(lv.price - px) <= P["max_dist_atr"] * atr_k]
-        if not near:
-            continue
-        lv = min(near, key=lambda o: abs(o.price - px))
 
-        # ---------- the reaction (last `reach_bars` closed bars incl. current) ----------
-        reached = reacted = False
-        touch_bar = -1
-        for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
-            a_i = a30v[i]
-            if np.isnan(a_i):
-                continue
-            if side == SUPPORT:
-                if m30_lo[i] <= lv.price + 0.05 * a_i:
-                    reached = True
-                    if touch_bar < 0:
-                        touch_bar = i
-                if m30_cl[i] < lv.price - 0.10 * a_i:
-                    reacted = True
-                    break
-            else:
-                if m30_hi[i] >= lv.price - 0.05 * a_i:
-                    reached = True
-                    if touch_bar < 0:
-                        touch_bar = i
-                if m30_cl[i] > lv.price + 0.10 * a_i:
-                    reacted = True
-                    break
-        if not reached or reacted:
+        # ---------- entry evaluation: normal level, then QM retest fallback ----------
+        setup = None
+        qm_obj = None
+        qm_bonus = 0.0
+        qm_st = False
+        lvl_obj = None
+        if near:
+            lv = min(near, key=lambda o: abs(o.price - px))
+            setup = _eval_entry(side, dirn, lv.price, k, m30_op, m30_cl, m30_hi,
+                                m30_lo, a30v, nm, book.levels, atr_k, P)
+            lvl_obj = lv
+        if setup is None and P["qm_module"]:
+            qcands = book.qm_candidates(side, px, P["max_dist_atr"] * atr_k, k,
+                                        m30_cl, m30_op, m30_hi, m30_lo,
+                                        a30v, nm)
+            if qcands:
+                qm, _tb = min(qcands, key=lambda q: abs(q[0].price - px))
+                setup = _eval_entry(side, dirn, qm.price, k, m30_op, m30_cl, m30_hi,
+                                    m30_lo, a30v, nm, book.levels, atr_k, P)
+                if setup is not None:
+                    qm_obj = qm
+                    qm.armed = False            # QM consumed at this retest
+                    qm.tested += 1
+                    qm_bonus = P["qm_grade_bonus"]
+                    qm_st = qm.tested >= 2      # stQM on 2nd+ retest
+                    lvl_obj = qm
+        if setup is None and P["ems_module"]:
+            ecands = book.ems_candidates(side, px, P["max_dist_atr"] * atr_k, k,
+                                         m30_cl, m30_hi, m30_lo, a30v, nm)
+            if ecands:
+                ez, _tb = min(ecands, key=lambda e: abs(0.5 * (e[0].lo + e[0].hi) - px))
+                ez_price = 0.5 * (ez.lo + ez.hi)
+                setup = _eval_entry(side, dirn, ez_price, k, m30_op, m30_cl, m30_hi,
+                                    m30_lo, a30v, nm, book.levels, atr_k, P)
+                if setup is not None:
+                    ez.tested += 1
+                    qm_bonus = P["ems_grade_bonus"]
+                    # EMS pseudo-level for grading (not fresh, M30 TF, touched)
+                    lvl_obj = _ems_pseudo(ez)
+        if setup is None:
             continue
-
-        # optional CRT-style sweep: wick through the level then close back inside
-        if P["require_sweep"]:
-            swept = False
-            for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
-                a_i = a30v[i]
-                if side == SUPPORT:
-                    swept = swept or (m30_lo[i] < lv.price - 0.05 * a_i
-                                      and m30_cl[i] > lv.price)
-                else:
-                    swept = swept or (m30_hi[i] > lv.price + 0.05 * a_i
-                                      and m30_cl[i] < lv.price)
-            if not swept:
-                continue
+        entry, sl, tp, risk, rr = setup["entry"], setup["sl"], setup["tp"], setup["risk"], setup["rr"]
+        swept = setup["sweep_bar"] >= 0
 
         # ---------- session filter ----------
         if P["session_filter"] and not (P["session_start"] <= t.hour < P["session_end"]):
             continue
 
-        # ---------- entry style ----------
-        sweep_bar = -1
-        for i in range(max(1, k - P["reach_bars"] + 1), k + 1):
-            a_i = a30v[i]
-            if side == SUPPORT:
-                if m30_lo[i] < lv.price - 0.05 * a_i and m30_cl[i] > lv.price:
-                    sweep_bar = i
-                    break
-            else:
-                if m30_hi[i] > lv.price + 0.05 * a_i and m30_cl[i] < lv.price:
-                    sweep_bar = i
-                    break
-
-        if P.get("entry_style", "trigger") == "sweep":
-            # sniper entry: market at the close of the bar right after the
-            # sweep bar closed (strict parity with the EA: the sweep must be
-            # the JUST-CLOSED bar — no stale-price fills).
-            if sweep_bar != k:
-                continue
-            entry = float(m30_cl[sweep_bar])
-            if dirn > 0:
-                ext = float(m30_lo[sweep_bar: k + 1].min())
-                sl = ext - P["sl_buf_atr"] * atr_k
-            else:
-                ext = float(m30_hi[sweep_bar: k + 1].max())
-                sl = ext + P["sl_buf_atr"] * atr_k
-            risk = abs(entry - sl)
-            if risk <= 0:
-                continue
-        else:
-            # ---------- M30 structure-shift trigger ----------
-            cl = m30_cl
-            w = P["swing_pivot"]
-            swing_j = -1
-            swing_px = 0.0
-            for j in range(k - w, w, -1):
-                win = cl[j - w: j + w + 1]
-                if dirn > 0 and cl[j] == win.min():
-                    swing_j, swing_px = j, cl[j]
-                    break
-                if dirn < 0 and cl[j] == win.max():
-                    swing_j, swing_px = j, cl[j]
-                    break
-            if swing_j < 0:
-                continue
-            trig = False
-            for x in range(swing_j + 1, k + 1):
-                if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
-                    trig = True
-                    break
-            if not trig:
-                continue
-            # sequencing: the shift must follow the touch and live at the level
-            if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
-                continue
-            if abs(swing_px - lv.price) > P["swing_near_atr"] * atr_k:
-                continue
-            entry = float(cl[k])
-            if dirn > 0:
-                ext = float(m30_lo[k - seg12 + 1: k + 1].min())
-                sl = ext - P["sl_buf_atr"] * atr_k
-            else:
-                ext = float(m30_hi[k - seg12 + 1: k + 1].max())
-                sl = ext + P["sl_buf_atr"] * atr_k
-            risk = abs(entry - sl)
-            if risk <= 0:
-                continue
-
-        if P["tp_mode"] == "level":
-            opp = RESIST if dirn > 0 else SUPPORT
-            best = None
-            best_d = 1e30
-            for o in book.levels:
-                if o.broken or o.side != opp:
-                    continue
-                ahead = (o.price - entry) if dirn > 0 else (entry - o.price)
-                if ahead <= risk:
-                    continue
-                if ahead < best_d:
-                    best_d, best = ahead, o.price
-            if best is None:
-                continue
-            tp = best
-        else:
-            tp = entry + dirn * P["fixed_rr"] * risk
-
-        rr = abs(tp - entry) / risk
-        if rr < P["min_rr"]:
-            continue
-
         # ---------- management layer: grading + psych filters ----------
-        swept = sweep_bar >= 0
         size = 1.0
         tp1p = None
         if P["mgmt"]:
             day = t.date()
             if losses_day.get(day, 0) >= P["max_losses_day"]:
                 continue
-            zkey = (lv.tf, lv.kind, round(lv.price, 0))
+            zkey = (lvl_obj.tf if lvl_obj else "QM",
+                    getattr(lvl_obj, "kind", "QM"),
+                    round(getattr(lvl_obj, "price", 0.0), 0))
             if zone_day.get((day, zkey), 0) >= P["max_reentry_zone"]:
                 continue
             score = ((1.0 if swept else 0.0)            # sweep at zone
-                     + (1.0 if lv.fresh else 0.0)        # fresh level
-                     + (1.0 if lv.tf == "D1" else 0.5)   # TF weight (P03-05)
+                     + (1.0 if getattr(lvl_obj, "fresh", False) else 0.0)  # fresh level
+                     + (1.0 if getattr(lvl_obj, "tf", "QM") == "D1" else 0.5)  # TF weight
                      + 1.0                               # storyline gate passed (V4-01)
                      + (0.5 if P["session_filter"] else 0.0)   # session weight
                      + (0.5 if rr >= 1.5 else 0.0)       # RR quality
-                     - (0.5 if lv.touches == 1 else 0.0))  # 2nd-touch derate
+                     - (0.5 if getattr(lvl_obj, "touches", 0) == 1 else 0.0)  # 2nd-touch derate
+                     + qm_bonus)                         # QM strong S/R bonus
             if not swept and score > 4.5:                # C11: no sweep never A+
                 score = 4.5
             if score < P["grade_min"]:
                 continue
             size = (1.0 if score >= P["grade_aplus"]
+                    else P["size_b"] if (qm_st and score >= 3.0)   # stQM reduced
                     else P["size_a"] if score >= 4.0
                     else P["size_b"])
             dbg_score = score
 
         open_trade = dict(
             dir=dirn, entry=entry, sl=sl, tp=tp, risk=risk, rr=rr,
-            entry_time=t, level=f"{lv.tf}/{lv.kind}", level_price=lv.price,
+            entry_time=t,
+            level=f"{getattr(lvl_obj, 'tf', 'QM')}/{getattr(lvl_obj, 'kind', 'QM')}",
+            level_price=getattr(lvl_obj, "price", entry),
             bias="BULL" if bias > 0 else "BEAR",
             size=size, tp1=None, tp1_done=False, open_frac=1.0, runner=False,
             r=0.0, score=(dbg_score if P["mgmt"] else None),
+            qm_entry=(qm_obj is not None),
         )
         if P["mgmt"]:
             if P["mgmt_profile"] == 2:
@@ -647,7 +908,9 @@ def run(start, end, params=None):
                 open_trade["_p1c"] = P["tp1_close"]
                 open_trade["_p2c"] = P["tp2_close"]
             day = t.date()
-            zkey = (lv.tf, lv.kind, round(lv.price, 0))
+            zkey = (getattr(lvl_obj, "tf", "QM"),
+                    getattr(lvl_obj, "kind", "QM"),
+                    round(getattr(lvl_obj, "price", 0.0), 0))
             zone_day[(day, zkey)] = zone_day.get((day, zkey), 0) + 1
         entry_i = k
 

@@ -228,3 +228,54 @@ scout → probe → MT5 → hold-out verdict, merged only on pass. Open question
 SMT needs a second symbol (XAGUSD correlation) — tester multi-symbol mode;
 document if non-mechanizable on XAUUSDm alone. BBMA module optional (EMS-15,
 default OFF pending probe).
+
+
+## Family probes — Tasks 15–16, 2026-11-14
+
+### QM module (Task 15) — FAILED hold-out gate, NOT merged
+Source: part03 QM family, part04 QM quality gate (BOS body ≥0.8×ATR, hesitation), video_3 ftQM/stQM, video_1 failed-flip=QM.
+Scout (`qm_module` flag, OFF = bit-identical baseline — verified): QM spawns when a tested level breaks, playing the flipped role; ftQM full size/stQM 0.7×; QM grade bonus +1.
+| Window | Trades | WR | Net R |
+|---|---|---|---|
+| IS baseline | 26 | 46.2% | +11.14 |
+| IS QM | ~105 | ~43% | +20 (79 H4/QM trades) |
+| HO baseline | 6 | 66.7% | +8.88 |
+| HO QM | ~24 | ~30% | −6 (18 QM trades, **−8.2R, 17% WR**) |
+Verdict: QM fails the two-window hold-out gate (HO decisively negative). Not merged. Caveat: mechanization spawns QM on a tested level's first break rather than doctrinal second-break failed flip; regardless, hold-out is decisively negative.
+
+### PD gate (Task 16, CE/SMT/fibo/daily-bias family) — NOT merged (no expectancy gain)
+Source: part09 P09-01 PD gate. Long only in D1 discount (PD<0.5), short only in premium (PD>0.5), equilibrium [0.45,0.55] = no trade. SMT/CE cluster/fibo shelf deferred (2nd symbol / complexity).
+| Window | Trades | WR | Net R |
+|---|---|---|---|
+| IS baseline | 26 | 46.2% | +11.14 |
+| IS pd_gate | 15 | ~46% | +6.8 |
+| HO baseline | 6 | 66.7% | +8.88 |
+| HO pd_gate | 4 | 75% | +5.8 |
+Verdict: PD gate reduces trades and R on BOTH windows without improving WR. Not an expectancy improvement → not merged.
+
+Remaining (Tasks 17–19): EMS engulfing engine, APA shift cascade/AOL, SMC Luap entry modules. Scout two-window probe first; MT5 only on pass.
+
+
+
+### EMS engulfing-fail module (Task 17) — FAILED two-window gate, NOT merged
+Source: EMS cluster (EG fail zones flip to opposite role), correction rule for all.md (engulfed-candle box marking).
+Scout (`ems_module` flag, OFF = bit-identical baseline): engulfing candle on M30 marks engulfed-candle body as zone; price closing through zone flips its role; flipped zone = strong S/R entry with ems_grade_bonus +1; 2-times use budget.
+| Window | Trades | WR | Net R |
+|---|---|---|---|
+| IS baseline | 26 | 46.2% | +11.14 |
+| IS EMS | ~107 | ~36% | +0.9 (81 EMS/EG trades, **32% WR**) |
+| HO baseline | 6 | 66.7% | +8.88 |
+| HO EMS | ~28 | ~50% | +7.1 (22 EMS trades) |
+Verdict: EMS IS is decisively negative (32% WR). Not merged despite positive HO.
+
+### Family probe summary (Tasks 15–17)
+| Module | IS vs baseline | HO vs baseline | Two-window gate | Merged? |
+|---|---|---|---|---|
+| QM | +20R / ~43% WR | −8.2R / 17% WR | FAIL | No |
+| PD gate | +6.8R (fewer trades) | +5.8R (fewer trades) | pass but no expectancy gain | No |
+| EMS | +0.9R / 32% WR | +7.1R / 50% WR | FAIL (IS) | No |
+
+None of the three probed families improved expectancy on both windows. The management layer (Task 12–14) remains the only addition that passed both windows.
+
+Remaining (Tasks 18–19): APA shift cascade/AOL, SMC Luap entry modules. Scout two-window probe first; MT5 only on pass.
+
