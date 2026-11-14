@@ -118,3 +118,14 @@ LU13-01,Part_13_SMC_Secrets_and_Tips.md,luap,protected_weak,"swing that caused B
 LU14-01,Part_14_Top_Down_Analysis_Workflow.md,luap,tda_workflow,HTF map range+POIs -> halt until tap -> LTF Major IDM body break = LTF CHoCH -> execute; TP HTF extreme,,yes,
 LU15-01,Part_15_Real_Chart_Case_Study.md,luap,tp_ladder_bmsc,TP1 first LTF structural -> BE; TP2 HTF inducement; TP final HTF external liquidity; LTF CHoCH against near target = early exit,,yes,management layer
 LU15-02,Part_15_Real_Chart_Case_Study.md,luap,preflight_check,HTF bias + discount zone + HTF Eng LQD swept -> buy prep; mirrored for sells,,yes,
+APA1-01,01_apa_market_overview_and_liquidity.md,apa,aol_box,"AOL = box[top,bottom,validation,invalidation]; price beyond invalidation extreme = INVALIDATED",,yes,core object
+APA1-02,01_apa_market_overview_and_liquidity.md,apa,trend_phase,PURE vs DIFFERENT (pullback re-enters AOL) bullish/bearish + consolidation; strict boundary checks,,yes,
+APA2-01,02_apa_liquidity_engineering_and_levels.md,apa,le_pillars,LEVEL -> THRUST (pierce+fail) -> FMD (absolute extreme = strict SL) -> CHoCH; no entry before sweep,,yes,
+APA2-02,02_apa_liquidity_engineering_and_levels.md,apa,flip_le,flip zone: no buy on touch; wait dip below + close back above micro-high; SL at FMD,,yes,
+APA3-01,03_apa_areas_of_liquidity_and_types.md,apa,engulf_types,Type1 same-color sweep engulf (box=FMD..c1 close); Type2 body engulf; Type3 marubozu c1; box coords rigid,,yes,
+APA3-02,03_apa_areas_of_liquidity_and_types.md,apa,type4_wol,Monthly formation needs Weekly formation INSIDE the monthly zone else invalid,,yes,HTF gate
+APA4-01,04_apa_directional_bias_and_market_shift.md,apa,tf_cycles,Weekly cycle W1->H4->M30->M5->M3/M1; Monthly cycle MN->D1->H1->M15->M3; two TFs must agree,,yes,coordinator
+APA4-02,04_apa_directional_bias_and_market_shift.md,apa,shift_reclaim,"shift = close beyond last LH/HL; reclaim = immediate takeout of shift extreme (trap -> strongest continuation); transition = chop, stand down",,yes,
+APA5-01,05_apa_entry_modules_and_consumption.md,apa,consumption_50,"price using >=50% of AOL depth = consumed, less reliable",pct=0.5,yes,freshness metric
+APA5-02,05_apa_entry_modules_and_consumption.md,apa,fta_rule,HTF AOL = FTA; near FTA take partials/BE/skip if RR poor,,yes,management
+APA5-03,05_apa_entry_modules_and_consumption.md,apa,apa_modules_5,"Shift cascade, Flip T1 (single candle), Flip T2 (wick-overlap confirm else abort), double L.E., FTA module",,yes,

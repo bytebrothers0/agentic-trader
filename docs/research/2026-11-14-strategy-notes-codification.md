@@ -452,22 +452,38 @@
 - "Don't get greedy": LTF CHoCH against the position near target = exit early (mechanizable early-exit rule).
 - Risk 1% per trade.
 
-## Cluster 5: APA
+## Cluster 5: APA (apa) — READ ✔ (5/5)
 
-### 01_apa_market_overview_and_liquidity.md
-(pending read)
+**Cluster identity:** "Action Price Area" — AOL (Area of Liquidity) boxes as first-class stateful objects with validation/invalidation points, trend-phase classifier, two rigid timeframe cycles, 4 engulfing zone Types, L.E. (Liquidity Engineering) = LEVEL/THRUST/FMD/CHoCH, and 5 entry modules. Very mechanizable; complements Luap SMC.
 
-### 02_apa_liquidity_engineering_and_levels.md
-(pending read)
+### 01_apa_market_overview_and_liquidity.md — READ ✔
+- Limit orders = magnets; stop orders = momentum injectors (stop clusters behind swing H/L).
+- **AOL = box [top, bottom, validationPoint, invalidationPoint]**; validation = close beyond local extreme confirming dominance; invalidation = absolute extreme (Ask/Bid beyond → INVALIDATED).
+- **Trend phases:** PURE_BULLISH (breakout + no retrace into the new AOL), DIFFERENT_BULLISH (pullback re-enters the AOL box), mirrored bearish, CONSOLIDATION. Strict boundary checks (>, <, <=) — no "how deep is deep" subjectivity.
+- Bot arms entry modules only when price is inside the box (Different phases).
 
-### 03_apa_areas_of_liquidity_and_types.md
-(pending read)
+### 02_apa_liquidity_engineering_and_levels.md — READ ✔
+- **L.E. four pillars:** LEVEL (overthrow pivot) → THRUST (pierce + fail to sustain, wick/close back) → **FMD** (Further Most Deviation = absolute extreme of thrust = strict SL) → CHoCH (structural break opposite the sweep direction).
+- Buy validated at support ONLY after engineering (sweep) occurred; sell mirrored.
+- **Flip L.E.:** flip zone (resistance→support) — do NOT buy on touch; wait for dip below zone (Thrust) + close back above a micro-structure high (CHoCH); SL at FMD.
 
-### 04_apa_directional_bias_and_market_shift.md
-(pending read)
+### 03_apa_areas_of_liquidity_and_types.md — READ ✔
+- **Type 1 "Sweep" engulfing:** both candles SAME color; candle2's wick sweeps candle1's extreme; close beyond candle1's close. Box: [candle2 FMD extreme .. candle1 close].
+- **Type 2 "Standard" engulfing:** opposite color body engulfing; validation = later close beyond candle1's high/low; box top = candle1.High, bottom = candle2.Low (or lower of the two).
+- **Type 3 "Minor/no wick":** candle1 near-marubozu (wicks < threshold); box = candle1 body.
+- **Type 4 WOL (Weekly/Monthly):** Monthly formation requires a Weekly formation INSIDE the Monthly zone, else invalid (HTF nested-validation gate).
 
-### 05_apa_entry_modules_and_consumption.md
-(pending read)
+### 04_apa_directional_bias_and_market_shift.md — READ ✔
+- **Two cycles:** Weekly cycle W1→H4→M30→M5→M3/M1; Monthly cycle MN→D1→H1→M15→M3. Constant TF = anchor (AOL + bias); situational TFs = refinement/execution. At least two TFs must agree.
+- **Shift point:** bullish shift = close above last significant LH in a downtrend; bearish = close below last significant HL.
+- **Reclaim point:** shift happens but price immediately takes out the absolute extreme that caused the shift → original trend RECLAIMED (trap confirmation, strongest continuation).
+- **Transition:** close beyond shift point but no clear inside/outside formation before reversing = chop → stand down.
+- Shift leaves new AOL with Inside or Outside formation rules (bounding-box math given).
+
+### 05_apa_entry_modules_and_consumption.md — READ ✔
+- **Consumption:** price using ≥50% of an AOL's depth = consumed → less reliable, likely to break through next time (mechanizable freshness metric).
+- **FTA (First Trouble Area):** HTF AOLs are opposing forces; near an FTA take partials / BE / skip if RR poor.
+- **5 modules:** (1) Shift cascade (Constant AOL → TF1 shift + AOL → TF2 shift + AOL → limit at TF2 AOL, SL at TF2 invalidation); (2) Flip Type 1 (flip level >2 touches + aggressive break + single-candle Type 3 AOL just before break → limit on retest); (3) Flip Type 2 (multi-candle consolidation + **HTF wick-overlap confirmation**, else abort); (4) L.E. module (double L.E.: sweep+CHoCH at Constant invalidation zone → tap → second sweep+CHoCH on TF2 → enter); (5) FTA module (H1 shift + H4 also shifted = high prob; H4 merely reacting = reduce/skip).
 
 ## Cluster 6: video notes + reference
 
