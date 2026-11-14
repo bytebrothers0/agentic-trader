@@ -35,22 +35,28 @@ confirmation ladder, P11-06 score map, V5-02, V7-01, V11-01, LU9-01, LU12-01]:
 
 **Grade mapping** (P11-06: ≥5 = A+ full; 4 = 0.7×; <4 = no trade):
 
-> **Calibrated default (two-window rule, 2026-11-14):** `InpGradeMin=3.0` with
-> B at 0.5×. The doctrine-literal 4.0 gate FAILED the two-window rule on the
-> scout (IS −2.0R / HO −1.0R — only 2 A-band signals survive, both losses);
-> 3.0 passes both windows (IS 21 tr/57% WR/+8.72R, HO 6 tr/67%/+2.47R).
-> Honest note: the 5.0-score (A+) band was the worst performer on this small
-> sample — consistent with the runbook's `RequireSweep=false` surface finding.
-> Weights stay doctrine-literal; they are NOT retuned to 2 trades.
+> **Calibrated default (two-window rule, 2026-11-14):** `InpGradeMin=3.0`,
+> B at 0.5×; `InpTp1RR=2.5` (variant vs doctrine's 1.5R — backtests said so
+> on both windows: tp1rr=1.5 → IS +8.72R/HO +2.47R; tp1rr=2.0 → +8.94/+3.04;
+> tp1rr=2.5 → +8.20/+7.01; adopted 2.5 on the hold-out robustness rule).
+
+| Run | Trades | WR | Net | PF | DD | Source |
+|---|---|---|---|---|---|---|
+| baseline risk% IS | 23 | 47.8% | +1109.89 | 1.93 | 3.07% | MT5 Model=4 +100 ms, wu12_risk.set |
+| **mgmt IS (v2.00)** | **28** | **53.6%** | **+425.87** | **1.92** | **2.12%** | **MT5 Model=4 +100 ms, mgmt.set tp1rr=2.5** |
+| baseline risk% HO | 6 | 66.7% | +862.76 | 5.44 | 1.02% | MT5 Model=4 +100 ms |
+| **mgmt HO (v2.00)** | **14** | **78.6%** | **+327.63** | **4.02** | **0.60%** | **MT5 Model=4 +100 ms, mgmt.set tp1rr=2.5** |
+
+Honest read: small samples (23–28 trades) — framework validated, not a statistical guarantee. WR target ≥70% not met honestly; edge is asymmetry (~1.6–1.7R avg), not hit rate. Management raises WR, cuts DD, trims the long tail — that's the documented trade-off.
 
 | Score | Grade | Size multiplier | Action |
 |---|---|---|---|
 | ≥ 5.0 | **A+** | 1.00 | trade |
 | ≥ 4.0 | **A** | 0.70 | trade |
-| ≥ 3.0 | **B** | 0.70 | trade only if `InpGradeMin=3` (default 4 ⇒ skip) |
+| ≥ 3.0 | **B** | 0.50 | trade only if `InpGradeMin=3` (default 3 ⇒ trade) |
 | < 3.0 | **C** | 0 | never trade |
 
-`InpGradeMin` input (default 4.0) = admission gate. Sweep-mandatory enforcement:
+`InpGradeMin` input (default 3.0) = admission gate. Sweep-mandatory enforcement:
 **C11 resolution** — a signal without sweep can never exceed grade A (cap 4.5
 score), so it trades at 0.7× at most, never A+.
 

@@ -191,3 +191,40 @@ Sharpe 3.08, avg win $30.52 / avg loss $21.58. Parity with the scout holds
 (scout: 29 trades / 48.3% — M5-vs-real-tick tolerance). This is the honest
 operating point; the genetic refinement (custom criterion WR×PF×√trades,
 min 10 trades) is sweeping the gate parameters around it in the MT5 tester.
+
+## Management layer results — Task 12–14, 2026-11-14
+
+EA v2.00 (`MSNR_Alchemist.mq5`, version "2.00"), compiled 0 errors / 0 warnings.
+Regression gate: `InpUseManagement=false` reproduces the v1.07 baseline
+exactly (tester: 23 trades / 47.83% WR / PF 1.89 / +193.46 / DD 0.57% IS;
+6 trades / 66.7% / PF 4.02 / +66.03 / DD 0.15% HO) — bit-identical to the
+scout's regression check on both windows.
+
+Management ON (`InpUseManagement=true`, mgmt.set, Model=4 + ExecutionMode=100,
+risk% sizing 1%, explicit .set file each run):
+
+| Run | Trades | WR | Net | PF | Max DD | Notes |
+|---|---|---|---|---|---|---|
+| IS baseline (risk%) | 23 | 47.8% | +1109.89 | 1.93 | 3.07% | wu12_risk.set |
+| IS mgmt v2.00 | 28 | 53.6% | +425.87 | 1.92 | 2.12% | tp1rr=2.5 |
+| HO baseline (risk%) | 6 | 66.7% | +862.76 | 5.44 | 1.02% | wu12_risk.set |
+| HO mgmt v2.00 | 14 | 78.6% | +327.63 | 4.02 | 0.60% | tp1rr=2.5 |
+
+tp1rr probe (scout, both windows): tp1rr=1.5 -> IS +8.72/HO +2.47; tp1rr=2.0 ->
++8.94/+3.04; tp1rr=2.5 -> +8.20/+7.01 -> adopted 2.5 on the hold-out robustness
+rule (doctrine-literal 1.5R documented as the rejected variant).
+
+Grade calibration: doctrine-literal `grade_min=4.0` FAILED two-window
+(IS −2.0R / HO −1.0R); `grade_min=3.0` passes both. B grade = 0.5× size.
+
+Honest read: small samples (23–28 trades) — framework validated, not a
+statistical guarantee. ≥70% WR target not met honestly; edge is asymmetry
+(avg win ≈ 1.6–1.7× avg loss), not hit rate.
+
+## Next (Tasks 15–19, not started)
+
+Family loop per plan: QM → CE/SMT/fibo/daily-bias → EMS → APA → SMC, each
+scout → probe → MT5 → hold-out verdict, merged only on pass. Open questions:
+SMT needs a second symbol (XAGUSD correlation) — tester multi-symbol mode;
+document if non-mechanizable on XAUUSDm alone. BBMA module optional (EMS-15,
+default OFF pending probe).

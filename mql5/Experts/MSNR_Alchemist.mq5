@@ -26,12 +26,19 @@
 //|  TIME EXIT  flat after N M30 bars (~4 days for 200).              |
 //|  SESSION    London/NY only (07:00-20:00 UTC), input-tunable.      |
 //|                                                                   |
+//|  v2 MANAGEMENT LAYER (docs/specs/2026-11-14-management-layer.md): |
+//|  grading engine (score->A+/A/B, admission gate, size multipliers),|
+//|  partials ladder (TP1 1:1.5RR 50% + SL->BE, TP2 30%, runner 20%   |
+//|  trailing behind M30 close pivots), obstacle profile (V11: 80%    |
+//|  at first obstacle), psych filters (2 losses/day cap, 1 entry    |
+//|  per level/day). InpUseManagement=false = v1.07 regression mode.  |
+//|                                                                   |
 //| Runs on any chart; pipeline fires on each closed M30 bar. Level   |
 //| book rebuilds on closed H4 bars; storyline on closed H1 bars.     |
 //| Tested under Model=4 (real ticks) with ExecutionMode=100 ms.      |
 //+------------------------------------------------------------------+
 #property copyright "MSNR Project"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -82,6 +89,21 @@ input double InpSwingNearATR   = 0.50;   // broken minor swing must sit within X
 input bool   InpRequireSweep   = false;  // require wick THROUGH the level then close-back (CRT trigger)
 input int    InpReachBars      = 12;     // level-touch lookback window (M30 bars)
 
+input group "=== Management layer (v2; docs/specs/2026-11-14-management-layer.md) ==="
+input bool   InpUseManagement  = false;  // OFF = regression mode (v1.07 behaviour)
+input double InpGradeMin        = 3.0;    // admission gate (score); 4.0 = doctrine-literal, FAILED two-window
+input double InpGradeAplus      = 5.0;    // score for full size
+input double InpSizeA           = 0.70;   // A-grade size multiplier (score 4.0..5.0)
+input double InpSizeB           = 0.50;   // B-grade size multiplier (score 3.0..4.0)
+input double InpTp1RR           = 1.5;    // TP1 = 1:1.5 RR (P11-03)
+input double InpTp1ClosePct     = 50.0;   // % of position closed at TP1
+input double InpTp2ClosePct     = 30.0;   // % closed at TP2 (the level TP); rest = runner
+input bool   InpMoveToBreakeven = true;   // SL -> entry after TP1 (P11-03, PH10-03)
+input int    InpManagementProfile = 1;   // 1 = partials ladder, 2 = obstacle mgmt (V11-02: 80% at obstacle)
+input double InpObstacleClosePct= 80.0;   // profile 2: % closed at the first obstacle
+input int    InpMaxLossesPerDay= 2;      // psych: stop after N losing trades/day (P11-05)
+input int    InpMaxReentryZone = 1;      // psych: max entries per level/day (P11-05)
+
 input group "=== Debug ==="
 input bool   InpVerbose        = false;  // journal every pipeline evaluation
 
@@ -119,6 +141,29 @@ datetime g_entry_time   = 0;        // position entry bar time
 int     g_atr_m30       = INVALID_HANDLE;
 int     g_atr_h4        = INVALID_HANDLE;
 int     g_atr_d1        = INVALID_HANDLE;
+
+// --- management layer state (v2) ---
+bool    g_mgmt_tp1_done = false;    // TP1 partial filled (profile 2: true from entry)
+bool    g_mgmt_runner   = false;    // runner active (trailing remainder)
+double  g_mgmt_tp1      = 0.0;      // TP1 price (0 = profile 2 / disabled)
+double  g_mgmt_tp       = 0.0;      // TP2 / obstacle price (manual: broker TP removed)
+double  g_mgmt_frac1    = 0.0;      // fraction of the ORIGINAL volume closed at TP1
+double  g_mgmt_frac2    = 0.0;      // fraction closed at TP2; remainder = runner
+double  g_mgmt_vol0     = 0.0;      // original filled volume
+double  g_mgmt_entry    = 0.0;
+int     g_mgmt_dir      = 0;
+
+// psych: one entry per (server day, level)
+struct SZoneUse
+  {
+   datetime day;
+   int      tf;
+   int      kind;
+   double   price;
+   int      count;
+  };
+SZoneUse g_zones[256];
+int      g_zones_n = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -449,13 +494,13 @@ bool SessionOk(const datetime t)
    return(utc_hour >= InpSessionStart && utc_hour < InpSessionEnd);
   }
 
-double CalcLots(const double sl_distance)
+double CalcLots(const double sl_distance, const double mult = 1.0)
   {
-   double vol = InpFixedLot;
+    double vol = InpFixedLot;
    if(!InpUseFixedLot)
      {
       double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      double risk_amt = equity * InpRiskPercent / 100.0;
+      double risk_amt = equity * InpRiskPercent / 100.0 * mult;
       double tick_val = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tick_sz  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(tick_val <= 0 || tick_sz <= 0 || sl_distance <= 0) return(InpFixedLot);
@@ -463,6 +508,8 @@ double CalcLots(const double sl_distance)
       if(loss_per_lot <= 0) return(InpFixedLot);
       vol = risk_amt / loss_per_lot;
      }
+   else
+      vol = InpFixedLot * mult;
    double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
@@ -472,11 +519,160 @@ double CalcLots(const double sl_distance)
   }
 
 //+------------------------------------------------------------------+
+//| Management helpers (v2)                                           |
+//+------------------------------------------------------------------+
+double NormVol(const double vol)
+  {
+   double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double v = vol;
+   if(step > 0) v = MathFloor(v / step) * step;
+   return(NormalizeDouble(MathMax(vmin, MathMin(vmax, v)), 2));
+  }
+
+datetime ServerDay(const datetime t) { return((datetime)((long)t / 86400 * 86400)); }
+
+// losing OUT deals today (partial TP fills count positive; BE fills ~0)
+int CountTodayLosses(const datetime day_start)
+  {
+   int losses = 0;
+   if(!HistorySelect(day_start, TimeCurrent() + 60)) return(0);
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk == 0) continue;
+      if((long)HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(tk, DEAL_ENTRY) == DEAL_ENTRY_IN) continue;
+      if(HistoryDealGetDouble(tk, DEAL_PROFIT) < -0.001) losses++;
+     }
+   return(losses);
+  }
+
+bool ZoneSlotOk(const datetime day, const SLevel &lv)
+  {
+   for(int i = 0; i < g_zones_n; i++)
+      if(g_zones[i].day == day && g_zones[i].tf == lv.tf &&
+         g_zones[i].kind == lv.kind && MathAbs(g_zones[i].price - lv.price) < _Point)
+         return(g_zones[i].count < InpMaxReentryZone);
+   return(true);
+  }
+
+void ZoneRegister(const datetime day, const SLevel &lv)
+  {
+   for(int i = 0; i < g_zones_n; i++)
+      if(g_zones[i].day == day && g_zones[i].tf == lv.tf &&
+         g_zones[i].kind == lv.kind && MathAbs(g_zones[i].price - lv.price) < _Point)
+        { g_zones[i].count++; return; }
+   if(g_zones_n < 256)
+     {
+      g_zones[g_zones_n].day = day;
+      g_zones[g_zones_n].tf = lv.tf;
+      g_zones[g_zones_n].kind = lv.kind;
+      g_zones[g_zones_n].price = lv.price;
+      g_zones[g_zones_n].count = 1;
+      g_zones_n++;
+     }
+  }
+
+// tick-level management: TP1 partial + BE, TP2 partial, runner arming
+void ManagePosition()
+  {
+   if(!PositionSelect(_Symbol)) return;
+   if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) return;
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   long   type  = PositionGetInteger(POSITION_TYPE);
+   int    dir   = (type == POSITION_TYPE_BUY) ? 1 : -1;
+   double vol   = PositionGetDouble(POSITION_VOLUME);
+   double sl    = PositionGetDouble(POSITION_SL);
+   double tp    = PositionGetDouble(POSITION_TP);
+   double bid   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // stage A: TP1 partial + SL -> breakeven (profile 1 only; profile 2 starts at stage B)
+   if(!g_mgmt_tp1_done && g_mgmt_tp1 > 0)
+     {
+      bool hit = (dir > 0) ? (bid >= g_mgmt_tp1) : (ask <= g_mgmt_tp1);
+      if(hit)
+        {
+         double cv = NormVol(g_mgmt_vol0 * g_mgmt_frac1);
+         if(cv > 0 && vol > cv + 1e-8 && trade.PositionClosePartial(_Symbol, cv))
+           {
+            g_mgmt_tp1_done = true;
+            if(InpMoveToBreakeven)
+               trade.PositionModify(_Symbol, NormalizeDouble(entry, _Digits), tp);
+            PrintFormat("MSNR MGMT: TP1 %.2f lots @ %.3f, SL->BE", cv, g_mgmt_tp1);
+           }
+         else
+            g_mgmt_tp1_done = true;    // cannot split further — SL to BE, ride
+        }
+      return;                          // one management action per tick
+     }
+
+   // stage B: TP2 / obstacle partial; the remainder becomes the runner
+   if(g_mgmt_tp1_done && !g_mgmt_runner)
+     {
+      bool hit = (dir > 0) ? (bid >= g_mgmt_tp) : (ask <= g_mgmt_tp);
+      if(hit && g_mgmt_tp > 0)
+        {
+         if(InpMoveToBreakeven && sl != NormalizeDouble(entry, _Digits))
+            trade.PositionModify(_Symbol, NormalizeDouble(entry, _Digits), tp);
+         double cv = NormVol(g_mgmt_vol0 * g_mgmt_frac2);
+         if(cv > 0 && vol > cv + 1e-8 && trade.PositionClosePartial(_Symbol, cv))
+           {
+            g_mgmt_runner = true;
+            PrintFormat("MSNR MGMT: TP2 %.2f lots @ %.3f, runner active", cv, g_mgmt_tp);
+           }
+         else
+            g_mgmt_runner = true;      // remainder rides as one block (BE + trail)
+        }
+      return;
+     }
+  }
+
+// per-M30-close: runner trail behind the last confirmed close pivot
+void UpdateRunnerTrail(const MqlRates &m30[], const int nm, const int last)
+  {
+   if(!g_mgmt_runner || !PositionSelect(_Symbol)) return;
+   int dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+   double sl = PositionGetDouble(POSITION_SL);
+   double m30_close[];
+   ArrayResize(m30_close, nm);
+   for(int i = 0; i < nm; i++) m30_close[i] = m30[i].close;
+   int w = InpSwingPivot;
+   for(int j = last - w; j >= w; j--)
+     {
+      double mx = m30_close[j], mn = m30_close[j];
+      for(int k2 = j - w; k2 <= j + w; k2++)
+        {
+         if(k2 == j) continue;
+         if(k2 > last) break;
+         if(m30_close[k2] > mx) mx = m30_close[k2];
+         if(m30_close[k2] < mn) mn = m30_close[k2];
+        }
+      bool is_h = (m30_close[j] == mx), is_l = (m30_close[j] == mn);
+      if(dir > 0 && is_l)
+        {
+         double ns = NormalizeDouble(MathMax(sl, m30_close[j]), _Digits);
+         if(ns > sl) trade.PositionModify(_Symbol, ns, PositionGetDouble(POSITION_TP));
+         break;
+        }
+      if(dir < 0 && is_h)
+        {
+         double ns = NormalizeDouble(MathMin(sl, m30_close[j]), _Digits);
+         if(sl == 0.0 || ns < sl) trade.PositionModify(_Symbol, ns, PositionGetDouble(POSITION_TP));
+         break;
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| The pipeline — runs on each closed M30 bar                        |
 //+------------------------------------------------------------------+
 void Pipeline()
   {
-   // --- manage time exit on the open position
+   // --- manage time exit + runner trail on the open position
    if(HasOpenPosition() && g_entry_time > 0)
      {
       int held = (int)((TimeCurrent() - g_entry_time) / PeriodSeconds(PERIOD_M30));
@@ -486,6 +682,12 @@ void Pipeline()
             PrintFormat("MSNR: time exit after %d M30 bars", held);
          g_entry_time = 0;
          return;
+        }
+      if(InpUseManagement)
+        {
+         MqlRates mt[];
+         int nmv = CopyRates(_Symbol, PERIOD_M30, 0, 60, mt);
+         if(nmv >= 10) UpdateRunnerTrail(mt, nmv, nmv - 2);
         }
       return;   // one trade at a time — nothing else while in position
      }
@@ -623,6 +825,39 @@ void Pipeline()
    if(rr < InpMinRR)
      { if(InpVerbose) PrintFormat("MSNR: RR %.2f < %.2f — skip", rr, InpMinRR); return; }
 
+   // --- management layer: grading + psych gates (all OFF in regression mode)
+   double size_mult = 1.0;
+   datetime today = 0;
+   bool swept_flag = false;
+   if(InpUseManagement)
+     {
+      for(int i = MathMax(1, last - InpReachBars + 1); i <= last && !swept_flag; i++)
+        {
+         double a_i = AtrAt(g_atr_m30, i, nm);
+         if(lv.side == SIDE_SUPPORT)
+            swept_flag = (m30[i].low < lv.price - 0.05 * a_i && m30[i].close > lv.price);
+         else
+            swept_flag = (m30[i].high > lv.price + 0.05 * a_i && m30[i].close < lv.price);
+        }
+      double score = (swept_flag ? 1.0 : 0.0)            // sweep at zone
+                   + (lv.fresh ? 1.0 : 0.0)               // fresh level
+                   + (lv.tf == 1 ? 1.0 : 0.5)             // TF weight (P03-05)
+                   + 1.0                                  // storyline gate (V4-01)
+                   + (InpSessionFilter ? 0.5 : 0.0)       // session weight
+                   + (rr >= 1.5 ? 0.5 : 0.0)              // RR quality
+                   - (lv.touches == 1 ? 0.5 : 0.0);       // 2nd-touch derate
+      if(!swept_flag && score > 4.5) score = 4.5;         // C11: no sweep never A+
+      if(score < InpGradeMin)
+        { if(InpVerbose) PrintFormat("MSNR: grade %.1f < %.1f — skip", score, InpGradeMin); return; }
+      size_mult = (score >= InpGradeAplus) ? 1.0 : (score >= 4.0 ? InpSizeA : InpSizeB);
+
+      today = ServerDay(m30[last].time);
+      if(CountTodayLosses(today) >= InpMaxLossesPerDay)
+        { if(InpVerbose) Print("MSNR: daily loss cap reached — no new entries"); return; }
+      if(!ZoneSlotOk(today, lv))
+        { if(InpVerbose) Print("MSNR: zone re-entry cap — skip"); return; }
+     }
+
    // --- broker constraints: spread + min stop distance
    long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
    if(spread > InpMaxSpreadPts) { Print("MSNR: spread ", spread, " too wide — skip"); return; }
@@ -631,20 +866,39 @@ void Pipeline()
    if(MathAbs(entry - sl) < min_dist || MathAbs(tp - entry) < min_dist) return;
 
    // --- sizing + order
-   double vol = CalcLots(risk);
+   double vol = CalcLots(risk, size_mult);
    double point_val = _Point;
    double sl_norm = NormalizeDouble(sl, _Digits);
    double tp_norm = NormalizeDouble(tp, _Digits);
+   // management mode: the broker TP is removed; TP1/TP2 are managed on ticks
+   double send_tp = InpUseManagement ? 0.0 : tp_norm;
 
    bool ok;
-   if(dir > 0) ok = trade.Buy(vol, _Symbol, 0.0, sl_norm, tp_norm, "MSNR_Alc");
-   else        ok = trade.Sell(vol, _Symbol, 0.0, sl_norm, tp_norm, "MSNR_Alc");
+   if(dir > 0) ok = trade.Buy(vol, _Symbol, 0.0, sl_norm, send_tp, "MSNR_Alc");
+   else        ok = trade.Sell(vol, _Symbol, 0.0, sl_norm, send_tp, "MSNR_Alc");
 
    if(ok)
      {
       g_entry_time = m30[last].time;
-      PrintFormat("MSNR ENTRY %s @ %.3f SL %.3f TP %.3f RR %.2f | %s/%s lvl %.3f bias %s",
-                  dir > 0 ? "BUY" : "SELL", entry, sl_norm, tp_norm, rr,
+      if(InpUseManagement)
+        {
+         g_mgmt_entry = entry;
+         g_mgmt_dir = dir;
+         g_mgmt_vol0 = trade.ResultVolume();
+         g_mgmt_runner = false;
+         g_mgmt_frac1 = (InpManagementProfile == 2) ? 0.0 : InpTp1ClosePct / 100.0;
+         g_mgmt_frac2 = (InpManagementProfile == 2) ? InpObstacleClosePct / 100.0
+                                                    : InpTp2ClosePct / 100.0;
+         g_mgmt_tp = tp_norm;
+         g_mgmt_tp1 = (InpManagementProfile == 2) ? 0.0 : entry + dir * InpTp1RR * risk;
+         if(InpManagementProfile == 1 && g_mgmt_tp1 > 0 &&
+            ((dir > 0 && g_mgmt_tp1 >= tp_norm) || (dir < 0 && g_mgmt_tp1 <= tp_norm)))
+            g_mgmt_tp1 = tp_norm;                        // ladder collapse
+         g_mgmt_tp1_done = (InpManagementProfile == 2);  // profile 2 starts at stage B
+         ZoneRegister(today, lv);
+        }
+      PrintFormat("MSNR ENTRY %s @ %.3f SL %.3f TP %.3f RR %.2f size %.2f | %s/%s lvl %.3f bias %s",
+                  dir > 0 ? "BUY" : "SELL", entry, sl_norm, tp_norm, rr, size_mult,
                   lv.tf == 0 ? "H4" : "D1",
                   lv.kind == LEVEL_KIND_A ? "A" : lv.kind == LEVEL_KIND_V ? "V" :
                   lv.kind == LEVEL_KIND_GAP ? "GAP" : "OCL",
@@ -673,6 +927,10 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   // tick-level management (v2): TP1/TP2 partials, BE
+   if(InpUseManagement && HasOpenPosition())
+      ManagePosition();
+
    // pipeline once per closed M30 bar
    datetime m30_time = iTime(_Symbol, PERIOD_M30, 0);
    if(m30_time == g_last_m30) return;
