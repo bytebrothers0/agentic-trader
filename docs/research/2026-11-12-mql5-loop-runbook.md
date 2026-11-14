@@ -77,7 +77,18 @@ ShutdownTerminal=1
 | scout (fixed look-ahead) | same operating point | 70 | 35.7% | +5.36 R | — | — |
 | v1.05 trigger+operating point (real ticks) | d1 bias, sweep-gate, uses 1/2, sw=3, RR≥1.0 | 24 | **45.8%** | **+55.16 (+0.55%)** | **1.20** | 1.02% |
 | v1.05 hold-out (scout, 2025.05→2025.10) | window untouched by any probe | 4 | 50.0% | +2.58 R | — | — |
-| v1.05 genetic refinement (full enumeration) | 10496 combos, Model=4+100 ms | running (~11%) | — | — | — | — |
+| v1.05 genetic refinement (full enumeration) | 10496 combos, Model=4+100 ms | done: 3694 passes | — | — | — | — |
+| v1.06 sweep-winner confirmation | uses 3/4, sw=4, near=0.5, no sweep, RR≥1.25 | 63 | 44.4% | +482.41 (+4.8%) | 1.94 | 0.85% |
+| v1.06 hold-out (real ticks) | **FAILED to generalize** | 29 | 31.0% | −38.51 | 0.82 | 1.63% |
+| v1.05 hold-out (real ticks) | generalizes | 4 | 75.0% | +60.77 | 12.94 | 0.05% |
+
+**The hold-out verdict:** the exhaustive sweep's best parameter pocket (63
+trades, PF 1.94, +4.8%) is regime-fit — on the unseen May–Oct 2025 window it
+loses money (PF 0.82). The v1.05 operating point — which was *not* tuned to
+the sweep — is positive on both windows. The lesson stands: parameters tuned
+hard to one regime buy in-sample beauty and out-of-sample pain. Final config
+selection is decided by `research/robust_scan.py`: candidates must be
+positive on BOTH windows.
 
 **Bug log (the loop working as intended):**
 1. **v1.00/v1.01 freshness direction bug** — `ReplayLife` mixed chronological

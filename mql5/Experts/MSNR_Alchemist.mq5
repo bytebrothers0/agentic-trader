@@ -49,15 +49,15 @@ input int    InpH4Bars         = 300;    // H4 history scanned for levels
 input int    InpD1Bars         = 60;     // D1 history scanned for levels
 input int    InpLevelMaxAgeBars= 300;    // level max age (bars of its own TF)
 input double InpBreakBufATR    = 0.10;   // body-break buffer (x ATR of level TF)
-input int    InpUsesH4         = 2;      // H4 level use budget (2-times rule)
+input int    InpUsesH4         = 3;      // H4 level use budget (2-times rule)
 input int    InpUsesD1         = 4;      // D1 level use budget (4-times rule)
 input bool   InpRequireFresh   = false;  // entry only at never-touched levels (else 2x/4x budgets)
 input int    InpStoryPivot     = 3;      // storyline close-pivot window (bars)
-input int    InpSwingPivot     = 2;      // M30 minor swing pivot window
+input int    InpSwingPivot     = 4;      // M30 minor swing pivot window
 
 input group "=== Risk & execution ==="
-input double InpSlBufATR       = 0.10;   // SL buffer beyond reaction extreme (x ATR M30)
-input double InpMinRR          = 1.0;    // skip trades below this reward:risk
+input double InpSlBufATR       = 0.20;   // SL buffer beyond reaction extreme (x ATR M30)
+input double InpMinRR          = 1.25;   // skip trades below this reward:risk
 input int    InpTPMode         = 0;      // 0 = nearest opposing level, 1 = fixed RR
 input double InpFixedRR        = 2.0;    // TP distance in R when TPMode=1
 input int    InpEntryStyle     = 0;      // 0 = trigger (M30 swing break), 1 = sweep (enter at the sweep close)
@@ -77,9 +77,9 @@ input double InpRiskPercent    = 1.0;    // % of equity risked per trade
 input double InpOneTrade       = true;   // one position at a time
 
 input group "=== Sequencing (the Alchemist order: touch -> reaction -> shift) ==="
-input int    InpTrigAfterTouch = 8;      // trigger close must be within N M30 bars of the level touch
-input double InpSwingNearATR   = 1.50;   // broken minor swing must sit within X ATR of the level
-input bool   InpRequireSweep   = true;   // require wick THROUGH the level then close-back (CRT trigger)
+input int    InpTrigAfterTouch = 12;     // trigger close must be within N M30 bars of the level touch
+input double InpSwingNearATR   = 0.50;   // broken minor swing must sit within X ATR of the level
+input bool   InpRequireSweep   = false;  // require wick THROUGH the level then close-back (CRT trigger)
 input int    InpReachBars      = 12;     // level-touch lookback window (M30 bars)
 
 input group "=== Debug ==="
