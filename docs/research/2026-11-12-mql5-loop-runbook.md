@@ -315,42 +315,49 @@ Remaining open items (documented, not forced):
 - BBMA momentum filter (EMS-15, optional, default OFF).
 
 
-### Frequency build (Task 19) — COMPLETE, honest result
+### Frequency build (Task 19) — COMPLETE, honest result (scout + MT5 EA)
 
 Target: ≥365 trades/year (≥1/day) with positive net R on both windows, accepting lower
-WR if RR/asymmetry carries it. Scout parameter scan + new-model probes (see
-`research/freq_plan.md` for full results).
+WR if RR/asymmetry carries it. Scout parameter scan + new-model probes + MT5 EA tester
+(Model=4, ExecutionMode=100ms, explicit .set files, both windows).
 
 **Honest conclusion: 365/year is NOT achievable with positive two-window expectancy.**
-Every frequency lever was tested on IS + HO; each either destroyed net R, failed HO,
-or reduced trade count:
+Every frequency lever was tested on IS + HO:
 
-| Lever | Result | Verdict |
-|---|---|---|
-| F7 min_rr 1.5→1.0 | IS +13→+16.8 R, HO +3.7→+4.7 R ✓ | MERGED |
-| F6 max_dist 3→5 ATR | HO R improves ✓ | MERGED |
-| Re-use limits uses_h4=6, uses_d1=12 | IS 147/+16.8, HO 40/+4.7 ✓ | MERGED (best core) |
-| top-N candidates (max_candidates=3) | IS −14.2 R | Rejected |
-| reaction-only entry (trigger_required=False) | IS −11.9 R, BEAR −15.2 R | Rejected |
-| F1 Confirmation Entry (f1_module) | IS flat +0.0 R; CONF −19.7 R/19% WR | Rejected |
-| M15 entry_tf | IS +0.5 R thin, HO −0.2 R ✗ | Rejected |
-| Mgmt layer ON + freq config | grade gate filters freq setups to 3 trades | Incompatible |
+| Lever | Scout result | MT5 EA result | Verdict |
+|---|---|---|---|
+| F7 min_rr 1.5→1.0 | IS +13→+16.8 R, HO +3.7→+4.7 R ✓ | N/A (merged into core) | MERGED |
+| F6 max_dist 3→5 ATR | HO R improves ✓ | N/A (merged into core) | MERGED |
+| Re-use limits uses_h4=6, uses_d1=12 | IS 147/+16.8, HO 40/+4.7 ✓ | IS 122tr −$117, HO 56tr −$84 ✗ | MERGED but FAILS EA gate |
+| top-N candidates (max_candidates=3) | IS −14.2 R | Not tested in EA | Rejected |
+| reaction-only entry (trigger_required=False) | IS −11.9 R, BEAR −15.2 R | Not tested in EA | Rejected |
+| F1 Confirmation Entry (f1_module) | IS flat +0.0 R; CONF −19.7 R/19% WR | Not tested in EA | Rejected |
+| M15 entry_tf | IS +0.5 R thin, HO −0.2 R ✗ | Not tested in EA | Rejected |
+| Mgmt layer ON + freq config | grade gate filters freq setups to 3 trades | Not tested in EA | Incompatible |
 
-**Best validated frequency core** (`min_rr=1.0, max_dist_atr=5.0, swing_near_atr=0.75,
-require_fresh=False, uses_h4=6, uses_d1=12, entry_tf=M30, trigger_required=True`):
-- IS: 147 trades, 39.5% WR, +16.84 R
-- HO: 40 trades, 35.0% WR, +4.70 R
-- Both windows PASS the two-window gate.
-- Annualized ≈ ~227/yr combined — ~37% short of the 365/yr floor.
+**Frequency core in EA tester** (`InpMaxDistATR=5.0, InpUsesH4=6, InpUsesD1=12,
+InpMinRR=1.0, InpSwingNearATR=0.75, InpRequireFresh=false, InpSessionFilter=false,
+InpUseManagement=false`):
+
+- IS (2025.11→2026.11): 122 trades, final balance 9,883.06 (−$117) — NET LOSS ❌
+- HO (2025.05→2025.10): 56 trades, final balance 9,916.03 (−$84) — NET LOSS ❌
+
+**Both windows FAIL the two-window gate.** The frequency core increases trade frequency
+(23→122 trades IS) but the thin scout edge (~0.11 R/trade) does not survive real-world
+spread/slippage/exit-timing costs in the EA with real tick data.
 
 The rate limit is structural: D1 bias gate + one entry per M30 bar + mandatory swing-break
-trigger. Relaxing any of these collapses expectancy (proven above). Forcing 365/yr would
-be curve-fitting (the 10496-combo sweep winner failed HO at −38.51 / PF 0.82).
+trigger. Relaxing any of these collapses expectancy. Forcing 365/yr would be curve-fitting
+(the 10496-combo sweep winner failed HO at −38.51 / PF 0.82).
 
-**Recommendation:** adopt the best frequency core as the honest ceiling (~147/yr IS).
+**Recommendation:** do NOT deploy the frequency core as a replacement for EA v2.00.
+EA v2.00 (management layer) remains the only validated version:
+- IS: 28 trades / 53.6% / +425.87 / PF 1.92 / DD 2.12%
+- HO: 14 trades / 78.6% / +327.63 / PF 4.02 / DD 0.60%
+
 If ≥365/yr is mandatory, the honest path is a multi-symbol / multi-strategy basket
 (e.g. XAUUSDm + XAGUSD SMT divergence), not over-trading one mean-reversion model.
 
 Regression lock unchanged: `InpUseManagement=false` + all flags OFF = bit-identical v1.07
-baseline (23 IS / 6 HO trades).
+baseline (23 IS / 6 HO trades). `InpMaxDistATR=3.0` default = v1.07 behavior.
 
