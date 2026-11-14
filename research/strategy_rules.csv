@@ -24,3 +24,21 @@ P03-04,part03_fresh_storyline_50method.md,abax,rbs_sbr_close_rule,"flip requires
 P03-05,part03_fresh_storyline_50method.md,abax,rbs_strength,TF weight M15=1/H1=2/H4=3/D1=4 + sweep + OB + FVG; require >=3 full size,min=3,yes,
 P03-06,part03_fresh_storyline_50method.md,abax,qm_family,QM 4-step; QMR wait BOS+retest+rejection; QMM fake break of QML; QMC fake continuation + break-retest,,yes,QM module source
 P03-07,part03_fresh_storyline_50method.md,abax,qm_no_chase,"never enter fake leg; if no retest + strong continuation = momentum, chase only on retest",,partial,psych discipline
+P04-01,part04_quasimodo_qmr_qmm_qmc.md,abax,qm_quality_gate,"BOS_ATR>=0.8, retest delay>=3 bars, confirm in engulfing/pin/OB50, HTF agrees; else LOW_QUALITY halve or skip",bos_atr=0.8;delay=3,yes,QM module
+P04-02,part04_quasimodo_qmr_qmm_qmc.md,abax,qm_hesitation,QM forms only in uncertainty: range contraction / wick expansion / equal-touch before BOS; impulsive BOS = continuation,,yes,psych nuance
+P04-03,part04_quasimodo_qmr_qmm_qmc.md,abax,session_weight,Asia=0.5 London=1.0 NY=1.0 Overlap=1.5; Asia entries need extra confirm,,yes,session layer
+P04-04,part04_quasimodo_qmr_qmm_qmc.md,abax,oc_hidden_base,two same-color HTF candles (OC cluster 20-30%) -> LTF drill: OB/V/accum/volume; trade if >=2 sub-elements,tol=0.3atr,yes,
+P04-05,part04_quasimodo_qmr_qmm_qmc.md,abax,trendline_rules,"built on closes, >=3 touches, R2>0.85, equal spacing (maxGap/minGap<1.5), anchored to 4 main MSNR zones, never force",r2=0.85,yes,
+P04-06,part04_quasimodo_qmr_qmm_qmc.md,abax,direction_law,"Higher can break lower, lower cannot break higher; LTF BOS vs HTF = internal sweep only",,yes,storyline gate basis
+P05-01,part05_ocl_hiddenbase.md,abax,ocl_qualifier,OCL only from key candles: body>1.5ATR and range>median*1.2; doji rejected,body=1.5atr,yes,
+P05-02,part05_ocl_hiddenbase.md,abax,zone_grade_ladder,"wick-only=C (extra sweep), OCL-only=B (session+MSS), OCL+SNR=A+; Tradeable>=4, A+>=5",trade=4;aplus=5,yes,grading engine
+P05-03,part05_ocl_hiddenbase.md,abax,separate_buffers,never merge wick level and OCL zone layers (Buf_Wick vs Buf_OCL_*),,yes,
+P06-01,part06_trendlines_confluence_direction.md,abax,qml_tl_stack,QML + nearest SNR (40pts) + nearest TL (>=2 touches) sides agree = strongest reversal zone,tol=40pts,yes,
+P06-02,part06_trendlines_confluence_direction.md,abax,qmx,"TL geometrically crosses QM/SNR at point3 + engulfing before point3; stricter than QML-TL, +1 score",,yes,
+P06-03,part06_trendlines_confluence_direction.md,abax,limit_no_candle,confluence stack complete -> limit entry without confirmation candle (parameterized),param,partial,deviation from part01 logged
+P06-04,part06_trendlines_confluence_direction.md,abax,side_agreement,confluence requires same-direction agreement; counter-trend cross = conflict not confluence,,yes,
+P07-01,part07_ce_equilibrium.md,abax,ce_definition,CE = (High+Low)/2 INCLUDING wicks; body-mid = OB-mid different object,,yes,
+P07-02,part07_ce_equilibrium.md,abax,ce_45_50,price returns to 45-50% of range to test strength before continue/reverse,zone=0.45-0.50,yes,
+P07-03,part07_ce_equilibrium.md,abax,ce_magnet_cluster,CE + OBmid + FVGmid within 0.2ATR = magnet; trade cluster zone edge + confirm,tol=0.2atr,yes,
+P07-04,part07_ce_equilibrium.md,abax,ce_chop_invalidation,"CE invalid after 3 crosses in 20 bars (fair value, not S/R)",cross=3/20,yes,
+P07-05,part07_ce_equilibrium.md,abax,ce_strong_filter,"Range>0.8ATR, Body>0.6Range, born from displacement/engulf/BOS, session != Asia",,yes,

@@ -72,17 +72,60 @@
 
 **Management/psych:** "Most enter too early — wait break, then retest. No rushing/chasing" (QMR discipline); "market moves strongly only after most have given up" (QMC mindset); momentum-no-retest handling (QMM).
 
-### part04_quasimodo_qmr_qmm_qmc.md
-(pending read)
+### part04_quasimodo_qmr_qmm_qmc.md — READ ✔
+**Identity:** pages 36–47: QM accuracy + hesitation mindset, OC/OCL system, hidden base, MSNR trendlines + zone strength + CE50 + distance, confluence, multi-TF Direction.
 
-### part05_ocl_hiddenbase.md
-(pending read)
+**Rules:**
+- **QM Quality Gate:** real BOS required (BOS_ATR_ratio ≥0.8); retest delay ≥3 bars; confirmation ∈ {engulfing, pin, OB50+reject}; HTF context check. Otherwise LOW_QUALITY_QM → halve size or skip.
+- **Hesitation Mindset (key nuance):** QM ≠ every BOS — real QM forms in *uncertainty* (range contraction, wick increase, equal-touch before BOS). Pure impulsive BOS = trend continuation, not QM. Do not auto-enter.
+- OCL = open-close zone `[min(close, nextOpen), max(...)]` of key candles (breakout/strong reversal); break = close beyond + displacement; retest = cleaner entry; S/R+FVG overlap bonus.
+- **SessionWeight: Asia=0.5, London=1.0, NY=1.0, Overlap=1.5** — Asia OCL needs extra confirmation (LTF MSS + sweep).
+- OC hidden base: two same-color/shape HTF candles (Open/Close clustered within 20-30%) → drill to LTF window → detect OB/V-shape/Accumulation/VolumeShift; trade only if ≥2 sub-elements. Never enter on HTF OC alone.
+- Trendlines: build on CLOSES (wick-confirm); ≥3 touches, R²>0.85; equal spacing strongest (`maxGap/minGap < 1.5`); decreasing gaps = exhaustion; anchored only to the 4 main MSNR zones; never force.
+- Trendline vs SNR side rule: touches above SNR = strong bullish (buys); below = weak bearish (sells); wicks near SNR confirm.
+- Strong zone = liquidity buildup + main+minor trendlines intersecting + CE/SNR + Fib-time align.
+- **Confluence definition:** 2–3 factors at the SAME point, SAME direction (side-agreement mandatory — a counter-trend cross is conflict, not confluence). Third vote from {Fibo, OB, Liquidity, QML}.
+- **Direction multi-TF law:** "Higher can break lower, lower cannot break higher" — LTF BOS against HTF = internal sweep, not reversal. Formal basis for the storyline gate.
+- AMD = Accumulation-Manipulation-Distribution phase tag; sell confluence wants Manipulation→Distribution complete.
 
-### part06_trendlines_confluence_direction.md
-(pending read)
+### part05_ocl_hiddenbase.md — READ ✔
+**Identity:** pages 38–52 re-cover (overlaps part04 §3–5) with harder parameters + repo mapping to existing indicators (`MSNR_OCL` I3, `MSNR_Freshness` I4, `MSNR_EMS_BOS_Sweep` E2, `MSNR_EMS_FVG` E6).
 
-### part07_ce_equilibrium.md
-(pending read)
+**Rules (adds beyond part04):**
+- OCL qualifier: `body_k > 1.5*ATR AND range_k > median(range,50)*1.2` — doji/small bodies rejected (anti-spam).
+- OC pair tolerance: `abs(Close[h]-Close[h+1]) < 0.3*ATR` and same color; else not OC.
+- **Zone scoring ladder:** entry at wick-level only = grade C (extra sweep required); OCL-only = B (session + MSS); OCL+SNR overlap = A+ (+2). Tradeable if Score ≥4; **A+ if ≥5**.
+- Wick poke = still fresh; body close-through + retest = broken/flipped (consistent with part03 BRAKE).
+- Keep separate buffers: `Buf_Wick`, `Buf_OCL_Top/Bot/Mid` — never merge wick and OCL layers.
+- Hidden-base LTF probe returns flags `hasOB, hasFVG, hasSweep, hasAccum`; score = count; plain micro-range = weak (1), OB+FVG+sweep = strong (3).
+- Fib optional (+0.5 score), never required.
+- Alerts/log taxonomy: `OCL_Birth/Retest`, `OC_HiddenBaseFound(strength)`.
+
+### part06_trendlines_confluence_direction.md — READ ✔
+**Identity:** pages 48–64: [X] Factor confluence, QML SNR+TL triple stack, QMX (QM+TL geometric crossing), trendline distance, confluence builds, Direction hierarchy. Repo: `MSNR_QM_Taxonomy` (abQM/iabQM/ftQM/stQM), E1 engulfing, E9 planner.
+
+**Rules:**
+- "A good trendline isn't the perfect one — it's the respected one."
+- **QML SNR+TL:** QML + nearest key level (±40pts) + nearest trendline (≥2 touches, ±40pts), sides agree → one of the strongest reversal zones. Entry = rejection candle at confluence.
+- **QMX (stricter, +1 score):** trendline geometrically CROSSES the QM/SNR level at point 3 AND engulfing present before point 3 (`EGULF` marks). Both detectors coded separately: `IsQML_TL()` (proximity) vs `IsQMX()` (intersection + engulf).
+- Trendline spacing strength: `spacingStd < 0.3*mean(spacing)`; compression into apex + above SNR = strong continuation; expanding/uneven = weakening.
+- Confluence builds allow **limit entry without confirmation candle** when the stack is complete (`RequireConfirmationCandle=false` — parameterized; deviation from part01's mandatory candle — log as documented choice).
+- Direction hierarchy gate `CanBreak(requestorTF, targetTF)` = requestor ≥ target or HTF flipped.
+- Fibo/CE secondary: score boost only, never a gate.
+- **Overlap logged:** part04 §6 (pages 42–47) and part06 §1, §6 (pages 53–60) cover the same trendline pages with identical rules — canonical version = this file (adds R²/spacing formulas).
+
+### part07_ce_equilibrium.md — READ ✔
+**Identity:** pages 64–78: Candle Equilibrium (CE)/Consequent Encroachment — the 50% core. Repo: extends E5 `MSNR_EMS_PremiumDiscount`.
+
+**Rules:**
+- **CE = (High+Low)/2 INCLUDING wicks** (book explicit; body-mid is the OB-mid, a different object).
+- Control rules: price above CE of strong bullish candle = buyers in control; body close below = sellers gain; wick poke + close back = hold + entry signal.
+- 45–50% zone: price often returns to 45–50% of the range to "check previous strength" before continuing/reversing.
+- **Magnet rule:** CE + OB-mid + FVG-mid clustering within 0.2 ATR = price magnet; trade the cluster zone `[min(mids)..max(mids)]` with entry at cluster edge + confirmation; SL beyond cluster + FVG extreme.
+- Strong CE filter: `Range > 0.8*ATR AND Body > 0.6*Range AND Body > 0.6*ATR`, born from displacement/engulf/BOS, session ≠ Asia; **chopped CE invalid after 3 crosses in 20 bars** (becomes fair value, not S/R).
+- Weak CE: doji/inside-bar/Asia-birth, no confluence, isolated mid → skip or derate.
+- Retest pattern: displacement → slow pullback (3–5 small candles) to CE ± 0.15 ATR → rejection wick + close back → entry; impulsive close-through CE = loss of control → flip bias.
+- KESIMPULAN: CE = strength measurement + direction confirmation + dynamic S/R + smart-money retest zone + pre-move magnet.
 
 ### part08_smt_quarterly.md
 (pending read)
