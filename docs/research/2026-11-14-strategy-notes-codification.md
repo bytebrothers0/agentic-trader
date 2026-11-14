@@ -577,8 +577,53 @@
 
 ---
 
-## Overlap map
-(pending — completed at Task 11)
+## Overlap map (Task 11)
 
-## Conflict register
-(pending — completed at Task 11)
+Concept → where it appears → canonical source (winner) → notes.
+
+| Concept | Appears in | Canonical | Divergences |
+|---|---|---|---|
+| Sweep definition (wick pierce + close back) | P01, P02, P03, PH3, LU8, EMS#7, APA2, V-ref | All agree | Body-close-beyond threshold varies: P01 = +0.2 ATR; others = "close back inside". EA keeps ATR buffer as parameter. |
+| BOS = body close beyond swing | P03, PH2, LU2, EMS#7, V-ref (close cross) | All agree | — |
+| CHoCH = body close through last protected HL/LH | LU2, LU13, APA4 | LUAP | APA calls it "Shift"; same mechanic. |
+| Swing confirmation requires liquidity/IDM taken first | LU2/LU3, PH4 (MSS level locked at TS) | LUAP (more precise: IDM shifting) | Phoenix locks trigger level at sweep instead. Compatible. |
+| Fresh/unfresh lifecycle | P02, P03, V4, V6, EMS_6, APA5 (consumption) | abax part03 (two-flag state machine) + V4 (role flip = fresh again) | APA adds quantitative 50%-depth consumption metric — merge as extra derate input. |
+| OCL marking | V1 (close of first of two same-color candles), PH7 (Max(O,C) of peak candle), EMS (body of engulfed candle) | **V1/V2** (most explicit + 4 types) | PH7's "Max(Open,Close)" = the first candle's close when c1 is bullish — same object. Correction file + V10 correction override box geometry. |
+| Key level drawn at CLOSE | P02, V1, V10 | All agree | — |
+| Premium/discount 50% gate | P01, P09, PH5, EMS-14, LU15, APA, V8 | All agree (0/0.5/1 fib) | EMS-14 mandatory; abax P09 adds EQ-neutral zone; LU15 uses it as TP1. |
+| FVG 3-candle detection | E6 (EA), PH9, REF (low>high[2] AND close[1]>high[2]) | REF (close[1] confirm, no look-ahead) | Matches EA implementation — no change. |
+| OB validity (FVG + unmitigated + sweep) | LU5, LU6, PH9 (must damage structure), P01 | LUAP (strictest) | Phoenix adds "caused structural damage" — equivalent to LUAP's BOS-containment. |
+| OB mitigation refinement to wick 50% | LU6, V9 (equilibrium entry), V8 | LUAP | Same 50% mechanic everywhere. |
+| OrderFlow container → OB inside | LU4 | LUAP only | New concept for EA (not in current Alchemist engine). |
+| Eng LQD trap (don't trade the fake zone) | LU7, LU10, P03 (QMM fake leg), PH6 (trendline sweep), P08 (SMT fake leg) | LUAP | Same psychology in all clusters: "the obvious level is the trap". |
+| Session times | P01 (London manip/NY expansion), P04 (Asia 0.5/London 1/NY 1/overlap 1.5), P09 (London 02:00–08:30, NY 09:30), REF (NY-time: Asia 20–02, London 03–11:30, NY 9:30–16) | **REF (NY-time anchored)** | P09's hours are broker-time; resolve by anchoring to NY timezone and parameterizing. |
+| SMT divergence | P08 (full spec), V-ref n/a | P08 | Requires 2nd symbol (XAGUSD). Mechanizable with correlation gate; tester multi-symbol = manual mode only. |
+| Partials ladder | P11 (50/30/20 + BE), PH10 (50% + BE + trail), LU15 (TP1→BE, TP2, TP3 + early exit), V11 (80% at obstacle / BE), V9 (split entry) | **P11 primary + V11/LU15 as enrichments** | Percentages differ (50/30/20 vs 80% at obstacle); implement as parameterized ladder with two profiles. |
+| SL beyond sweep/fake extreme + buffer | P01 (ATR×0.2), P11 (0.3 ATR + spread×1.5), PH5 (10-pip discipline, skip if >15), LU8 (2–3 pips), APA2 (FMD) | P11 (formula) + PH5 (skip-gate) | Buffer size parameterized per module. |
+| Min RR | P01 (1.5), P11 (1.5), LU10 (1:5+ target) | 1.5 floor | LUAP targets are aspirational outcomes, not gates. |
+| Risk scaling by quality | P05 (zone grade ladder C/B/A+), P11 (score→size), V5 (fresh A+ vs 10–20%), V11 (next-candle vs late), LU9 (0.5%/1% POI ladder), LU12 (Major/Minor IDM) | Merge into one grade engine: score gates (P05/P11) + risk multipliers (V5, LU9, V11) | Implement as unified Score→Size table. |
+| QM family | P03 (QM/QMR/QMM/QMC), V1 (failed flip), V3 (abQM/iabQM/ftQM/stQM), P04 (quality gate) | P03 + V3 taxonomy + P04 gate | ftQM "first time" flag = fresh-state reuse. |
+| Multi-TF storyline gate | P02 (roadblock), P04 (direction law), V4 (X rejects X + Y breakout), V8 (X rejects X + X breakout), EMS-02 ladder | V4 formula (most precise) | Two storyline variants; both supported. |
+| 3-candle CRT / indecision candle | _EMS (body ≤30%), PH5 (doji body <15%) | PH5 doji = stricter; EMS CRT = zone system | Keep both as separate trigger options. |
+| Trendline confluence | P04 (closes, R²>0.85), P06, PH6 (2-point line + ±3 pips) | P04 (stronger stats) | PH6 adds "sweep the trendline" trap awareness (maps to Eng LQD). |
+| BBMA momentum filter | EMS-15 only | Optional, default OFF | Only cluster using it. |
+| Session box drawing | P09, REF | REF hours | — |
+
+## Conflict register (Task 11)
+
+| # | Conflict | Files | Resolution (canonical wins) | Bot impact |
+|---|---|---|---|---|
+| C1 | EG-zone marking: full engulfing candle vs engulfed candle + 3-step box | EMS#7/_8/part2-part1 vs `correction rule for all.md` | **Correction file wins** (explicitly corrections) | EMS module marks engulfed candle box per wick-clamp rule. |
+| C2 | Limit entry without confirmation candle (P06 parameterized) vs mandatory confirmation (P01 sequence) | P06 vs P01 | Both allowed: default = confirmation required (P01); plan-limit only at score ≥5 (P11 overrides) | `InpRequireConfirmation` input, default true; plan-limit branch at A+. |
+| C3 | Partials: 50/30/20 (P11) vs 80% at obstacle (V11) vs TP1 50%+BE (PH10/LU15) | P11 vs V11 vs PH10/LU15 | Two profiles, parameterized: profile A (P11 ladder), profile B (obstacle-driven 80%/BE) | `InpManagementProfile` enum. |
+| C4 | London session hours (02:00–08:30 broker vs 03:00–11:30 NY) | P09 vs REF | REF NY-time anchor; broker offset parameterized | Session inputs in NY time + broker-GMT offset input. |
+| C5 | Doji body threshold (15% PH5 vs 30% CRT indecision) | PH5 vs _EMS | Different objects (doji trigger vs CRT indecision candle) — keep both thresholds separately | No merge. |
+| C6 | Risk per trade: 1% (LU15), 0.5% Decisional/1% Extreme (LU9), "normal vs 10–20%" (V5), 0.5–1.0 (P11) | Multiple | Unified: base risk input 0.5–1.0%; multiplier table by grade/POI class | Grade engine owns multipliers. |
+| C7 | Sweep buffer (0.2 ATR P01 vs 2–3 pips LU8 vs 0.3 ATR + spread×1.5 P11) | Multiple | P11 formula canonical; buffer multiplier per module as input | Per-module SL buffers. |
+| C8 | Skip-tight-SL rule (PH5: skip if SL >15 pips) vs LUAP wide-extreme SLs (Part 10: SL beyond Extreme POI) | PH5 vs LU10 | Regime-dependent: Module-3 extreme entries are structurally wide; skip-gate applies to scalp-tight models only | Skip-gate parameter applies per entry model, not globally. |
+| C9 | "Never trade Engulfing OCLs" (V2) vs EG-zones built on engulfings (EMS) | V2 vs EMS | Different objects: V2's OCL = quiet-trend level; EMS EG = HTF bias engine. Both valid in own module. | Namespace separation. |
+| C10 | SMT contradicting bias: skip or halve (P08) | P08 | Adopted as veto multiplier (−1.5 score) | In grade engine; disabled until XAGUSD feed verified. |
+| C11 | First-touch = full size + no sweep required (basic RBS/SBR per V1) vs sweep mandatory (P01/P11) | V1 vs P01/P11 | Grade engine resolves: no-sweep setups cap at B grade (max 0.7× size), never A+ | Implemented in scoring. |
+| C12 | Daily-loss cap: max 2 losses/day (P11) — not present in other clusters | P11 | Adopted as EA input (default ON, parameterized) | Psych filter module. |
+
+**Doctrine-contradiction rule applied:** in every conflict the more specific/explicit source won (correction file, V10 user correction, REF NY-times). Nothing was silently resolved — every row above carries the documented decision.
