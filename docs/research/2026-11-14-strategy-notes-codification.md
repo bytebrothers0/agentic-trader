@@ -197,37 +197,73 @@
 - Score→size: ≥5 = A+ full; 4 = 0.7×; <4 = no trade; S&D caps 0.5×.
 - Risk inputs: `InpRiskPercent 0.5–1.0`, `InpMinRR 1.5`, magic 888999 (book's set; our EA keeps 999777).
 
-## Cluster 2: MSNR_Part1–10
+## Cluster 2: MSNR_Part1–10 (phoenix_mnsr) — READ ✔ (10/10)
 
-### MSNR_Part1_Top_Down_Analysis.md
-(pending read)
+**Cluster identity:** "PHOENIX FX" course — MSNR as a precision tight-stop (10 pip) reversal system: top-down H1→M15→M5/M1, state machine (POI → BOS trend → Target Sweep → MSS → premium pullback → trigger). Overlaps the abax cluster's core (sweep/MSS/OCL/RBS/CE concepts) — distinct contributions are the **precision execution layer**, **tolerance buffers**, and **management specifics** below.
 
-### MSNR_Part2_Market_Structure_BOS.md
-(pending read)
+### MSNR_Part1_Top_Down_Analysis.md — READ ✔
+- H1 = bias/POI layer (swing highs/lows, BSL/SSL pools, OB/FVG); M15 = setup layer; M5/M1 = execution.
+- **Core setup sequence on LTF:** continuous BOS (trend) → Target Sweep (BSL pierced + rejected) → MSS (break of the swing low preceding the TS). State machine: State 0 waiting for H1 POI → State 1 monitor LTF.
+- Bot: two parallel structure mappers (H1 macro, M15 micro); hierarchical filter — only MSS at high-probability H1 locations.
 
-### MSNR_Part3_Liquidity_and_Target_Sweeps.md
-(pending read)
+### MSNR_Part2_Market_Structure_BOS.md — READ ✔
+- Swing detection options: fractal (2-candle), N-candle extremum (5/5), ATR-based. **BOS = body close beyond prior swing high** (wick = sweep, not BOS). Momentum filter: breakout body size threshold.
+- Trend tracking states: reversal BOS (Change of Character) vs continuation BOS.
+- **"Continuous" rule: require ≥2–3 consecutive directional BOS before hunting reversal setups** (prevents trading unstable early structure).
+- Psychology: continuous BOS builds retail breakout-buying + stop pools below swing lows = the liquidity the strategy harvests.
 
-### MSNR_Part4_Market_Structure_Shift_MSS.md
-(pending read)
+### MSNR_Part3_Liquidity_and_Target_Sweeps.md — READ ✔
+- Pool taxonomy: single swing highs/lows; **EQH/EQL** (≥2 swing points within 2–3 pips = massive pool); time-based (prev day/week high-low, Asia high/low) mapped at day start.
+- **Target Sweep = pierce + rejection:** wick above level + close back below; OR 2–3-candle window rapid reversal (small body close above, engulfed back below). Volume spike optional-confirm.
+- IDM (inducement): minor swing below the main POI; setup stronger if IDM swept before POI tap.
+- Monitoring phase: pierced level → classify breakout (close beyond + hold) vs sweep (rejection) before priming MSS detection.
 
-### MSNR_Part5_Retracements_and_Triggers.md
-(pending read)
+### MSNR_Part4_Market_Structure_Shift_MSS.md — READ ✔
+- BOS = continuation (with trend); MSS = reversal (against trend, immediately after a TS) = CHoCH.
+- **MSS trigger level = the most recent valid swing low before the TS high** (locked at TS confirmation); break requires strong bearish **body close** (wick = just another sweep); impulsive break preferred (measure candle size/time during break).
+- 6-state workflow: trend confirm → liquidity map → TS detect → lock MSS level → monitor → confirm.
+- False-MSS mitigation: HTF alignment mandatory (M15 MSS at H1/H4 zone, else discount/ignore); displacement required — weak overlapping candles = reduce size or skip.
+- Psychology: selling at the TS = catching a falling knife; MSS proves sellers overwhelmed buyers + trapped breakout longs fuel the move.
 
-### MSNR_Part6_Trendlines_and_Confluence.md
-(pending read)
+### MSNR_Part5_Retracements_and_Triggers.md — READ ✔
+- After MSS: define range (TS high → post-MSS low); entries only **above 50% (premium for shorts)**; signals below EQ ignored.
+- POI = OB (last bullish candle before bearish MSS move) or FVG in the premium zone.
+- **Doji trigger:** body < 15% of total range; valid only in premium + at resistance zone (TS level or pre-MSS structural highs).
+- **Pre-zone liquidity:** minor swing highs below the main POI; optimal entry = price sweeps them, then immediately taps the main POI.
+- **10-pip SL discipline:** SL strictly above TS high or entry-Doji wick + spread buffer; **skip trade if required SL distance > ~15 pips** — the whole RR model depends on tight stops.
 
-### MSNR_Part7_Advanced_Entry_Patterns.md
-(pending read)
+### MSNR_Part6_Trendlines_and_Confluence.md — READ ✔
+- Trendlines = secondary confluence only (never create the setup; structure + liquidity do).
+- Standardized construction: point-to-point across the last 2 valid swing fractals (not regression); project forward; confluence = |TrendlinePrice − ResistanceZone| ≤ tolerance (~3 pips).
+- Master trigger upgrade: premium + resistance zone + Doji + trendline intersecting = highest confidence.
+- **Trendline liquidity (advanced):** expect smart money to sweep a perfect retail trendline before the true move — look for TS occurring *with* a trendline break = double-trap scenario.
 
-### MSNR_Part8_Wick_Analysis_and_50_Percent.md
-(pending read)
+### MSNR_Part7_Advanced_Entry_Patterns.md — READ ✔
+- **OCL = Max(Open, Close) of the swing-peak candle** (body, not wick); bodies = accepted value, wicks = sweeps; institutional pullbacks respect OCL lines.
+- RBS/SBR lifecycle: breakout above Res1 → potential support; MSS back below → flips to SBR; pullback to SBR = POI.
+- **"OCL DOJI RBS" perfect storm:** price at historical flipped level (zone tolerance) + specific OCL (precise tolerance) + Doji on tap = entry. Restrictive by design — quality over quantity.
+- Precision rationale: 10-pip stops cannot survive "roughly in the zone" entries.
 
-### MSNR_Part9_Refining_Entries_M1_M5.md
-(pending read)
+### MSNR_Part8_Wick_Analysis_and_50_Percent.md — READ ✔
+- **Wick tip** = the sweep candle's extreme; primary use = SL a fraction beyond it (violation = thesis invalid); secondary = aggressive POI (100% retrace + Doji at tip = risky valid entry).
+- **50% wick rule:** qualifying institutional wick (≥3× body AND during sweep/BOS) midpoint = Wick_50_Level: bullish rejection `Low + (Min(Open,Close)−Low)/2`; bearish `High − (High−Max(Open,Close))/2`.
+- Treated exactly like horizontal S/R/OCL; confluence "OCL + 50% wick + TL" = premium entry zone; Doji/rejection at that exact midpoint = trigger.
 
-### MSNR_Part10_Trade_Management_Psychology.md
-(pending read)
+### MSNR_Part9_Refining_Entries_M1_M5.md — READ ✔
+- M1 hunting rule: first clear **M5 IDM**, then find M1 FVG/OB.
+- OB definition: last opposite-color candle before displacement that caused structural damage (OBs must be associated with sweeps/BOS — not all OBs valid).
+- FVG 3-candle math: bullish `Candle3.Low > Candle1.High`; bearish mirrored.
+- M1 sequence: context (M15 TS+MSS+premium) → M5 IDM cleared → nearest M1 FVG/OB → **limit at FVG bottom / OCL of M1 OB** or M1 Doji market entry.
+- **Squeeze filter:** ATR of last 5 M1 candles shrinking into the POI = probability up; blasting in with large M1 candles = cancel the order.
+- Architecture: EA attached to M1 chart; polls H1/M15/M5 data; handles missing ticks.
+
+### MSNR_Part10_Trade_Management_Psychology.md — READ ✔ (second key management source)
+- **"Too accurate" tolerance layer:** zone-based entries (EntryZone = OCL ± 2 pips; trigger inside the band suffices) — prevents missing moves on 0.1-pip misses.
+- **Fractional scale-in:** 1/3 at FVG front edge + 1/3 at 50% midpoint + 1/3 at the OCL extreme (catches shallow retracements).
+- **TP management:** primary TP = most recent prominent SSL pool (place slightly ABOVE the pool for a short, ensuring fill before bounce).
+- **Runner management:** close 50% at first major SSL pool → move SL to **breakeven** → trail remainder behind M15 lower highs (fractal-based structural trail).
+- **Reliability threshold:** structure narrative (BOS/TS/MSS) from M15/M5 only; M1 = trigger arm after green light; M1-only signal with bullish M15 = false signal, overruled.
+- SMC-confirmed structure integrates best on 5–15 min; below that = more false signals.
 
 ## Cluster 3: EMS (Engulfing MSNR SMC)
 

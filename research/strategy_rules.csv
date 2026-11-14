@@ -59,3 +59,22 @@ P11-03,part11_entry_tp_sl_psychology.md,abax,partials,TP1 IRL/1:1.5RR -> close 5
 P11-04,part11_entry_tp_sl_psychology.md,abax,sl_beyond_fake,SL beyond fake extreme +/- (0.3*ATR + spread*1.5); per-model variants; never average losers,,yes,
 P11-05,part11_entry_tp_sl_psychology.md,abax,daily_loss_cap,"max 2 losses/day or -X% -> stop; max 1 re-entry per zone (anti-revenge, anti-chase)",,yes,psychology filter
 P11-06,part11_entry_tp_sl_psychology.md,abax,score_size_map,>=5 A+ full size; 4 = 0.7x; <4 no trade; S&D caps 0.5x,,yes,risk scaling
+PH1-01,MSNR_Part1_Top_Down_Analysis.md,phoenix,topdown_state,H1 bias/POI -> M15 setup (BOS->TS->MSS) -> M5/M1 execution; two parallel structure mappers,,yes,
+PH2-01,MSNR_Part2_Market_Structure_BOS.md,phoenix,bos_body_close,BOS = body close beyond prior swing; wick = sweep not BOS; momentum filter on breakout body size,,yes,
+PH2-02,MSNR_Part2_Market_Structure_BOS.md,phoenix,continuous_bos,require 2-3 consecutive directional BOS before hunting reversal setups,min=2-3,yes,
+PH3-01,MSNR_Part3_Liquidity_and_Target_Sweeps.md,phoenix,eqh_pools,EQH/EQL = >=2 swing points within 2-3 pips = massive pool; time-based pools mapped daily,band=2-3pips,yes,
+PH3-02,MSNR_Part3_Liquidity_and_Target_Sweeps.md,phoenix,idm_concept,minor swing below main POI swept before POI tap = higher probability,,yes,
+PH4-01,MSNR_Part4_Market_Structure_Shift_MSS.md,phoenix,mss_trigger,"MSS level = last swing low before TS high, locked at TS; body close + impulse required",,yes,
+PH5-01,MSNR_Part5_Retracements_and_Triggers.md,phoenix,doji_trigger,"body <15% of range, in premium, at resistance zone = trigger",ratio=0.15,yes,
+PH5-02,MSNR_Part5_Retracements_and_Triggers.md,phoenix,tight_sl_gate,SL ~10 pips above TS/Doji + buffer; SKIP if required SL distance > ~15 pips,max=15pips,yes,core risk rule
+PH7-01,MSNR_Part7_Advanced_Entry_Patterns.md,phoenix,ocl_body,"OCL = Max(Open,Close) of swing-peak candle; bodies respected by institutions",,yes,
+PH7-02,MSNR_Part7_Advanced_Entry_Patterns.md,phoenix,perfect_storm,SBR level + specific OCL + Doji on tap = entry (triple confluence),,yes,
+PH8-01,MSNR_Part8_Wick_Analysis_and_50_Percent.md,phoenix,wick_tip_sl,SL a fraction beyond sweep wick tip; violation = thesis invalid,,yes,
+PH8-02,MSNR_Part8_Wick_Analysis_and_50_Percent.md,phoenix,wick_50,"institutional wick (>=3x body, during sweep/BOS) midpoint = Wick_50_Level POI; confluence OCL+50%+TL",wicks>=3x body,yes,
+PH9-01,MSNR_Part9_Refining_Entries_M1_M5.md,phoenix,squeeze_filter,M1 ATR of last 5 bars compressing into POI = probability up; blasting in = cancel order,bars=5,yes,
+PH9-02,MSNR_Part9_Refining_Entries_M1_M5.md,phoenix,ob_must_damage,OB valid only if associated with sweep/BOS structural damage,,yes,
+PH10-01,MSNR_Part10_Trade_Management_Psychology.md,phoenix,entry_zone_buffer,"EntryZone = OCL +/- 2 pips; trigger inside band suffices (anti ""too accurate"")",band=2pips,yes,tolerance layer
+PH10-02,MSNR_Part10_Trade_Management_Psychology.md,phoenix,fractional_scale_in,1/3 at FVG edge + 1/3 at 50% + 1/3 at OCL extreme,thirds,yes,
+PH10-03,MSNR_Part10_Trade_Management_Psychology.md,phoenix,runner_mgmt,close 50% at first SSL pool -> SL to BE -> trail rest behind M15 lower highs (fractal),50%+BE+trail,yes,management core
+PH10-04,MSNR_Part10_Trade_Management_Psychology.md,phoenix,reliability_threshold,structure narrative from M15/M5 only; M1 = trigger after green light; M1-only signal = false,,yes,
+PH10-05,MSNR_Part10_Trade_Management_Psychology.md,phoenix,tp_above_pool,place TP slightly above/beyond the liquidity pool to ensure fill before bounce,,yes,
