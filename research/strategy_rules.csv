@@ -101,3 +101,20 @@ EMS-20,full strategy for EMS with breakdown of how to use EG and EF for bias par
 EMS-21,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,ef_zone_flip,"failed bullish engulf = bearish POI, failed bearish = bullish POI; state ACTIVE->FAILED->FLIPPED",,yes,
 EMS-22,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,sweep_before_poi,POI reached without prior liquidity sweep = lower probability (gate),,yes,
 EMS-23,full strategy for EMS with breakdown of how to use EG and EF for bias part 2#Engulfing_smctrading.mp4.md,ems,third_candle_exception,entry may come candle 4/5+; zone valid while BOS/liquidity intact regardless of candle3 retest,,yes,
+LU1-01,Part_1_Valid_Pullback_Identification.md,luap,valid_pullback,pullback = wick or body breaks low/high of the candle making the leg extreme; inside bars ignored; else target shifts,,yes,foundation mechanic
+LU2-01,Part_2_Market_Structure_Mapping.md,luap,swing_needs_idm,new extreme TEMPORARY until first valid pullback (IDM) swept; only then confirmed,,yes,structure core
+LU2-02,Part_2_Market_Structure_Mapping.md,luap,bos_choch_def,BOS = body close beyond confirmed swing; CHoCH = body close through last protected HL/LH,,yes,
+LU3-01,Part_3_All_about_Inducement.md,luap,idm_shifting,new extreme without sweeping IDM -> IDM shifts to newest valid pullback,,yes,
+LU4-01,Part_4_OrderFlows.md,luap,orderflow_container,"OF = last opposite sequence before BOS, box first-candle-high to last-candle-low; wick tap = mitigated",,yes,POI hierarchy base
+LU5-01,Part_5_OrderBlocks.md,luap,ob_checklist,valid OB: FVG + unmitigated + bonus self-sweep; no FVG = engineered/SMT ignore,,yes,
+LU6-01,Part_6_Valid_Orderblock_Identification.md,luap,ob_wick_refine,body mitigated + wick unmitigated -> refine entry to 50% of wick,pct=0.5,yes,
+LU7-01,Part_7_Engineering_Liquidity.md,luap,eng_lqd,pullback between IDM and Extreme = engineered liquidity; must be swept before Extreme entry; never enter at Eng LQD,,yes,trap mechanic
+LU8-01,Part_8_IDM_Sweep_Entry_Module.md,luap,module1_idm_sweep,wick through IDM + close back inside = sweep; enter on break of sweeping candle extreme; body close = cancel,,yes,entry module 1
+LU9-01,Part_9_Decisional_POI_Mitigation.md,luap,risk_ladder,"0.5% risk at Decisional POI, 1% at Extreme POI",0.5/1.0,yes,risk scaling
+LU10-01,Part_10_Eng_LQD_Sweep_Entry_Module.md,luap,module3_eng_lqd,wick through Eng LQD + immediate Extreme tap -> enter on displacement back; limit at Extreme OK; SL beyond Extreme; 1:5+ RR,,yes,highest prob module
+LU11-01,Part_11_Extreme_POI_Mitigation.md,luap,extreme_hierarchy,Extreme OF -> Extreme OB (FVG) -> OB wick -> last extreme candle; all mitigated = skip leg,,yes,POI refinement
+LU12-01,Part_12_Major_vs_Minor_IDM.md,luap,major_minor_idm,"pullback before BOS = Minor (50% prob, light risk); after BOS = Major (70-80%, full risk)",,yes,probability scaling
+LU13-01,Part_13_SMC_Secrets_and_Tips.md,luap,protected_weak,"swing that caused BOS = PROTECTED (break = CHoCH); failed swing = WEAK/targeted (expect sweep, no stops there)",,yes,
+LU14-01,Part_14_Top_Down_Analysis_Workflow.md,luap,tda_workflow,HTF map range+POIs -> halt until tap -> LTF Major IDM body break = LTF CHoCH -> execute; TP HTF extreme,,yes,
+LU15-01,Part_15_Real_Chart_Case_Study.md,luap,tp_ladder_bmsc,TP1 first LTF structural -> BE; TP2 HTF inducement; TP final HTF external liquidity; LTF CHoCH against near target = early exit,,yes,management layer
+LU15-02,Part_15_Real_Chart_Case_Study.md,luap,preflight_check,HTF bias + discount zone + HTF Eng LQD swept -> buy prep; mirrored for sells,,yes,

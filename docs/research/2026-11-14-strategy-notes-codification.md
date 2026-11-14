@@ -364,52 +364,93 @@
 2. EG-fail direction: `_6` says trade breakout direction at pullback; part2 says failed zone flips to opposite-direction POI — both describe the same RBS/SBR flip; canonical = zone flips role; trade on retest respecting new role (i.e., breakout-direction continuation = same thing from the other side). Documented, no code conflict.
 3. BBMA present in _8/_6, absent elsewhere → optional module, default OFF until probe says otherwise.
 
-## Cluster 4: SMC 15-part course
+## Cluster 4: SMC 15-part / "True SMC (Luap)" (luap smc) — READ ✔ (15/15)
 
-### Part_1_Valid_Pullback_Identification.md
-(pending read)
+**Cluster identity:** Fully mechanical SMC framework, candle-range-based (no indicators). Chain: Valid Pullback → IDM → sweep → confirmed swing → BOS/CHoCH → POI hierarchy (Extreme OF/OB/Wick > Decisional > Eng LQD = trap) → Entry Modules 1/2/3. This is the most mechanizable course in the whole set.
 
-### Part_2_Market_Structure_Mapping.md
-(pending read)
+### Part_1_Valid_Pullback_Identification.md — READ ✔
+- **Valid Pullback (bullish):** target candle = candle making current Highest High; pullback confirmed when a later candle's **wick OR body breaks the target candle's LOW**; if instead its high is broken, target shifts to the new HH (reset check). Bearish mirrored.
+- **Inside-bar rule:** inside candle = non-event; the Mother candle's extreme is the reference.
+- Trap: many small "down" candles that never break the HH candle's low = single leg, NOT a pullback.
+- Confirmed pullback = the next step's IDM.
 
-### Part_3_All_about_Inducement.md
-(pending read)
+### Part_2_Market_Structure_Mapping.md — READ ✔
+- **Swing confirmation requires IDM sweep:** new high is TEMPORARY until the first valid pullback low (IDM) is swept; only then = Confirmed HH.
+- **BOS = body close beyond a confirmed swing point** (wick above = liquidity sweep, not BOS).
+- **CHoCH = body close through the LAST PROTECTED higher low (bull→bear)** — the low that caused the last BOS.
+- Trading Range = confirmed HH ↔ protected HL.
 
-### Part_4_OrderFlows.md
-(pending read)
+### Part_3_All_about_Inducement.md — READ ✔
+- IDM = extreme of the **first/most-recent valid pullback** below the temporary high (bullish).
+- IDM sweep (wick or body) ⇒ confirm prior extreme + establish range.
+- **IDM shifting:** new extreme without sweeping IDM ⇒ IDM moves to the newest valid pullback.
+- Reaction before IDM sweep = likely SMT → do not enter, wait for IDM.
 
-### Part_5_OrderBlocks.md
-(pending read)
+### Part_4_OrderFlows.md — READ ✔
+- **OrderFlow = container:** after bullish BOS, the last bearish sequence before the break — box from High of first red candle to Low of last red candle; bearish mirrored.
+- Mitigation filter: any return into the OF (wick tap counts) = mitigated → next unmitigated OF or refine to Extreme.
+- OBs only work inside a valid unmitigated OrderFlow.
 
-### Part_6_Valid_Orderblock_Identification.md
-(pending read)
+### Part_5_OrderBlocks.md — READ ✔
+- Valid OB checklist: (1) **FVG** between OB candle and 3rd candle of the move; (2) **unmitigated**; (3) bonus: OB candle itself swept prior high/low.
+- Extreme OB = at start of move; Decisional OB = near IDM.
+- No FVG above/below ⇒ "Engineered OB"/SMT → ignore.
 
-### Part_7_Engineering_Liquidity.md
-(pending read)
+### Part_6_Valid_Orderblock_Identification.md — READ ✔
+- Liquidity-grab filter: OB candidate must sweep previous candle's extreme; no sweep = Weak OB, avoid.
+- FVG filter: gap in the next 2 candles required; slow all-touching move = efficiency, invalid.
+- Mitigation refinement: body mitigated but wick unmitigated → **refine entry to 50% of the wick**.
+- Hidden OB: tiny opposite candle whose wick pokes beyond the big impulse candle = valid OB.
 
-### Part_8_IDM_Sweep_Entry_Module.md
-(pending read)
+### Part_7_Engineering_Liquidity.md — READ ✔
+- **Eng LQD = valid pullback formed between IDM and the Extreme POI** (fake OB/SNR retail loves).
+- Price approaching Extreme **must sweep Eng LQD first**; sweep of Eng LQD + tap of Extreme = highest-probability setup.
+- Respect of Eng LQD without reaching Extreme = lower-probability Decisional move.
+- Trendline liquidity = engineered liquidity; wait for its sweep into unmitigated OF.
+- Never enter at Eng LQD itself.
 
-### Part_9_Decisional_POI_Mitigation.md
-(pending read)
+### Part_8_IDM_Sweep_Entry_Module.md — READ ✔ (Module No.1)
+- Trigger: candle wicks through IDM and **closes back inside** previous range.
+- Entry trigger: subsequent candle breaks the sweeping candle's High/Low (displacement); patterns = engulfing or long-wick pin bar.
+- **Body close through IDM = NOT a sweep** → potential trend change; cancel Module 1, wait for deeper mitigation.
+- SL 2–3 pips beyond sweep wick extreme; TP = external liquidity (leg target).
 
-### Part_10_Eng_LQD_Sweep_Entry_Module.md
-(pending read)
+### Part_9_Decisional_POI_Mitigation.md — READ ✔
+- Decisional POI = first unmitigated OB/OF where the most recent BOS push started.
+- **IDM filter:** no inducement before the Decisional = invalid/SMT; clear IDM sweep into it = valid.
+- Tapped + reversal = mitigated; reaction fails and breaks through → market heading for Extreme.
+- **Risk ladder: 0.5% at Decisional, 1% at Extreme.**
 
-### Part_11_Extreme_POI_Mitigation.md
-(pending read)
+### Part_10_Eng_LQD_Sweep_Entry_Module.md — READ ✔ (Module No.3, highest probability)
+- Setup: Eng LQD (last pullback) between Decisional and Extreme; price wicks through Eng LQD and **immediately taps the Extreme OF/OB**.
+- Trigger: rejection/displacement back above the Eng LQD level; limit at the Extreme acceptable on strong sweep (no LTF CHoCH needed).
+- SL exactly beyond the Extreme POI (absolute range extreme); TP = external liquidity; target 1:5+ RR.
+- Extreme reached **without** sweeping Eng LQD = caution (possible deeper mitigation).
 
-### Part_12_Major_vs_Minor_IDM.md
-(pending read)
+### Part_11_Extreme_POI_Mitigation.md — READ ✔
+- Extreme refinement hierarchy: **unmitigated Extreme OF → unmitigated Extreme OB (with FVG) → unmitigated OB wick → last extreme candle (the wick)**.
+- All mitigated = leg fully mitigated = high risk, skip.
 
-### Part_13_SMC_Secrets_and_Tips.md
-(pending read)
+### Part_12_Major_vs_Minor_IDM.md — READ ✔
+- **Minor IDM = pullback before BOS; Major IDM = pullback after BOS** (in the new leg).
+- Major IDM sweep ⇒ ~70–80% reversal; Minor IDM sweep ⇒ ~50%, often goes deeper.
+- In complex ranges: the highest/lowest Major IDM = ultimate liquidity target before the Extreme.
+- Risk scaling: Major sweep = full risk (1%); Minor = light risk/scalp only.
 
-### Part_14_Top_Down_Analysis_Workflow.md
-(pending read)
+### Part_13_SMC_Secrets_and_Tips.md — READ ✔
+- **Protected high/low** = swing that caused a BOS; break = CHoCH. **Weak/targeted high/low** = failed to take IDM or BOS; expect sweep, never place stops there.
+- **Single-leg trap:** many small candles one direction without breaking a prior candle extreme = one unit, no internal structure.
 
-### Part_15_Real_Chart_Case_Study.md
-(pending read)
+### Part_14_Top_Down_Analysis_Workflow.md — READ ✔
+- Workflow: H1 map (BOS/CHoCH/IDM → range) → mark unmitigated Decisional+Extreme OFs → halt execution until tap → LTF (M1/M5): find LTF Major IDM → **LTF CHoCH = body-close break of LTF Major IDM** → enter.
+- TP = HTF external liquidity (case shows 1:12).
+
+### Part_15_Real_Chart_Case_Study.md — READ ✔
+- Pre-flight: HTF bullish + price in discount + HTF Eng LQD swept → buy prep.
+- Execution: HTF Extreme OF tap + LTF CHoCH (Major IDM body break) + new LTF inducement → limit at LTF unmitigated OB.
+- **TP ladder: TP1 = first LTF structural high/low (→ move to breakeven), TP2 = HTF inducement, TP Final = HTF external liquidity.**
+- "Don't get greedy": LTF CHoCH against the position near target = exit early (mechanizable early-exit rule).
+- Risk 1% per trade.
 
 ## Cluster 5: APA
 
