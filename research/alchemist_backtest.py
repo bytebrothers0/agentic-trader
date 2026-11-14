@@ -312,10 +312,10 @@ def run(start, end, params=None):
             tr = open_trade
             j0 = m5i.get(t - timedelta(minutes=30))
             j1 = m5i.get(t)
+            exit_px, reason = None, None
             if j0 is not None and j1 is not None:
                 lo5 = m5_lo.iloc[j0 + 1: j1 + 1]
                 hi5 = m5_hi.iloc[j0 + 1: j1 + 1]
-                exit_px, reason = None, None
                 if tr["dir"] > 0:
                     hit_sl = lo5 <= tr["sl"]
                     hit_tp = hi5 >= tr["tp"]
