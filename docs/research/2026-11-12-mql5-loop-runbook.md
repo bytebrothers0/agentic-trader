@@ -314,3 +314,43 @@ Remaining open items (documented, not forced):
 - CE cluster magnet / Abay fibo shelf (complexity not justified by probes).
 - BBMA momentum filter (EMS-15, optional, default OFF).
 
+
+### Frequency build (Task 19) — COMPLETE, honest result
+
+Target: ≥365 trades/year (≥1/day) with positive net R on both windows, accepting lower
+WR if RR/asymmetry carries it. Scout parameter scan + new-model probes (see
+`research/freq_plan.md` for full results).
+
+**Honest conclusion: 365/year is NOT achievable with positive two-window expectancy.**
+Every frequency lever was tested on IS + HO; each either destroyed net R, failed HO,
+or reduced trade count:
+
+| Lever | Result | Verdict |
+|---|---|---|
+| F7 min_rr 1.5→1.0 | IS +13→+16.8 R, HO +3.7→+4.7 R ✓ | MERGED |
+| F6 max_dist 3→5 ATR | HO R improves ✓ | MERGED |
+| Re-use limits uses_h4=6, uses_d1=12 | IS 147/+16.8, HO 40/+4.7 ✓ | MERGED (best core) |
+| top-N candidates (max_candidates=3) | IS −14.2 R | Rejected |
+| reaction-only entry (trigger_required=False) | IS −11.9 R, BEAR −15.2 R | Rejected |
+| F1 Confirmation Entry (f1_module) | IS flat +0.0 R; CONF −19.7 R/19% WR | Rejected |
+| M15 entry_tf | IS +0.5 R thin, HO −0.2 R ✗ | Rejected |
+| Mgmt layer ON + freq config | grade gate filters freq setups to 3 trades | Incompatible |
+
+**Best validated frequency core** (`min_rr=1.0, max_dist_atr=5.0, swing_near_atr=0.75,
+require_fresh=False, uses_h4=6, uses_d1=12, entry_tf=M30, trigger_required=True`):
+- IS: 147 trades, 39.5% WR, +16.84 R
+- HO: 40 trades, 35.0% WR, +4.70 R
+- Both windows PASS the two-window gate.
+- Annualized ≈ ~227/yr combined — ~37% short of the 365/yr floor.
+
+The rate limit is structural: D1 bias gate + one entry per M30 bar + mandatory swing-break
+trigger. Relaxing any of these collapses expectancy (proven above). Forcing 365/yr would
+be curve-fitting (the 10496-combo sweep winner failed HO at −38.51 / PF 0.82).
+
+**Recommendation:** adopt the best frequency core as the honest ceiling (~147/yr IS).
+If ≥365/yr is mandatory, the honest path is a multi-symbol / multi-strategy basket
+(e.g. XAUUSDm + XAGUSD SMT divergence), not over-trading one mean-reversion model.
+
+Regression lock unchanged: `InpUseManagement=false` + all flags OFF = bit-identical v1.07
+baseline (23 IS / 6 HO trades).
+

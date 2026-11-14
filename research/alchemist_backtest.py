@@ -66,11 +66,17 @@ P = dict(
     tp_mode="level",          # "level" | "fixed_rr"
     fixed_rr=2.0,
     entry_style="trigger",    # "trigger" (after M30 swing break) | "sweep" (at the close-back)
+    trigger_required=True,  # if False: enter on level reaction alone (touch + close-back), no swing break
+    # ---- F1 Confirmation Entry (video_9) ----
+    f1_module=False,          # HTF D1 key-level rejection + LTF structure shift entry
+    f1_rej_buf_atr=0.25,      # wick must pierce HTF level by >= this x ATR to count as rejection
     time_exit_bars=200,
     session_filter=True,
     session_start=7,
     session_end=20,
     max_dist_atr=3.0,
+    entry_tf="M30",             # entry/decision timeframe: M30 (baseline) | M15 (2x frequency)
+    max_candidates=1,           # max nearest level candidates tried per bar (F6 top-N)
     # ---- QM module (Task 15) ----
     qm_module=False,          # QM failed-flip levels as strong S/R (OFF = baseline)
     qm_bos_atr=0.8,           # QM quality gate: breakout body >= 0.8 x ATR (real BOS, not wick)
@@ -532,31 +538,35 @@ def _eval_entry(side: int, dirn: int, lvl_price: float, k: int,
     else:
         # ---------- M30 structure-shift trigger ----------
         cl = m30_cl
-        w = P["swing_pivot"]
-        swing_j = -1
-        swing_px = 0.0
-        for j in range(k - w, w, -1):
-            win = cl[j - w: j + w + 1]
-            if dirn > 0 and cl[j] == win.min():
-                swing_j, swing_px = j, cl[j]
-                break
-            if dirn < 0 and cl[j] == win.max():
-                swing_j, swing_px = j, cl[j]
-                break
-        if swing_j < 0:
-            return(None)
-        trig = False
-        for x in range(swing_j + 1, k + 1):
-            if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
-                trig = True
-                break
-        if not trig:
-            return(None)
-        # sequencing: the shift must follow the touch and live at the level
-        if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
-            return(None)
-        if abs(swing_px - lvl_price) > P["swing_near_atr"] * atr_k:
-            return(None)
+        if P.get("trigger_required", True):
+            w = P["swing_pivot"]
+            swing_j = -1
+            swing_px = 0.0
+            for j in range(k - w, w, -1):
+                win = cl[j - w: j + w + 1]
+                if dirn > 0 and cl[j] == win.min():
+                    swing_j, swing_px = j, cl[j]
+                    break
+                if dirn < 0 and cl[j] == win.max():
+                    swing_j, swing_px = j, cl[j]
+                    break
+            if swing_j < 0:
+                return(None)
+            trig = False
+            for x in range(swing_j + 1, k + 1):
+                if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
+                    trig = True
+                    break
+            if not trig:
+                return(None)
+            # sequencing: the shift must follow the touch and live at the level
+            if touch_bar >= 0 and (k - touch_bar) > P["trig_after_touch"]:
+                return(None)
+            if abs(swing_px - lvl_price) > P["swing_near_atr"] * atr_k:
+                return(None)
+        else:
+            # reaction-only entry: swing lives at the level by construction
+            swing_px = lvl_price
         entry = float(cl[k])
         seg_from = max(1, last - 11)
         ext = m30_lo[seg_from] if dirn > 0 else m30_hi[seg_from]
@@ -596,6 +606,100 @@ def _eval_entry(side: int, dirn: int, lvl_price: float, k: int,
 
     return({"entry": entry, "sl": sl, "tp": tp, "risk": risk, "rr": rr,
             "touch_bar": touch_bar, "sweep_bar": sweep_bar})
+
+
+# ----------------------------------------------------------------------
+# F1 Confirmation Entry (video_9): HTF (D1) key-level rejection on LTF, then a
+# structure shift in the trade direction -> enter at the close.
+# Returns a setup dict like _eval_entry or None.
+# ----------------------------------------------------------------------
+def _f1_confirmation_entry(side: int, dirn: int, px: float, k: int,
+                           m30_op: np.ndarray, m30_cl: np.ndarray,
+                           m30_hi: np.ndarray, m30_lo: np.ndarray,
+                           a30v: np.ndarray, book, atr_k: float, P: dict) -> Optional[dict]:
+    if not P.get("f1_module"):
+        return None
+    if k < 2:
+        return None
+    atr = atr_k
+    if np.isnan(atr) or atr <= 0:
+        return None
+    reach = P["reach_bars"]
+    buf = P["f1_rej_buf_atr"] * atr
+    # HTF (D1) key levels on the trade side near price, not broken, within reach
+    cand_lvls = [lv for lv in book.levels
+                 if lv.tf == "D1" and lv.side == side and not lv.broken
+                 and abs(lv.price - px) <= P["max_dist_atr"] * atr]
+    if not cand_lvls:
+        return None
+    # rejection on the last closed bar (k-1): wick pierced the HTF level but
+    # closed back on the trade side
+    o_prev, c_prev, h_prev, l_prev = m30_op[k - 1], m30_cl[k - 1], m30_hi[k - 1], m30_lo[k - 1]
+    for lv in cand_lvls:
+        lp = lv.price
+        rejected = False
+        rej_extreme = lp
+        if side == SUPPORT:   # bullish: pierced below support, closed back above
+            if l_prev < lp - buf and c_prev > lp:
+                rejected = True
+                rej_extreme = l_prev
+        else:                 # bearish: pierced above resistance, closed back below
+            if h_prev > lp + buf and c_prev < lp:
+                rejected = True
+                rej_extreme = h_prev
+        if not rejected:
+            continue
+        # structure-shift trigger: close breaks the minor swing in trade direction
+        cl = m30_cl
+        w = P["swing_pivot"]
+        swing_j = -1
+        swing_px = 0.0
+        for j in range(k - w, w, -1):
+            win = cl[j - w: j + w + 1]
+            if dirn > 0 and cl[j] == win.min():
+                swing_j, swing_px = j, cl[j]; break
+            if dirn < 0 and cl[j] == win.max():
+                swing_j, swing_px = j, cl[j]; break
+        if swing_j < 0:
+            continue
+        trig = False
+        for x in range(swing_j + 1, k + 1):
+            if (dirn > 0 and cl[x] > swing_px) or (dirn < 0 and cl[x] < swing_px):
+                trig = True; break
+        if not trig:
+            continue
+        if abs(swing_px - lp) > P["swing_near_atr"] * atr:
+            continue
+        entry = float(cl[k])
+        risk = abs(entry - rej_extreme)
+        if risk <= 0:
+            continue
+        # TP: nearest opposing unbroken level ahead clearing risk, else fixed RR
+        opp = RESIST if dirn > 0 else SUPPORT
+        tp = None
+        best_d = 1e30
+        for o in book.levels:
+            if o.broken or o.side != opp:
+                continue
+            ahead = (o.price - entry) if dirn > 0 else (entry - o.price)
+            if ahead <= risk:
+                continue
+            if ahead < best_d:
+                best_d, tp = ahead, o.price
+        if tp is None:
+            tp = entry + dirn * P["fixed_rr"] * risk
+        rr = abs(tp - entry) / risk
+        if rr < P["min_rr"]:
+            continue
+        return({"entry": entry, "sl": rej_extreme, "tp": tp, "risk": risk, "rr": rr,
+                "touch_bar": k - 1, "sweep_bar": -1})
+    return None
+
+
+def _f1_pseudo(px: float):
+    """Pseudo-level for F1 Confirmation Entry grading (D1 TF, confirmation kind)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(tf="D1", kind="CONF", price=float(px), fresh=False, touches=0)
 
 
 # ---------------------------------------------------------------------- run
@@ -835,13 +939,22 @@ def run(start, end, params=None):
         qm_st = False
         lvl_obj = None
         if near:
-            lv = min(near, key=lambda o: abs(o.price - px))
-            # APA consumption gate (Task 18): skip if zone depth >=50% used since birth
-            if P["consume_gate"] and _consumed(lv):
-                continue
-            setup = _eval_entry(side, dirn, lv.price, k, m30_op, m30_cl, m30_hi,
-                                m30_lo, a30v, nm, book.levels, atr_k, P)
-            lvl_obj = lv
+            # F6 top-N: try up to max_candidates nearest levels per bar until one
+            # produces a valid setup (nearest first). max_candidates=1 = baseline.
+            near_sorted = sorted(near, key=lambda o: abs(o.price - px))
+            tried = 0
+            for lv in near_sorted:
+                if tried >= P["max_candidates"]:
+                    break
+                tried += 1
+                # APA consumption gate (Task 18): skip if zone depth >=50% used since birth
+                if P["consume_gate"] and _consumed(lv):
+                    continue
+                setup = _eval_entry(side, dirn, lv.price, k, m30_op, m30_cl, m30_hi,
+                                    m30_lo, a30v, nm, book.levels, atr_k, P)
+                if setup is not None:
+                    lvl_obj = lv
+                    break
         if setup is None and P["qm_module"]:
             qcands = book.qm_candidates(side, px, P["max_dist_atr"] * atr_k, k,
                                         m30_cl, m30_op, m30_hi, m30_lo,
@@ -870,6 +983,12 @@ def run(start, end, params=None):
                     qm_bonus = P["ems_grade_bonus"]
                     # EMS pseudo-level for grading (not fresh, M30 TF, touched)
                     lvl_obj = _ems_pseudo(ez)
+        if setup is None and P["f1_module"]:
+            f1s = _f1_confirmation_entry(side, dirn, px, k, m30_op, m30_cl,
+                                         m30_hi, m30_lo, a30v, book, atr_k, P)
+            if f1s is not None:
+                setup = f1s
+                lvl_obj = _f1_pseudo(px)
         if setup is None:
             continue
         entry, sl, tp, risk, rr = setup["entry"], setup["sl"], setup["tp"], setup["risk"], setup["rr"]
