@@ -47,6 +47,23 @@ ROWS = [
     ['P07-03', 'part07_ce_equilibrium.md', 'abax', 'ce_magnet_cluster', 'CE + OBmid + FVGmid within 0.2ATR = magnet; trade cluster zone edge + confirm', 'tol=0.2atr', 'yes', ''],
     ['P07-04', 'part07_ce_equilibrium.md', 'abax', 'ce_chop_invalidation', 'CE invalid after 3 crosses in 20 bars (fair value, not S/R)', 'cross=3/20', 'yes', ''],
     ['P07-05', 'part07_ce_equilibrium.md', 'abax', 'ce_strong_filter', 'Range>0.8ATR, Body>0.6Range, born from displacement/engulf/BOS, session != Asia', '', 'yes', ''],
+    ['P08-01', 'part08_smt_quarterly.md', 'abax', 'smt_divergence', 'XAU/XAG (and 3 forex pairs): fake extreme vs holder; follow the refuser; compare 2 swings 50-bar lookback tol 0.3ATR', 'corr>0.70', 'yes', 'needs 2nd symbol'],
+    ['P08-02', 'part08_smt_quarterly.md', 'abax', 'smt_veto', 'SMT agrees +1.5 score; contradicts -> skip or halve size (-1.5)', '', 'yes', 'grading input'],
+    ['P08-03', 'part08_smt_quarterly.md', 'abax', 'amdx_cycle', 'A=range ADX<20, M=sweep of A extreme + quick return, D=displacement+BOS, X=reset; detect by price not clock', '', 'yes', 'session timing layer'],
+    ['P08-04', 'part08_smt_quarterly.md', 'abax', 'trade_d_not_m', 'M = signal, D = entry; never chase late-phase', '', 'yes', ''],
+    ['P09-01', 'part09_daily_bias_profile.md', 'abax', 'pd_gate', 'PD=(price-low)/(high-low) on D1/H4; long only discount (or premium + ERL swept + SMT + MSS flip); EQ = no bias', '', 'yes', 'daily bias gate'],
+    ['P09-02', 'part09_daily_bias_profile.md', 'abax', 'profiles', 'London reversal/NY continuation, NY reversal, NY Judas, Seek&Destroy; detect, do not force', '', 'partial', 'journaling + gating'],
+    ['P09-03', 'part09_daily_bias_profile.md', 'abax', 'judas_rule', 'NY 09:30 spike: wick>0.6, close back inside <=3 M15 bars, SMT holds -> fade opposite; SL beyond Judas extreme +0.3ATR', '', 'yes', ''],
+    ['P09-04', 'part09_daily_bias_profile.md', 'abax', 'seek_destroy', 'DayRange<0.7*ATR_D1 + both sides swept + no displacement close -> scalp to EQ only, half size', 'size=0.5', 'yes', ''],
+    ['P09-05', 'part09_daily_bias_profile.md', 'abax', 'first_second_opportunity', '1st NY liquidity take often fake (fade only with SMT+PD extreme); 2nd after retest+MSS = trade', '', 'yes', ''],
+    ['P10-01', 'part10_fibo_synthesis.md', 'abax', 'abay_fibo_levels', 'custom levels 0/1/1.47/1.55 entry shelf, -0.72/-0.75/-0.78 invalidation SL, extensions 2.235-4.733 TPs; never classic 0.618', '', 'yes', 'TP ladder source'],
+    ['P10-02', 'part10_fibo_synthesis.md', 'abax', 'htf_shelf_anchor', 'Fibo low anchors to 6-way HTF shelf (key+OB+RBS+FVG+QMM+classicV); HTF_Score>=3 anchor, >=4 A+', '', 'yes', ''],
+    ['P11-01', 'part11_entry_tp_sl_psychology.md', 'abax', 'entry_models_AH', 'A reversal, B OCL retest/flip, C QML-SNR-TL, D QMX, E CE cluster, F SMT fade, G Judas fade, H Fibo continuation', '', 'yes', 'full catalogue'],
+    ['P11-02', 'part11_entry_tp_sl_psychology.md', 'abax', 'confirmation_ladder', 'virgin touch=watch; 1 confirm=standard (score>=4); 2 confirms=A+ full (>=5); score>=5 stack allows plan-limit', '', 'yes', 'grading core'],
+    ['P11-03', 'part11_entry_tp_sl_psychology.md', 'abax', 'partials', 'TP1 IRL/1:1.5RR -> close 50% + SL to breakeven; TP2 ERL/Fibo2.6-2.88 -> close 30% + trail LTF BOS; TP3 runner 20%', '50/30/20', 'yes', 'management layer core'],
+    ['P11-04', 'part11_entry_tp_sl_psychology.md', 'abax', 'sl_beyond_fake', 'SL beyond fake extreme +/- (0.3*ATR + spread*1.5); per-model variants; never average losers', '', 'yes', ''],
+    ['P11-05', 'part11_entry_tp_sl_psychology.md', 'abax', 'daily_loss_cap', 'max 2 losses/day or -X% -> stop; max 1 re-entry per zone (anti-revenge, anti-chase)', '', 'yes', 'psychology filter'],
+    ['P11-06', 'part11_entry_tp_sl_psychology.md', 'abax', 'score_size_map', '>=5 A+ full size; 4 = 0.7x; <4 no trade; S&D caps 0.5x', '', 'yes', 'risk scaling'],
 ]
 
 PATH = os.path.join(os.path.dirname(__file__), "strategy_rules.csv")

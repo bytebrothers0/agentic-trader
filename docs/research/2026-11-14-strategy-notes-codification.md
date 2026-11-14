@@ -127,17 +127,75 @@
 - Retest pattern: displacement → slow pullback (3–5 small candles) to CE ± 0.15 ATR → rejection wick + close back → entry; impulsive close-through CE = loss of control → flip bias.
 - KESIMPULAN: CE = strength measurement + direction confirmation + dynamic S/R + smart-money retest zone + pre-move magnet.
 
-### part08_smt_quarterly.md
-(pending read)
+### part08_smt_quarterly.md — READ ✔
+**Identity:** pages 78–92: SMT divergence (lie detector) + Quarterly Theory/AMDX (session timer). Neither is entry alone.
 
-### part09_daily_bias_profile.md
-(pending read)
+**Rules:**
+- **SMT = FakeLeg vs TrueLeg classifier, not a signal.** "Always follow the pair that refuses the extreme."
+- Four XAU/XAG cases coded: XAU makes LL while XAG holds → bear trap → long XAU; XAU makes HH while XAG holds → bull trap → short; mirrored for XAG-fakes. Compare last two swings within 50-bar lookback, tolerance 0.3 ATR, bars time-aligned ±2.
+- **Correlation gate:** allow SMT only if Pearson(returns, 60 bars excluding last 5) > 0.70; else SMT_STATE=NONE.
+- Pair whitelist: XAUUSD⇄XAGUSD (primary), EURUSD⇄GBPUSD, USDCAD⇄USDCHF, AUDUSD⇄NZDUSD. Avoid SMT if pairs don't normally correlate.
+- SMT entry sequence: identify fake → **wait for close-back-inside (never enter during the fake)** → LTF MSS + OCL/SNR/CE confluence → entry; SL beyond FAKE extreme + 0.3 ATR (not the true leg). Score +1.5 if SMT agrees; **−1.5 (skip or halve) if contradicts**.
+- **Quarterly Theory AMDX:** A=accumulation (range, ADX<20), M=manipulation (sweep of A extreme + quick return), D=distribution (displacement body>1.5ATR + BOS), X=reset. Default session map: Asia=A, London=M, NY=D, late-NY=X — but **detect by price, not clock alone**.
+- A vs X same shape, opposite meaning — track sequence (A before M, X after D).
+- M dip vs real breakdown: M returns quickly + SMT holds + sweep wick; breakdown closes outside + displacement + SMT confirms both.
+- Buying Variation filter: deep M (>1.0 ATR) reclaiming within 3–5 M15 bars with NY approaching = variation buy, not sell.
+- Timing gates: trade D (NY), signal on M (London); `InpTradeLondonM=false, InpTradeNYD=true`.
 
-### part10_fibo_synthesis.md
-(pending read)
+### part09_daily_bias_profile.md — READ ✔
+**Identity:** pages 92–108: Daily Bias (IRL/ERL selection) + Daily Profiles (London reversal/NY continuation, NY reversal, NY Judas, Seek & Destroy #5). "No bias = no trade, even if pattern looks perfect."
 
-### part11_entry_tp_sl_psychology.md
-(pending read)
+**Rules:**
+- ERL = external pools (prior day/week high-low); IRL = internal stepping stones (Asia high/low, FVG mids, OCLs, CE clusters).
+- **PD gate:** `PD = (Price−RangeLow)/(RangeHigh−RangeLow)` on D1/H4 dealing range; Premium >0.5, Discount <0.5, Equilibrium 0.45–0.55. Long only in Discount (or Premium + ERL swept + SMT + MSS flip); short mirrored. **Equilibrium = no bias, wait for M.**
+- Same BOS means opposite things by PD position: discount BOS = continuation (trade); premium BOS = trap (fade) unless ERL swept.
+- **London 02:00–08:30** (times broker-dependent, parameterize): sweep of Asia high/low without displacement = manipulation signal (not entry); London displacement + BOS = trend-day signal → expect NY continuation (Profile 1); both sides swept, no displacement = Seek&Destroy warning → derate size.
+- **NY CME 09:30** execution window; M15 = execution lens; NY determines daily close shape.
+- **1st vs 2nd Opportunity:** 1st liquidity take is often fake (fade only if SMT diverges + PD extreme); 2nd after retest + MSS = trade.
+- **Judas:** spike beyond Asia/London extreme at/after 09:30, wick ratio >0.6, close back inside ≤3 M15 bars, SMT holds → fade opposite on retest of spike CE/OCL; SL beyond Judas extreme +0.3 ATR; TP equilibrium then opposite ERL.
+- **Seek & Destroy #5:** `DayRange < 0.7×ATR_D1 AND both sides swept AND no displacement close`; scalp extremes to equilibrium only, **half size**, require SMT + CE/OCL extreme + LTF MSS; SafeTP=EQ, aggressive TP=opposite extreme; disable trend-continuation entries.
+- Session inputs: `InpAsiaStart/End (20:00–00:00 Asia range), InpLondonStart=02:00, InpLondonEnd=08:30, InpNYOpen=09:30`.
+
+### part10_fibo_synthesis.md — READ ✔
+**Identity:** pages 108–118: custom Abayfx Fibonacci, HTF 6-way confluence shelf, full-system synthesis, EA wiring checklist, THE END (psychology).
+
+**Rules:**
+- **Fibo is the ruler, not the reason** — never a gate; +0.5 score if entry within 0.15 ATR of a level.
+- Custom levels replace classic 0.5/0.618: entry shelf `1.0–1.55` (with precision `1.47/1.55`), invalidation `−0.72/−0.75/−0.78` (Judas dip shelf; **SL beyond −0.78, not beyond 0**; beyond −0.78 = invalidation), extension TPs `2.235 / 2.6 / 2.82–2.88 / 3.27 / 4–4.733`.
+- Anchor rule: Fibo low anchors to **HTF 6-way confluence shelf** (HTF key + OB + RBS + FVG + QMM + classicV), not fractal extreme; skip Fibo if no overlap. `HTF_Score ≥3` to anchor; ≥4 for A+.
+- Full-system `CanTrade` checklist: (1) HTF bias + PD + DailyBias agree; (2) sweep done + SMT holds; (3) confluence zone score ≥4 (≥5 full size); (4) session: London=signal, NY=execution, Asia skip/derate, S&D half-size to EQ; (5) confirmation: rejection wick + close-back + LTF MSS (or plan-limit at score ≥5); (6) SL beyond fake/−0.78, TP IRL→ERL→Fibo extension, RR ≥1.5, spread + news filter.
+- 12-row master ambiguity table (sweep vs breakout, fresh vs used, Judas vs D, A vs X, premium vs discount BOS, Fibo anchor, session blindness, SMT depth…).
+- Closing psychology (author): book is a thinking guide, not absolute rules — "adapt to your own psychology and risk management"; code probabilities + filters + risk, journal profile/score/session/SMT.
+
+### part11_entry_tp_sl_psychology.md — READ ✔ (KEY MANAGEMENT FILE)
+**Identity:** synthesis of Parts 01–10 into the codable entry/TP/SL/psychology playbook.
+
+**Entry models A–H catalogue (all of them):**
+- A: Bullish/bearish reversal playbook (default; sweep→zone+reject→close-back/LTF-BOS entry, RR ≥1.5)
+- B: OCL retest/flip (virgin watch → retest+reject entry; broken+retest = role-flip entry; only displacement candles birth OCL)
+- C: QML SNR+TL triple stack (SL beyond QML extreme)
+- D: QMX cross (TL × QM intersection + engulf; +1 over C)
+- E: CE cluster magnet (cluster edge limit + rejection + LTF MSS; chopped ≥3 crosses = dead)
+- F: SMT fade + NY 2nd opportunity (skip 1st, trade 2nd)
+- G: Judas/London sweep fade (SL beyond Judas extreme +0.3 ATR)
+- H: Trend continuation / Fibo breakout-retest (1.0–1.55 shelf; SL beyond −0.78)
+
+**Confirmation ladder:** virgin touch = watch; 1 confirmation (engulf / close-back / OB50-CE touch+confirm / LTF MSS) = standard entry (score ≥4); 2 confirmations = A+ full size (score ≥5); no confirmation + score ≥5 stack = plan-limit allowed (`PlanEntry=true`).
+
+**SL rules:** beyond fake extreme `±(0.3×ATR + spread×1.5)` — where retail does NOT have stops. Per model: A/B/E sweep extreme +0.2–0.3 ATR; C/D QML/QMX extreme; F/G fake/Judas extreme; H −0.78 shelf. Invalidation exits (no averaging): too many touches, no sweep, HTF contradiction, momentum break. Chopped CE → exit breakeven. LTF 50-method scalp ~10 pips = HIGH_RISK exception with HTF-structure fallback.
+
+**TP ladder:** IRL → ERL → Fibo extensions → HTF key. Trend day holds through EQ; S&D takes EQ only.
+
+**PARTIALS LADDER (the core management layer):**
+- TP1 = IRL / 1:1.5 RR → close **50%**, move SL to **breakeven** (`InpMoveToBreakeven=true`)
+- TP2 = ERL / Fibo 2.6–2.88 → close **30%**, trail by structure (LTF BOS)
+- TP3 = Fibo 3.27-buyside / HTF key → **runner 20%**
+
+**Psychology filters (code what humans cannot):**
+- HTF gate, sweep gate (no sweep = no trade), touch-count derate, session gate, SMT veto, spread/news blackout (S&D + high-impact news = no new entries).
+- **Daily loss cap: max 2 losses/day or −X% → stop (anti-revenge). Max 1 re-entry per zone (anti-chasing).**
+- Score→size: ≥5 = A+ full; 4 = 0.7×; <4 = no trade; S&D caps 0.5×.
+- Risk inputs: `InpRiskPercent 0.5–1.0`, `InpMinRR 1.5`, magic 888999 (book's set; our EA keeps 999777).
 
 ## Cluster 2: MSNR_Part1–10
 
