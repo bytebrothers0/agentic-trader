@@ -485,13 +485,95 @@
 - **FTA (First Trouble Area):** HTF AOLs are opposing forces; near an FTA take partials / BE / skip if RR poor.
 - **5 modules:** (1) Shift cascade (Constant AOL → TF1 shift + AOL → TF2 shift + AOL → limit at TF2 AOL, SL at TF2 invalidation); (2) Flip Type 1 (flip level >2 touches + aggressive break + single-candle Type 3 AOL just before break → limit on retest); (3) Flip Type 2 (multi-candle consolidation + **HTF wick-overlap confirmation**, else abort); (4) L.E. module (double L.E.: sweep+CHoCH at Constant invalidation zone → tap → second sweep+CHoCH on TF2 → enter); (5) FTA module (H1 shift + H4 also shifted = high prob; H4 merely reacting = reduce/skip).
 
-## Cluster 6: video notes + reference
+## Cluster 6: video_1–12 + reference.md (advance mnsr1 / luap smc) — READ ✔ (13/13)
 
-### video_1.md … video_12.md
-(pending read, one section per file)
+**Cluster identity:** "Advanced MSNR / Alchemist" video series — the FTFL/STFL/TTFL framework (storyline → first-timeframe level → second-TF level inside the box → third-TF refinement/equilibrium), OCL taxonomy, Apex/iAB/QM variations, obstacles, and the D1/W4 entry model. `reference.md` is a Pine Script v6 indicator source (not doctrine) — the instructor's chart reference engine.
 
-### reference.md
-(pending read)
+### video_1.md — READ ✔
+- **All key levels marked on the CLOSE of the candle** (support = close of bearish candle before bullish one; resistance = close of bullish candle). Ignore gaps.
+- RBS/SBR role reversal; the level itself is the trigger (no inducement needed for basic RBS/SBR).
+- **Failed SBR/RBS = QM** (level re-broken after the flip = left shoulder, strong S/R on return).
+- **OCL = two consecutive same-color candles; line at the close of the FIRST candle.**
+
+### video_2.md — READ ✔
+- Do NOT trade engulfing OCLs. Four valid OCL types:
+- **sOCL** = OCL formed immediately after a Support (two bullish candles off the V) — continuation/re-entry in uptrend.
+- **rOCL** = OCL formed immediately after a Resistance (two bearish candles off the ∩) — mirrored.
+- **1 LAB OCL** (1 Level Above/Below): standalone OCL valid only if the next key level on the bias side is **another OCL** (not S/R). One of the strongest patterns.
+- **LS OCL** (Left Side): OCL that gets **broken twice** (as support then as resistance); the third approach = extremely strong QM-like level; especially powerful on D1/W1.
+- Philosophy: trade count doesn't matter; RR matters (1:7–1:8 on these).
+
+### video_3.md — READ ✔
+- **Line-chart Apex detection on Monthly/Weekly/Daily ONLY** (explicitly NOT H4 or lower).
+- **Apex = external swing that led to a breakout** of previous structure; internal swings (no breakout) = weak, usually fail.
+- **iAB** (Internal Apex Break) = the exception: internal swing that causes an external breakout → becomes strong S/R.
+- QM types: **abQM** (Apex Break QM), **iabQM** (iAB broken twice), **ftQM** (FIRST time a key level becomes a QM = highly probable), **stQM** (second time, less reliable). [Matches MSNR_OCL indicator namespace I3: sOCL/rOCL/1LAB/LS and abQM/iabQM/ftQM/stQM.]
+
+### video_4.md — READ ✔
+- **Storyline formula: `X Rejects X and Y Breakout`** — X = HTF (MN/W1/D1), Y = one TF below (W1/D1/H4). Bullish: X rejects a fresh X-support + Y breaks an X-resistance; bearish mirrored.
+- The X rejection **must occur on a FRESH key level** — unfresh rejection = invalid storyline.
+- **Fresh/unfresh:** first touch by wick = unfresh; body close through = role flip AND the level becomes FRESH in its new role (same as re-baptize/BR).
+
+### video_5.md — READ ✔ (FTFL doctrine)
+- **FTFL** = the TF/level where the market is "coming to" (storyline TF); **STFL** = the entry TF; **TTFL** = refinement for tight SL/big TP.
+- FTFL key levels: **Support/Resistance and QM only** (A+); RBS/SBR ignored for FTFL.
+- Freshness mandatory; unfresh = skip or continuation setups.
+- **Risk doctrine: fresh A+ FTFL = normal risk; uncertain/weak setup = drastically reduced risk (~10–20% of normal).**
+
+### video_6.md — READ ✔ (continuation FTFL)
+- Continuation phase FTFL = **Previous Candle (PC) analysis** on the storyline TF:
+- Scenario A — PC broke no key level → FTFL = **1-Lap OCL**: box from PC body close to the tip of its extreme wick, extended one step right.
+- Scenario B — PC broke a key level → that level is now a **QM** → QM becomes the FTFL; if multiple, prioritize **AB QM + FT QM**.
+- Entry NOT at FTFL: drop to STFL (Daily→4H, Weekly→Daily), enter strictly inside the FTFL box.
+
+### video_7.md — READ ✔ (A+ rule)
+- **A+ setup = a FRESH STFL key level (S/R/QM) located completely INSIDE the FTFL box.** Outside the box → not A+, reduce risk or skip.
+- Freshness applies on every TF: first retest only.
+- Discipline: if the market misses the level, let it go; do not force trades.
+
+### video_8.md — READ ✔
+- **TTFL refinement:** look only for Support (buys) / Resistance (sells) / QM inside the STFL box; if none exists → **entry = Equilibrium (50% midpoint of the STFL box)**.
+- Alternative storyline: **`X Rejects X and X Break Out`** (same TF rejects and breaks out) — use the breakout's OCL on that TF as FTFL.
+
+### video_9.md — READ ✔ (confirmation entries)
+- Confirmation entry = `1H Rejects 1H and 1H Breakout` (or 4H), valid only if the rejection happens **on a D1/W1/MN key level** (S/R/RBS/SBR/QM; QM slightly weaker than S/R).
+- After the LTF breakout leaves a fresh LTF S/R: draw box body-to-wick-tip; entry options: **body entry** (momentum-safe) or **equilibrium entry** (tight SL, 5.5–7 pips); **best practice = split risk ½ at body + ½ at equilibrium**.
+- Continuation entries must align with the HTF storyline.
+
+### video_10.md — READ ✔ (routine + box-marking correction)
+- Analysis schedule: Monthly once/month, Weekly once/week (weekend), Daily every day.
+- Write storyline per MN/W1/D1; conflicting timelines → trade the W1/D1 alignment until it reaches MN resistance.
+- Refinement ladder: FTFL (W1/D1 box: body + wick) → STFL fresh S/QM inside → TTFL fresh S/QM inside → equilibrium for tightest SL.
+- **Box-marking correction (user's own note, canonical for bot):**
+- Scenario 1 (S/R/QMR = 2 candles): box covers candle1+candle2 using the HIGHEST wick height of the two, extended one step right (covers c1, c2, and the next candle's space).
+- Scenario 2 (OCL = 2 same-color candles): mark **only candle2's bias-side wick** (bullish = c2 lower wick; bearish = c2 upper wick), full wick height, extended one step LEFT and one step RIGHT (covers part of c1 body, c2 wick, and the c3 space); **do not include candle1's wicks**.
+- Correction purpose: extends the bot's entry range inside the box beyond just the wicks.
+- **Spread buffer:** add 0.5–1 pip (5–10 points) beyond entry lines and SL invalidation so spread doesn't kill fills.
+
+### video_11.md — READ ✔ (strong entries + obstacles)
+- **Strong FTFL = market returns to the FTFL on the very next candle** (Daily: next day; Weekly: next week). Late returns (days/weeks later) = less powerful → risk ~20% of normal.
+- **Obstacles** = any key structural point between entry and TP.
+- **Obstacle rules: only look on the setup's own TF** (Weekly trade → Weekly obstacles only). At an obstacle: close ~80% partial, or SL→BE, or full close if the obstacle is very strong. Safest final TP = first major obstacle on the HTF.
+
+### video_12.md — READ ✔ (D1/W4 model)
+- **D1 model:** 1H mitigates a Daily key level — mitigation must be by **1H wick or exactly ONE single 1H candle** (multiple candles = invalid) — then a valid 1H breakout.
+- Entry Option A (strongest, ~full risk): the 1H S/R that caused the breakout, at equilibrium. Option B (QM, ~50% strong → allocate ~20% risk): the 1H QM.
+- **W4 model:** mirrored with 4H mitigating a Weekly key level + 4H breakout; then FTFL = 4H S/R or QM box → STFL 1H inside → 1H equilibrium entry.
+- **Critical breakout-validity rule: the broken structural point must be formed BEFORE the HTF-key-level mitigation.** (Break-then-mitigate-then-break-new-swing = valid; mitigate-then-form-then-break = invalid.)
+- TPs: pullback trades exit at the closest key level of the originating TF (D1 model → Daily level; W4 → Weekly); confirmation trades run to the recent swing H/L.
+- **Missed entries: do nothing.** Precision model; win rate comes from avoiding bad trades.
+
+### reference.md — READ ✔ (indicator source, not doctrine)
+- Pine Script v6 "SMC Flow System – AETHER FLOW / Mxwll Fusion Engine (LuxAlgo OB edition)" by Fatich.id v1.2. A visualization engine the instructor uses; extracts the mechanizable internals:
+- **Structure engine (Mxwll):** internal pivots sensitivity 5, external 25 (bars-based pivots); BOS/CHoCH labels via close cross of the stored pivot axis (`ta.crossover(close, axis)` = body-close break) — internally/externally separated (I-BoS/I-CHoCH vs BoS/CHoCH); HH/HL/LH/LL labeling from consecutive pivot comparison.
+- **Sessions (New York timezone):** NY 09:30–16:00, Asia 20:00–02:00, London 03:00–11:30, else Dead Zone. Volume-activity percentile dashboard (Very Low..Very High).
+- **Auto-Fibs:** anchored from last external pivot-to-pivot line; levels .236/.382/.5/.618/.786/.886/1.13/1.27/1.41/1.618.
+- **LuxAlgo FVG:** bull `low > high[2] AND close[1] > high[2]` (+threshold); bear mirrored; mitigation = close beyond the FVG boundary; unmitigated-level tracking (close[1] confirmation = no forming-bar look-ahead — validates our EA's own E6 engine).
+- **LuxAlgo OB:** volume-pivot (length 5) with trend-state (os) filter; mitigation method option Wick or Close; bull OB = [low, hl2] of the pivot bar; bear OB = [hl2, high].
+- **Three-Bar Reversal (exact):** bullish = `close[2]<open[2] AND low[1]<low[2] AND high[1]<high[2] AND close[1]<open[1] AND close>open AND high>high[2]`; bearish mirrored; optional trend filter (MA cloud 50/200, Supertrend, Donchian); confirmation = later close beyond pattern extreme; failure = opposite reversal.
+- **UT Bot:** ATR trailing stop with key value a=2, ATR period c=6; buy/sell on close cross of the stop line.
+- **Reversal Signals (simplified):** 9-consecutive-closes momentum counters; momentum risk levels = highest(9)/lowest(9).
+- **Use for the EA:** none of this is entry doctrine; it is the reference implementation for (a) session-hour mapping in NY time (resolves part09's "broker-dependent" London hours → our EA's session inputs should be NY-time anchored), (b) the FVG close[1] pattern we already use, (c) the three-bar reversal as an optional trigger module.
 
 ---
 
