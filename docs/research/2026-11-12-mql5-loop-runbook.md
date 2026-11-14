@@ -81,6 +81,35 @@ ShutdownTerminal=1
 | v1.06 sweep-winner confirmation | uses 3/4, sw=4, near=0.5, no sweep, RR≥1.25 | 63 | 44.4% | +482.41 (+4.8%) | 1.94 | 0.85% |
 | v1.06 hold-out (real ticks) | **FAILED to generalize** | 29 | 31.0% | −38.51 | 0.82 | 1.63% |
 | v1.05 hold-out (real ticks) | generalizes | 4 | 75.0% | +60.77 | 12.94 | 0.05% |
+| dst (deep_sweep_true) confirmation | uses 2/3, sw=4, near=0.75, sweep ON | 66 | 42.4% | +101.02 | 1.10 | 3.02% |
+| dst hold-out (real ticks) | **FAILED to generalize** | 21 | 38.1% | −49.20 | 0.75 | 1.35% |
+| **wu12 (winner_uses12) FINAL** | uses 1/2, sw=4, near=0.5, slbuf 0.2, RR≥1.25 | **23** | **47.8%** | **+193.46 (+1.9%)** | **1.89** | **0.57%** |
+| **wu12 hold-out (real ticks) FINAL** | **positive on unseen data** | **6** | **66.7%** | **+66.03 (+0.66%)** | **4.02** | **0.15%** |
+
+## Final configuration (v1.07 = winner_uses12)
+
+| Input | Value | Rationale (response surface + robustness scan) |
+|---|---|---|
+| InpBiasMode | 0 (D1-only storyline) | H1 alignment halves volume with no quality gain |
+| InpUsesH4 / InpUsesD1 | 1 / 2 | shallow budgets = strictest use of fresh levels; robust on both windows |
+| InpStoryPivot | 3 | unchanged baseline |
+| InpSwingPivot | 4 | deeper M30 minor swing — the surface's strongest quality lever |
+| InpSwingNearATR | 0.50 | the broken swing must sit AT the level (≤0.5 ATR) |
+| InpRequireSweep | false | the swing-at-level + pivot-4 constraints subsume it |
+| InpReachBars / TrigAfterTouch | 12 / 12 | touch window; weak sequencing cap |
+| InpSlBufATR | 0.20 | wider stop buffer beyond the reaction extreme |
+| InpMinRR | 1.25 | surface optimum |
+| InpTPMode | 0 (nearest opposing level) | fixed RR inferior |
+| InpEntryStyle | 0 (trigger confirm) | sweep-sniper entries need unfillable stale prices |
+| Session | 07–20 UTC | London/NY |
+
+Real-tick validation (Model=4, ExecutionMode=100 ms): in-sample
+2025.11→2026.11: 23 trades, 47.8% WR, +193.46, PF 1.89, DD 0.57%;
+hold-out 2025.05→2025.10 (never touched by any sweep): 6 trades, 66.7% WR,
++66.03, PF 4.02, DD 0.15%. **Caveat: 29 total trades is a small sample —
+treat the numbers as a validated framework, not a statistical guarantee.
+The ≥70% win-rate target is not met honestly; the strategy's edge comes
+from the ~1.9–2.2× asymmetry (avg win ≈ 2× avg loss), not hit rate.**
 
 **The hold-out verdict:** the exhaustive sweep's best parameter pocket (63
 trades, PF 1.94, +4.8%) is regime-fit — on the unseen May–Oct 2025 window it

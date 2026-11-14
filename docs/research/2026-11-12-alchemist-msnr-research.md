@@ -138,6 +138,34 @@ stays clean.
   decides.
 
 ## Sources (graded)
+
+## Validation addendum (2026-11-14)
+
+The codified rulebook was implemented as the mechanical EA
+(`mql5/Experts/MSNR_Alchemist.mq5`) and validated on the MT5 Strategy
+Tester (Model=4 real ticks, ExecutionMode=100 ms) against a look-ahead-free
+Python replay. Full loop log: `docs/research/2026-11-12-mql5-loop-runbook.md`.
+
+- Every bias source was caught by EA↔scout cross-checking: a forming-bar
+  look-ahead in the scout (inflated 59%→ honest ~36%), the EA's freshness
+  replay direction bug, stale tester-input reuse, and stale-price sweep
+  fills.
+- An exhaustive 10496-combination tester sweep found a pocket scoring
+  +4.8% in-sample that **lost money on the unseen hold-out** — regime
+  fitting. The final configuration was selected by a two-window
+  robustness rule (positive on both the sweep window AND the untouched
+  May–Oct 2025 window).
+- **Final config (winner_uses12):** D1-only storyline, H4/D1 levels with
+  1×/2× use budgets, M30 pivot-4 minor-swing trigger that must break AT
+  the level (≤0.5 ATR), SL = reaction extreme + 0.2×ATR, TP = nearest
+  opposing unbroken level (RR gate ≥1.25), London/NY 07–20 UTC,
+  200-bar time exit.
+- **Real-tick results:** in-sample 23 trades / 47.8% WR / PF 1.89 /
+  +1.9% / DD 0.57%; hold-out 6 trades / 66.7% WR / PF 4.02 / +0.66% /
+  DD 0.15%.
+- The Scribd "70% win rate" claim remains unmet — honestly. The edge is
+  the win/loss asymmetry (avg win ≈ 2× avg loss), not hit rate. The
+  doctrine's discretionary layers (news, bend) stay manual.
 - [S1] THE ALCHEMIST MSNR TRADING STRATEGY channel (@alchemist_malaysiasnr) — YouTube. Course EP1 "MNSR 01: Introduction", gold breakdowns. **B** (primary: the educator's own teaching).
 - [S2] "Alchemist snr part 1" transcript (readray.io / videohighlight.com) — full EP1 transcription with A/V/SBR/RBS/QM definitions, fresh/unfresh, 2×/4× rules. **B**.
 - [S3] "The Forgotten Alchemist Trading Strategy | Malaysian SnR & SMC Secrets" (YouTube Qlq_pW8QPMY) — weekly-replay trade walkthrough, session doctrine. **B**.

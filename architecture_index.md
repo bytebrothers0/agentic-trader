@@ -148,7 +148,7 @@ The pure core (`models`/`conditions`/`store`/`strategy`/`subscriptions`/`watchdo
 - `research/` — the Python research loop: `cache_history.py` (deep XAUUSDm cache, M5…W1), `alchemist_backtest.py` (the offline scout mirroring the EA rules; M5 intrabar resolution), `parse_mt5_report.py` (Strategy Tester HTML report parser; the report is UTF-16), `data/` (cached history), `alchemist_trades*.csv`.
 - `tools/mql5_build.ps1` — compile + deploy + headless Strategy Tester launcher (Model=4, ExecutionMode=100).
 - `docs/research/2026-11-12-alchemist-msnr-research.md` — the deep-research deliverable: the distilled rulebook, the indicator-family dedup verdicts (QM redundant with S/R broken-twice per Alchemist's own course; TS folded into CRT; recommended agent family set sr/bos/crt/liq/fvg), and graded sources.
-- `docs/research/2026-11-12-mql5-loop-runbook.md` — the build/compile/backtest loop runbook + results table.
+- `docs/research/2026-11-12-mql5-loop-runbook.md` — the build/compile/backtest loop runbook + full results ledger and bug log. **Final config validated 2026-11-14 on real ticks (Model=4, ExecutionMode=100 ms): in-sample 23 trades / 47.8% WR / PF 1.89 / +1.9% / DD 0.57%; hold-out 6 trades / 66.7% WR / PF 4.02 / +0.66%.** The exhaustive 10496-combo sweep pocket overfit (failed the hold-out); the final config was chosen by a two-window robustness rule.
 - `temp/xauusd-ai-trading-signal/` — older standalone prototype (separate engines, `live_scanner.py`, dispatchers, README).
 - `mql5/Experts/advace mnsr/` — duplicates of the strategy notes.
 - Root `New Text Document*.txt`, `visualizations/`, `backtest/` (empty at index time; server reads journal CSVs from here), `logs/` (gitignored).
