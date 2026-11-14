@@ -17,14 +17,60 @@
 
 ## Cluster 1: part01–11
 
-### part01_foundations_snr.md
-(pending read)
+### part01_foundations_snr.md — READ ✔
+**Identity:** "ALCHEMIST 02" e-book Part 01 (pages 0–11) by @abayforex. Foundations: SNR zones, liquidity sweep logic, OB/50%, HTF/LTF structure, session behavior. Chart pair: XAUUSD (TradingView).
 
-### part02_xauusd_phases_snrbasics.md
-(pending read)
+**Rules (verbatim-anchored):**
+- Zone = `SNR line + OB + OB50` — never trigger on SNR line touch alone (Mistake #1).
+- Sweep test: `High[i] > PrevHigh AND Close[i] < PrevHigh` (+ wick% threshold); body close beyond `PrevHigh + ATR*0.2` ⇒ breakout, NOT sweep.
+- OB = last opposite candle body before impulse; `OB50 = (OB_high+OB_low)/2`; OB reusable if context supports.
+- HTF trend (H4 HH/HL vs LH/LL) hard filter; trade with HTF direction; LTF for timing.
+- **ConfluenceScore 0–4** (HTF bias / sweep at zone / SNR+OB+50% alignment / confirmation candle); require ≥3, sweep mandatory.
+- Sequence enforced: Sweep → Zone touch → Confirmation. Other order = no trade.
+- Entry triggers: (1) engulfing / strong rejection wick, (2) close-back-in-range after sweep, (3) touch 50% OB + confirmation.
+- Min RR 1:1.5; SL beyond sweep extreme + buffer; TP = next liquidity pool/structure.
+- **Tolerance rule:** >3 wick touches without rejection ⇒ zone WEAK ⇒ reduce position size or require stronger confirmation (author: "reduce position size"). ⇒ mechanizable A/B/C anchor.
+- Session doctrine: London = manipulation/liquidity-taking; NY = expansion. Avoid mid-consolidation entries without sweep.
+- Premium/discount: buys only in discount, sells only in premium of the dealing range; equilibrium (50%) = magnet.
+- Zone invalid if: many touches w/o rejection, no sweep, HTF contradicts, body break with momentum.
+- Trendline break = EarlyWarning only; entry needs higher-low + break of prior lower high (MSS).
+- Sweep line vs resistance line are two levels: wick over sweep line, close under body-close line.
 
-### part03_fresh_storyline_50method.md
-(pending read)
+**Management/psych content:** position-size reduction on weak zones; profit-taking (no new entries) in premium for buys; "not every touch creates reversal — sweep raises probability".
+
+**Not covered (deferred):** QM taxonomy (appears p7–8, defined in Part 03), FVG/Fair/IF distinctions, exact session hours, fib-time circles (ignore for entries).
+
+### part02_xauusd_phases_snrbasics.md — READ ✔
+**Identity:** pages 12–23: XAUUSD 1H full-cycle eye-training, 7-step bullish playbook, SNR basics, Classic V/A, 4 SNR types, sweep theory (two scopes), fresh/unfresh + storyline + 50-method.
+
+**Rules:**
+- SNR drawn at **Close of pivot candle** (not high/low) — resolves line-inside-wick ambiguity.
+- Fresh/unfresh v1 (strict): wick touch ⇒ unfresh, UseCount++; body break ⇒ fresh again, UseCount=0, role flip; max 2 uses; **DailyGapException** (gap + strong prior reaction ⇒ reuse without limit).
+- **ZoneStrength** = sweep(+1) + retest-hold(+1); ≥2 ⇒ HIGH_RELIABILITY, re-entry allowed on second touch (only if first held).
+- Two sweep scopes: **MicroSweep** (previous candle's high/low, LTF confirmation) vs **SwingSweep** (prior swing/equal highs, HTF liquidity). Require ≥1; both ⇒ strongest.
+- ClassicV buy: `Close[i-1] < S AND Open[i] >= S-tol AND Close[i] > Open[i]`; ClassicA sell mirrored. Tolerance ATR*0.05; pierce depth < ATR*0.3 else classify as sweep.
+- ClassicA no-retest subtype: TouchCount==1 + immediate displacement away + no return within N bars.
+- BuyType1: ≥2 rejections at same zone with intervening rally to key level; BuyType2: 0 rejections BUT sweep-before (liquidity-backed); both ⇒ strongest.
+- **Premium/discount management:** inhibit new longs above RangeEQ+buffer even if sweep occurs (switch to profit-taking-only mode).
+- Target subsystem = opposite liquidity pool (equal highs, prior high, "DRAW"/Profit Point), not fixed RR.
+- Storyline multi-TF gate: daily bearish blocks weekly bullish (roadblock doctrine); lower-TF storyline may block higher-TF.
+- 50 Method (HIGH_RISK tag): HTF zone touch → LTF (H1/M15) OB50 + sweep → SL ~10 pips; only with HTF bias alignment.
+- Accumulation definition (mechanized): range width < ATR×thresh for N bars AND ≥2 sweeps of extremes.
+- Label namespaces: BOS_LTF vs BOS_INTERNAL vs BOS_HTF (only HTF BOS flips bias); SWE/Ts/SSL/BSL = liquidity subsystem; MSS/BS!/BMS = structure; CE/C/L/KEY/SNR/MSNR = zone.
+
+### part03_fresh_storyline_50method.md — READ ✔
+**Identity:** pages 24–35: fresh/unfresh reconciliation, LL/UL validity band, RBS/SBR flipzone + close-rule, QM/QMR/QMM/QMC module.
+
+**Rules:**
+- **Fresh reconciliation (two flags, not one):** `TouchState ∈ {FRESH, WICK_TOUCHED, BODY_TOUCHED}`; tradable iff not BODY_TOUCHED AND UseCount<2 AND sweep done AND in reaction zone. First touch = full size; second wick touch = half size + sweep required; body touch = invalidate unless BreakAndFlip (fresh opposite-side RBS/SBR).
+- **LL/UL validity band:** zone = `[LL, UL]` (UL = SNR close line, LL = sweep low/OB low). Buy valid iff `Close > LL` (wick below LL allowed); sell mirrored with UH.
+- **FAKE vs BRAKE:** wick pierce + close back inside = FAKE (no flip, trade the reversal); body close beyond + displacement (~range > 1.2×ATR) = BRAKE (flip to RBS/SBR, old line becomes new opposite zone).
+- **RBS/SBR close-rule:** flip requires close beyond, not wick break (p29 overrides p28 loose wording). Retest + rejection = entry. XAU worked example: break $2400 → retest RBS → longs with SL just beyond zone (~200–300 points buffer, not fixed $).
+- **RBS_Strength** = TF weight (M15=1, H1=2, H4=3, D1=4) + sweep(+1) + OB-align(+1) + FVG-align(+1); require ≥3 for full size.
+- QM family: base 4-step (extreme → pullback → weak second extreme → break pullback extreme → retest entry); **QMR** = full reversal playbook, enter only on BOS + retest + rejection, never on the fake leg; **QMM** = single fake break of QML (wick beyond + close back) → fade or enter continuation after trap; if no retest + strong continuation ⇒ momentum note, chase only on retest; **QMC** = fake continuation extreme (liquidity-grab wick) + break of pullback extreme → break-retest entry.
+- QM targets: QM level → opposite fresh HTF; SL beyond fake extreme + buffer.
+
+**Management/psych:** "Most enter too early — wait break, then retest. No rushing/chasing" (QMR discipline); "market moves strongly only after most have given up" (QMC mindset); momentum-no-retest handling (QMM).
 
 ### part04_quasimodo_qmr_qmm_qmc.md
 (pending read)

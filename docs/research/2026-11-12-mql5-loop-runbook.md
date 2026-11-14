@@ -65,6 +65,39 @@ ReplaceReport=1
 ShutdownTerminal=1
 ```
 
+## Tick-data availability probe (Task 1, 2026-11-14)
+
+**Finding: Exness serves real ticks for XAUUSDm only from 2026-01-01.** Probe
+(2-day mid-July windows, per year, Model=4) logged `real ticks begin from
+2026.01.01 00:00:00` for every year 2018–2023 — the tester silently falls back
+to `every tick generation used` (ticks generated from M1 bars) for older data.
+
+Consequences:
+1. **Retroactive label correction:** the earlier "real ticks" runs over
+   2025.11→2026.11 were *hybrid* — 2025 portion M1-generated, 2026 portion
+   real ticks. The 2025.05→2025.10 hold-out was M1-generated ticks entirely.
+   Numbers stand as recorded; the generation mode is now labeled honestly.
+2. **2018–2023 training windows** run on M1-generated ticks. M1 bar
+   availability (Python API check, Jul 15–17 window): 2022/2024/2025/2026
+   full locally; 2018–2021/2023 require on-demand download (tester fetches
+   M1 automatically per tested window — first run per year is slow, then
+   cached). 2018 needs a warm-up run before trusting a backtest.
+3. Validation protocol update: Model=4 + ExecutionMode=100 remains the
+   tester config (MT5 auto-falls-back); every result table gains a
+   `tick source` column (real vs M1-generated per window).
+
+| Year | Real ticks? | M1 bars | Notes |
+|---|---|---|---|
+| 2018 | no | on-demand | warm-up run needed |
+| 2019 | no | on-demand | |
+| 2020 | no | on-demand | |
+| 2021 | no | partial local | |
+| 2022 | no | yes | |
+| 2023 | no | on-demand (partial) | |
+| 2024 | no | yes | |
+| 2025 | no | yes | earlier hold-out used this |
+| 2026 | **yes** | yes | true Model=4 possible |
+
 ## Results so far
 
 | Run | Config | Trades | Win rate | Net | PF | Max DD |

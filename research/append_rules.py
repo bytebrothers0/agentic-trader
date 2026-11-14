@@ -1,0 +1,48 @@
+"""Append rule rows to research/strategy_rules.csv (idempotent-ish: skips already-present ids)."""
+import csv
+import io
+import os
+
+ROWS = [
+    ['P01-01', 'part01_foundations_snr.md', 'abax', 'zone_model', 'Zone = SNR line + OB + OB50; never trigger on line touch alone', 'ob50=midpoint', 'yes', 'Mistake #1'],
+    ['P01-02', 'part01_foundations_snr.md', 'abax', 'sweep_def', 'wick pierce + close back inside; body close beyond PrevHigh+ATR*0.2 = breakout not sweep', 'atr_mult=0.2', 'yes', ''],
+    ['P01-03', 'part01_foundations_snr.md', 'abax', 'confluence_score', 'ConfluenceScore 0-4: HTF bias / sweep at zone / SNR+OB+50% / confirmation candle; require >=3, sweep mandatory', 'min_score=3', 'yes', 'grading engine anchor'],
+    ['P01-04', 'part01_foundations_snr.md', 'abax', 'sequence', 'Sweep -> Zone touch -> Confirmation enforced', 'order=fixed', 'yes', ''],
+    ['P01-05', 'part01_foundations_snr.md', 'abax', 'weak_zone_tolerance', '>3 wick touches without rejection -> zone WEAK -> reduce size or need stronger confirmation', 'max_touches=3', 'yes', 'rule-tolerance anchor'],
+    ['P01-06', 'part01_foundations_snr.md', 'abax', 'rr_sl_tp', 'Min RR 1:1.5; SL beyond sweep extreme + buffer; TP next liquidity pool', 'min_rr=1.5', 'yes', ''],
+    ['P01-07', 'part01_foundations_snr.md', 'abax', 'sessions', 'London = manipulation/sweeps; NY = expansion; avoid mid-consolidation without sweep', 'tbd_hours', 'partial', 'exact hours deferred'],
+    ['P01-08', 'part01_foundations_snr.md', 'abax', 'premium_discount', 'buys only in discount, sells only in premium; EQ magnet', 'eq=range50', 'yes', ''],
+    ['P01-09', 'part01_foundations_snr.md', 'abax', 'trendline_early_warning', 'trendline break = EarlyWarning only; entry needs HL + break of prior LH (MSS)', '', 'yes', ''],
+    ['P02-01', 'part02_xauusd_phases_snrbasics.md', 'abax', 'snr_close_line', 'SNR drawn at Close of pivot candle, not high/low', '', 'yes', ''],
+    ['P02-02', 'part02_xauusd_phases_snrbasics.md', 'abax', 'fresh_lifecycle', 'wick touch -> unfresh UseCount++; body break -> fresh again + role flip; max 2 uses; daily-gap exception', 'max_uses=2', 'yes', ''],
+    ['P02-03', 'part02_xauusd_phases_snrbasics.md', 'abax', 'zone_strength', 'ZoneStrength = sweep + retest-hold; >=2 = HIGH_RELIABILITY re-entry allowed', 'threshold=2', 'yes', ''],
+    ['P02-04', 'part02_xauusd_phases_snrbasics.md', 'abax', 'two_sweep_scopes', 'MicroSweep (prev candle H/L) vs SwingSweep (swing/equal highs); require >=1, both strongest', '', 'yes', ''],
+    ['P02-05', 'part02_xauusd_phases_snrbasics.md', 'abax', 'classic_v_a', 'ClassicV buy / ClassicA sell candle patterns with tolerance ATR*0.05, pierce < ATR*0.3', 'tol=0.05atr', 'yes', ''],
+    ['P02-06', 'part02_xauusd_phases_snrbasics.md', 'abax', 'premium_inhibit', 'inhibit new longs above RangeEQ+buffer (profit-taking-only mode)', '', 'yes', 'management rule'],
+    ['P02-07', 'part02_xauusd_phases_snrbasics.md', 'abax', 'storyline_roadblock', 'daily bearish blocks weekly bullish; lower-TF storyline gates higher-TF', '', 'yes', ''],
+    ['P02-08', 'part02_xauusd_phases_snrbasics.md', 'abax', 'fifty_method', 'HTF zone touch -> LTF OB50 + sweep -> SL ~10 pips; HIGH_RISK tag; HTF bias required', 'sl=10pips', 'partial', ''],
+    ['P02-09', 'part02_xauusd_phases_snrbasics.md', 'abax', 'bos_namespaces', 'BOS_LTF / BOS_INTERNAL / BOS_HTF; only HTF BOS flips bias', '', 'yes', ''],
+    ['P03-01', 'part03_fresh_storyline_50method.md', 'abax', 'touch_state', 'TouchState FRESH/WICK_TOUCHED/BODY_TOUCHED; 2nd wick touch = half size + sweep required', '', 'yes', 'grade/risk scaling anchor'],
+    ['P03-02', 'part03_fresh_storyline_50method.md', 'abax', 'll_ul_band', 'zone = [LL,UL]; buy valid iff Close > LL (wick below allowed)', '', 'yes', ''],
+    ['P03-03', 'part03_fresh_storyline_50method.md', 'abax', 'fake_vs_brake', 'wick+close-back = FAKE (no flip); body close + displacement >1.2ATR = BRAKE (flip RBS/SBR)', 'disp=1.2atr', 'yes', ''],
+    ['P03-04', 'part03_fresh_storyline_50method.md', 'abax', 'rbs_sbr_close_rule', 'flip requires close beyond, not wick; retest+rejection = entry', '', 'yes', ''],
+    ['P03-05', 'part03_fresh_storyline_50method.md', 'abax', 'rbs_strength', 'TF weight M15=1/H1=2/H4=3/D1=4 + sweep + OB + FVG; require >=3 full size', 'min=3', 'yes', ''],
+    ['P03-06', 'part03_fresh_storyline_50method.md', 'abax', 'qm_family', 'QM 4-step; QMR wait BOS+retest+rejection; QMM fake break of QML; QMC fake continuation + break-retest', '', 'yes', 'QM module source'],
+    ['P03-07', 'part03_fresh_storyline_50method.md', 'abax', 'qm_no_chase', 'never enter fake leg; if no retest + strong continuation = momentum, chase only on retest', '', 'partial', 'psych discipline'],
+]
+
+PATH = os.path.join(os.path.dirname(__file__), "strategy_rules.csv")
+existing = set()
+if os.path.exists(PATH):
+    with io.open(PATH, encoding="utf-8") as f:
+        for r in csv.reader(f):
+            if r:
+                existing.add(r[0])
+with io.open(PATH, "a", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    added = 0
+    for r in ROWS:
+        if r[0] not in existing:
+            w.writerow(r)
+            added += 1
+print(f"added {added} rules (total ids now: {len(existing) + added})")
