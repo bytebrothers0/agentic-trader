@@ -71,6 +71,20 @@ P = dict(
     session_start=7,
     session_end=20,
     max_dist_atr=3.0,
+    # ---- management layer (docs/specs/2026-11-14-management-layer.md) ----
+    mgmt=False,             # regression mode: identical to the 2026-11-14 baseline
+    grade_min=4.0,          # admission gate (P11-06)
+    grade_aplus=5.0,
+    size_a=0.70,            # A-grade size (P11-06, V5-02)
+    size_b=0.50,            # B-grade size (V5-02 "reduce risk" extension; logged)
+    tp1_rr=1.5,             # TP1 = 1:1.5 RR (P11-03)
+    tp1_close=0.50,         # close 50% at TP1 (P11-03)
+    tp2_close=0.30,         # close 30% at TP2/level (P11-03)
+    be_after_tp1=True,      # SL -> breakeven after TP1 (P11-03, PH10-03)
+    mgmt_profile=1,         # 1 = partials ladder, 2 = obstacle mgmt (V11-02)
+    obstacle_close=0.80,    # profile 2: close 80% at first obstacle (V11-02)
+    max_losses_day=2,       # psych: stop after N losses/day (P11-05)
+    max_reentry_zone=1,     # psych: max entries per zone/day (P11-05)
 )
 
 SUPPORT, RESIST = 1, -1
@@ -287,6 +301,8 @@ def run(start, end, params=None):
     trades: List[dict] = []
     open_trade: Optional[dict] = None
     entry_i: Optional[int] = None
+    losses_day: dict = {}     # mgmt psych: losses per calendar day
+    zone_day: dict = {}       # mgmt psych: entries per (day, zone)
 
     a30 = atr_series(m30)
     a30v = a30.values
@@ -312,29 +328,104 @@ def run(start, end, params=None):
             tr = open_trade
             j0 = m5i.get(t - timedelta(minutes=30))
             j1 = m5i.get(t)
-            exit_px, reason = None, None
+            exit_px = reason = None
+            done = False
             if j0 is not None and j1 is not None:
-                lo5 = m5_lo.iloc[j0 + 1: j1 + 1]
-                hi5 = m5_hi.iloc[j0 + 1: j1 + 1]
-                if tr["dir"] > 0:
-                    hit_sl = lo5 <= tr["sl"]
-                    hit_tp = hi5 >= tr["tp"]
-                else:
-                    hit_sl = hi5 >= tr["sl"]
-                    hit_tp = lo5 <= tr["tp"]
-                if hit_sl.any() and hit_tp.any():
-                    # ambiguity: pessimistic — stop first
+                lo5 = m5_lo.iloc[j0 + 1: j1 + 1].values
+                hi5 = m5_hi.iloc[j0 + 1: j1 + 1].values
+                d = tr["dir"]
+                f_sl = (lo5 <= tr["sl"]) if d > 0 else (hi5 >= tr["sl"])
+                f_tp = (hi5 >= tr["tp"]) if d > 0 else (lo5 <= tr["tp"])
+                tp1v = tr["tp1"] if P["mgmt"] else None
+                f_tp1 = None
+                if tp1v is not None and not tr["tp1_done"]:
+                    f_tp1 = (hi5 >= tp1v) if d > 0 else (lo5 <= tp1v)
+
+                def _real(px: float, frac: float) -> None:
+                    tr["r"] += frac * ((px - tr["entry"]) * d) / tr["risk"]
+
+                if f_sl.any():
+                    # pessimistic (parity with baseline): stop first —
+                    # the whole remaining fraction exits at SL
+                    _real(tr["sl"], tr["open_frac"])
+                    tr["open_frac"] = 0.0
                     exit_px, reason = tr["sl"], "LOSS"
-                elif hit_sl.any():
-                    exit_px, reason = tr["sl"], "LOSS"
-                elif hit_tp.any():
-                    exit_px, reason = tr["tp"], "WIN"
-            if exit_px is None and (k - entry_i) >= P["time_exit_bars"]:
-                exit_px, reason = m30["close"].iloc[k], "TIME"
-            if exit_px is not None:
+                    done = True
+                elif f_tp1 is not None and f_tp1.any():
+                    # TP1 partial -> move SL to breakeven
+                    take = min(tr["_p1c"], tr["open_frac"])
+                    _real(tp1v, take)
+                    tr["open_frac"] -= take
+                    tr["tp1_done"] = True
+                    if P["be_after_tp1"]:
+                        tr["sl"] = max(tr["sl"], tr["entry"]) if d > 0 else min(tr["sl"], tr["entry"])
+                    # same-bar TP pass-through (price passed TP1 toward TP):
+                    if f_tp.any() and tr["open_frac"] > 1e-9:
+                        take2 = min(P["tp2_close"], tr["open_frac"])
+                        _real(tr["tp"], take2)
+                        tr["open_frac"] -= take2
+                        tr["runner"] = True
+                elif f_tp.any():
+                    if tr["runner"]:
+                        # runner is active: the level TP closes whatever remains
+                        _real(tr["tp"], tr["open_frac"])
+                        tr["open_frac"] = 0.0
+                        exit_px, reason = tr["tp"], "WIN"
+                        done = True
+                    elif tp1v is not None and ((d > 0 and tp1v >= tr["tp"]) or (d < 0 and tp1v <= tr["tp"])):
+                        # collapsed ladder (TP1 == TP): 50% + 30% both at TP
+                        take = min(P["tp1_close"], tr["open_frac"])
+                        _real(tr["tp"], take)
+                        tr["open_frac"] -= take
+                        tr["tp1_done"] = True
+                        if P["be_after_tp1"]:
+                            tr["sl"] = max(tr["sl"], tr["entry"]) if d > 0 else min(tr["sl"], tr["entry"])
+                        take2 = min(P["tp2_close"], tr["open_frac"])
+                        _real(tr["tp"], take2)
+                        tr["open_frac"] -= take2
+                        tr["runner"] = True
+                    else:
+                        take = 1.0 if tp1v is None else min(P["tp2_close"], tr["open_frac"])
+                        _real(tr["tp"], take)
+                        tr["open_frac"] -= take
+                        if tp1v is None:
+                            exit_px, reason = tr["tp"], "WIN"
+                            done = True
+                        else:
+                            tr["runner"] = True
+
+            if not done:
+                # runner trail: last confirmed M30 close-pivot in trade direction
+                if P["mgmt"] and tr["runner"] and tr["open_frac"] > 1e-9:
+                    w = P["swing_pivot"]
+                    j = k - w
+                    while j > w:
+                        win = m30_cl[j - w: j + w + 1]
+                        if tr["dir"] > 0 and m30_cl[j] == win.min():
+                            tr["sl"] = max(tr["sl"], float(m30_cl[j]))
+                            break
+                        if tr["dir"] < 0 and m30_cl[j] == win.max():
+                            tr["sl"] = min(tr["sl"], float(m30_cl[j]))
+                            break
+                        j -= 1
+                if (k - entry_i) >= P["time_exit_bars"]:
+                    exit_px = float(m30_cl[k])
+                    reason = "TIME"
+                    tr["r"] += tr["open_frac"] * ((exit_px - tr["entry"]) * tr["dir"]) / tr["risk"]
+                    tr["open_frac"] = 0.0
+                    done = True
+
+            if done:
                 tr["exit"] = exit_px
-                tr["reason"] = reason
-                tr["r"] = ((exit_px - tr["entry"]) * tr["dir"]) / tr["risk"]
+                tr["exit_reason"] = reason
+                if P["mgmt"]:
+                    # final label by realized R (BE = TP1 taken, rest at entry)
+                    tr["reason"] = "WIN" if tr["r"] > 0.01 else ("LOSS" if tr["r"] < -0.01 else "BE")
+                    if tr["r"] < -1e-9:
+                        day = t.date()
+                        losses_day[day] = losses_day.get(day, 0) + 1
+                else:
+                    tr["reason"] = reason
                 trades.append(tr)
                 open_trade = None
             continue
@@ -506,18 +597,69 @@ def run(start, end, params=None):
         if rr < P["min_rr"]:
             continue
 
+        # ---------- management layer: grading + psych filters ----------
+        swept = sweep_bar >= 0
+        size = 1.0
+        tp1p = None
+        if P["mgmt"]:
+            day = t.date()
+            if losses_day.get(day, 0) >= P["max_losses_day"]:
+                continue
+            zkey = (lv.tf, lv.kind, round(lv.price, 0))
+            if zone_day.get((day, zkey), 0) >= P["max_reentry_zone"]:
+                continue
+            score = ((1.0 if swept else 0.0)            # sweep at zone
+                     + (1.0 if lv.fresh else 0.0)        # fresh level
+                     + (1.0 if lv.tf == "D1" else 0.5)   # TF weight (P03-05)
+                     + 1.0                               # storyline gate passed (V4-01)
+                     + (0.5 if P["session_filter"] else 0.0)   # session weight
+                     + (0.5 if rr >= 1.5 else 0.0)       # RR quality
+                     - (0.5 if lv.touches == 1 else 0.0))  # 2nd-touch derate
+            if not swept and score > 4.5:                # C11: no sweep never A+
+                score = 4.5
+            if score < P["grade_min"]:
+                continue
+            size = (1.0 if score >= P["grade_aplus"]
+                    else P["size_a"] if score >= 4.0
+                    else P["size_b"])
+            dbg_score = score
+
         open_trade = dict(
             dir=dirn, entry=entry, sl=sl, tp=tp, risk=risk, rr=rr,
             entry_time=t, level=f"{lv.tf}/{lv.kind}", level_price=lv.price,
             bias="BULL" if bias > 0 else "BEAR",
+            size=size, tp1=None, tp1_done=False, open_frac=1.0, runner=False,
+            r=0.0, score=(dbg_score if P["mgmt"] else None),
         )
+        if P["mgmt"]:
+            if P["mgmt_profile"] == 2:
+                # profile B (V11-02): first obstacle = TP, close obstacle_close
+                # there, SL->BE, remainder trails (implemented as a collapsed
+                # ladder with the obstacle fraction)
+                open_trade["tp1"] = tp
+                open_trade["_p1c"] = 0.0
+                open_trade["_p2c"] = P["obstacle_close"]
+            else:
+                tp1p = entry + dirn * P["tp1_rr"] * risk
+                if (dirn > 0 and tp1p >= tp) or (dirn < 0 and tp1p <= tp):
+                    tp1p = tp                                # ladder collapse
+                open_trade["tp1"] = tp1p
+                open_trade["_p1c"] = P["tp1_close"]
+                open_trade["_p2c"] = P["tp2_close"]
+            day = t.date()
+            zkey = (lv.tf, lv.kind, round(lv.price, 0))
+            zone_day[(day, zkey)] = zone_day.get((day, zkey), 0) + 1
         entry_i = k
 
     if open_trade:
         tr = open_trade
         px = float(m30["close"].iloc[-1])
-        tr["exit"], tr["reason"] = px, "EOD"
-        tr["r"] = ((px - tr["entry"]) * tr["dir"]) / tr["risk"]
+        tr["exit"], tr["exit_reason"] = px, "EOD"
+        tr["r"] += tr["open_frac"] * ((px - tr["entry"]) * tr["dir"]) / tr["risk"]
+        if P["mgmt"]:
+            tr["reason"] = "WIN" if tr["r"] > 0.01 else ("LOSS" if tr["r"] < -0.01 else "BE")
+        else:
+            tr["reason"] = "EOD"
         trades.append(tr)
     return trades
 
@@ -541,6 +683,9 @@ def report(trades: List[dict], save="alchemist_trades.csv"):
     wr = len(wins) / len(df) * 100
     print(f"trades={len(df)}  wins={len(wins)}  losses={len(losses)}  time-outs={len(outs)}")
     print(f"win rate={wr:.1f}%   total R={df['r'].sum():+.2f}   avg R={df['r'].mean():+.2f}   avg RR={df['rr'].mean():.2f}")
+    if "size" in df.columns and (df["size"] != 1.0).any():
+        wr_r = (df["r"] > 0.01).mean() * 100
+        print(f"[mgmt] R-based WR={wr_r:.1f}%  weighted R(sum size*r)={(df['size']*df['r']).sum():+.2f}")
     for col in ("bias", "level"):
         print(f"by {col}:")
         for v, g in df.groupby(col):
