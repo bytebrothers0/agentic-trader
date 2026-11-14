@@ -84,6 +84,8 @@ P = dict(
     ems_grade_bonus=1.0,      # grade bonus for flipped engulfing zones
     ems_uses=2,               # EMS zone use budget (2-times rule)
     ems_buf=0.05,             # flip buffer x ATR (M30)
+    # ---- APA consumption gate (Task 18) ----
+    consume_gate=False,       # skip levels whose zone depth is >=50% used since birth (APA5-01)
     # ---- management layer (docs/specs/2026-11-14-management-layer.md) ----
     mgmt=False,             # regression mode: identical to the 2026-11-14 baseline
     grade_min=4.0,          # admission gate (P11-06)
@@ -186,6 +188,9 @@ class Level:
     fresh: bool = True
     touches: int = 0
     broken: bool = False
+    birth_extreme: float = 0.0   # AOL depth anchor: low of birth candle (support) / high (resist)
+    min_close: float = float('inf')   # min close since birth (consumption tracking)
+    max_close: float = float('-inf')  # max close since birth (consumption tracking)
 
 
 @dataclass
@@ -231,15 +236,15 @@ def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
         col_j = c[i + 1] > o[i + 1]
         born = t
         if col_i and not col_j:
-            out.append((Level(c[i], RESIST, born, tf, "A"), i))
+            out.append((Level(c[i], RESIST, born, tf, "A", birth_extreme=h[i]), i))
         elif not col_i and col_j:
-            out.append((Level(c[i], SUPPORT, born, tf, "V"), i))
+            out.append((Level(c[i], SUPPORT, born, tf, "V", birth_extreme=l[i]), i))
         elif col_i and col_j:
             if o[i + 1] - c[i] >= gap_min_atr * av_i:
-                out.append((Level(c[i], SUPPORT, born, tf, "GAP"), i))
+                out.append((Level(c[i], SUPPORT, born, tf, "GAP", birth_extreme=l[i]), i))
         else:
             if c[i] - o[i + 1] >= gap_min_atr * av_i:
-                out.append((Level(c[i], RESIST, born, tf, "GAP"), i))
+                out.append((Level(c[i], RESIST, born, tf, "GAP", birth_extreme=h[i]), i))
         # OCL: one level per run — the first candle of a same-colour run
         run = 1
         j = i + 1
@@ -247,7 +252,8 @@ def _scan_tf(df: pd.DataFrame, tf: str, gap_min_atr: float, ocl_run_min: int,
             run += 1
             j += 1
         if run >= ocl_run_min:
-            out.append((Level(c[i], SUPPORT if col_i else RESIST, born, tf, "OCL"), i))
+            out.append((Level(c[i], SUPPORT if col_i else RESIST, born, tf, "OCL",
+                              birth_extreme=(l[i] if col_i else h[i])), i))
 
 
 def _replay_life(lv: Level, op: np.ndarray, hi: np.ndarray, lo: np.ndarray, cl: np.ndarray,
@@ -270,6 +276,11 @@ def _replay_life(lv: Level, op: np.ndarray, hi: np.ndarray, lo: np.ndarray, cl: 
         first_break = int(np.argmax(breaks))
         lv.broken = True
         lv.touches = int(touches[: first_break + 1].sum())
+        # consumption tracking: min/max close since birth up to break point
+        seg_end = born_i + 1 + first_break + 1
+        seg = cl[born_i + 1: seg_end]
+        lv.min_close = float(seg.min()) if seg.size else float('inf')
+        lv.max_close = float(seg.max()) if seg.size else float('-inf')
         # QM quality gate: level must have been touched/tested (failed flip) AND
         # breakout body >= qm_bos_atr x ATR (real BOS, not a wick)
         j = born_i + 1 + first_break
@@ -279,6 +290,9 @@ def _replay_life(lv: Level, op: np.ndarray, hi: np.ndarray, lo: np.ndarray, cl: 
                                    born=born_ts, tested=0, armed=True))
     else:
         lv.touches = int(touches.sum())
+        seg = cl[born_i + 1:]
+        lv.min_close = float(seg.min()) if seg.size else float('inf')
+        lv.max_close = float(seg.max()) if seg.size else float('-inf')
     lv.fresh = lv.touches == 0
 
 
@@ -434,6 +448,16 @@ class Book:
                 continue
             out.append(lv)
         return out
+
+
+def _consumed(lv: Level) -> bool:
+    """APA5-01 consumption gate: an AOL is consumed if price has used >=50% of
+    its zone depth since birth. For support: min close since birth <= midpoint
+    of zone [birth_extreme, price]. For resist: max close >= midpoint."""
+    mid = (lv.price + lv.birth_extreme) / 2.0
+    if lv.side == SUPPORT:
+        return lv.min_close <= mid
+    return lv.max_close >= mid
 
 
 # ----------------------------------------------------------------------
@@ -812,6 +836,9 @@ def run(start, end, params=None):
         lvl_obj = None
         if near:
             lv = min(near, key=lambda o: abs(o.price - px))
+            # APA consumption gate (Task 18): skip if zone depth >=50% used since birth
+            if P["consume_gate"] and _consumed(lv):
+                continue
             setup = _eval_entry(side, dirn, lv.price, k, m30_op, m30_cl, m30_hi,
                                 m30_lo, a30v, nm, book.levels, atr_k, P)
             lvl_obj = lv

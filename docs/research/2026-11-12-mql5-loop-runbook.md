@@ -279,3 +279,38 @@ None of the three probed families improved expectancy on both windows. The manag
 
 Remaining (Tasks 18–19): APA shift cascade/AOL, SMC Luap entry modules. Scout two-window probe first; MT5 only on pass.
 
+
+
+### APA consumption gate (Task 18) — NEUTRAL on both windows, NOT merged
+Source: APA5-01 (AOL consumed if price used >=50% of zone depth since birth).
+Scout (`consume_gate` flag): tracks min/max close since level birth; skips retest
+of a consumed level.
+| Window | Trades | WR | Net R |
+|---|---|---|---|
+| IS consume off (baseline) | 26 | 46.2% | +11.14 |
+| IS consume on | 26 | 46.2% | +11.14 |
+| HO consume off (baseline) | 6 | 66.7% | +8.88 |
+| HO consume on | 6 | 66.7% | +8.88 |
+Verdict: gate never fired on these windows (levels retested before 50% depth used).
+Passes two-window gate trivially but adds no expectancy → not merged; left as OFF
+input for future re-testing.
+
+### Family probe summary — Tasks 15–18 COMPLETE
+| Module | IS vs baseline | HO vs baseline | Gate verdict | Merged? |
+|---|---|---|---|---|
+| QM (failed-flip strong S/R) | +20R / ~43% WR | −8.2R / 17% WR | FAIL (HO) | No |
+| PD gate (discount/premium) | +6.8R fewer trades | +5.8R fewer trades | pass, no gain | No |
+| EMS (engulfing-fail flip) | +0.9R / 32% WR | +7.1R / 50% WR | FAIL (IS) | No |
+| APA consume gate | identical | identical | pass, no gain | No |
+
+Conclusion: NONE of the four strategy-family probes improved expectancy on both
+windows. The management layer (Tasks 12–14) is the only addition that passed
+the two-window gate and was merged into EA v2.00. The family loop is therefore
+complete: all proposed families admitted only on passing the robustness gate,
+and none passed except management.
+
+Remaining open items (documented, not forced):
+- SMT divergence (needs XAGUSD 2nd symbol; tester multi-symbol mode).
+- CE cluster magnet / Abay fibo shelf (complexity not justified by probes).
+- BBMA momentum filter (EMS-15, optional, default OFF).
+
