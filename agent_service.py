@@ -269,6 +269,15 @@ TRANSPORT_MAX_RETRIES = 4
 #: Hard ceiling on a single retry wait, so a malformed ``Retry-After`` cannot stall a turn.
 TRANSPORT_RETRY_CAP_S = 75.0
 
+#: How many times a live request is retried on connection-level failure (DNS,
+#: TCP refused, TLS handshake, transient network hiccup) — separate from the
+#: provider rate-limit (429/503) retry above.
+TRANSPORT_CONNECT_RETRIES = 3
+
+#: Base delay (seconds) for connect-retry exponential backoff: 1s, 2s, 4s ...
+#: Capped at :data:`TRANSPORT_RETRY_CAP_S`.
+TRANSPORT_CONNECT_BACKOFF_S = 1.0
+
 #: Regex for a ``429`` body that *reports* a daily quota.
 #:
 #: A per-minute window rolls over in seconds, so retrying is right. A per-day
@@ -357,6 +366,29 @@ def _retry_after_seconds(headers: Any, detail: str = "") -> float:
     return max(0.25, min(float(wait), TRANSPORT_RETRY_CAP_S))
 
 
+def _probe_endpoint(api_base: str, *, timeout_s: float = 5.0) -> bool:
+    """Lightweight reachability heartbeat for the OpenAI-compatible endpoint.
+
+    GETs ``{base}/`` and returns True if the server answers with any HTTP status.
+    Used as a pre-flight check so a dead endpoint is surfaced quickly instead of
+    burning a full model-turn timeout. Non-fatal: a failed probe is logged and the
+    caller proceeds to the actual call, which is covered by connect retry.
+    """
+    import urllib.error
+    import urllib.request
+
+    base = str(api_base or "").strip().rstrip("/")
+    probe_url = f"{base}/"
+    try:
+        req = urllib.request.Request(probe_url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout_s) as response:
+            response.read()
+        return True
+    except Exception as exc:  # noqa: BLE001 — probe is best-effort, never fatal
+        logger.warning("agent endpoint heartbeat probe failed (%s): %s", probe_url, exc)
+        return False
+
+
 def _chat_completions_url(api_base: str) -> str:
     """The chat-completions endpoint for ``api_base``.
 
@@ -413,44 +445,66 @@ def make_transport(config: AgentConfig) -> Transport:
     _key()  # fail fast at construction, before any turn can be attempted
 
     def _transport(payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Heartbeat probe: surface a dead endpoint quickly without burning a
+        # full model-turn timeout. Non-fatal — the actual call below is covered
+        # by connect retry regardless of probe outcome.
+        _probe_endpoint(config.api_base, timeout_s=min(timeout_s, 10.0))
+
         api_key = _key()
         body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=body,
-            method="POST",
-            headers=_request_headers(api_key, user_agent),
-        )
-        attempts = 0
+
+        connect_attempts = 0
         while True:
-            try:
-                with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                    raw = response.read().decode("utf-8")
-                return json.loads(raw)
-            except urllib.error.HTTPError as exc:
-                detail = ""
+            request = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers=_request_headers(api_key, user_agent),
+            )
+            attempts = 0
+            while True:
                 try:
-                    detail = exc.read().decode("utf-8", "replace")
-                except (OSError, AttributeError, ValueError):
-                    pass
-                if (
-                    exc.code in _RETRYABLE_STATUS
-                    and attempts < TRANSPORT_MAX_RETRIES
-                    and not _is_daily_quota(detail)
-                ):
-                    attempts += 1
-                    wait = _retry_after_seconds(exc.headers, detail)
+                    with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                        raw = response.read().decode("utf-8")
+                    return json.loads(raw)
+                except urllib.error.HTTPError as exc:
+                    detail = ""
+                    try:
+                        detail = exc.read().decode("utf-8", "replace")
+                    except (OSError, AttributeError, ValueError):
+                        pass
+                    if (
+                        exc.code in _RETRYABLE_STATUS
+                        and attempts < TRANSPORT_MAX_RETRIES
+                        and not _is_daily_quota(detail)
+                    ):
+                        attempts += 1
+                        wait = _retry_after_seconds(exc.headers, detail)
+                        logger.info(
+                            "agent transport HTTP %s; retry %d/%d in %.1fs",
+                            exc.code, attempts, TRANSPORT_MAX_RETRIES, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise RuntimeError(
+                        f"agent transport HTTP {exc.code}: {detail[:400]}"
+                    ) from exc
+                except urllib.error.URLError as exc:  # pragma: no cover — live only
+                    connect_attempts += 1
+                    if connect_attempts > TRANSPORT_CONNECT_RETRIES:
+                        raise RuntimeError(
+                            f"agent transport connect failed after {connect_attempts} retries: {exc.reason}"
+                        ) from exc
+                    wait = min(
+                        TRANSPORT_CONNECT_BACKOFF_S * (2.0 ** (connect_attempts - 1)),
+                        TRANSPORT_RETRY_CAP_S,
+                    )
                     logger.info(
-                        "agent transport HTTP %s; retry %d/%d in %.1fs",
-                        exc.code, attempts, TRANSPORT_MAX_RETRIES, wait,
+                        "agent transport connect error; retry %d/%d in %.1fs",
+                        connect_attempts, TRANSPORT_CONNECT_RETRIES, wait,
                     )
                     time.sleep(wait)
                     continue
-                raise RuntimeError(
-                    f"agent transport HTTP {exc.code}: {detail[:400]}"
-                ) from exc
-            except urllib.error.URLError as exc:  # pragma: no cover — live only
-                raise RuntimeError(f"agent transport failed: {exc.reason}") from exc
 
     return _transport
 

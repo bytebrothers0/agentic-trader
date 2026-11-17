@@ -778,7 +778,7 @@ def test_make_transport_retries_a_rate_limit_then_succeeds(monkeypatch):
 
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(429, retry_after="3")
         return _FakeResponse()
 
@@ -786,7 +786,7 @@ def test_make_transport_retries_a_rate_limit_then_succeeds(monkeypatch):
     transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
 
     assert transport({"model": "m", "messages": []}) == {"ok": True}
-    assert calls["n"] == 2
+    assert calls["n"] == 3  # probe GET + POST 429 + POST success
     assert slept == [3.0]
 
 
@@ -808,7 +808,7 @@ def test_make_transport_gives_up_after_the_retry_budget(monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         transport({"model": "m", "messages": []})
     assert "HTTP 429" in str(excinfo.value)
-    assert calls["n"] == TRANSPORT_MAX_RETRIES + 1
+    assert calls["n"] == TRANSPORT_MAX_RETRIES + 2  # probe + TRANSPORT_MAX_RETRIES + 1
 
 
 def test_make_transport_does_not_retry_a_daily_quota(monkeypatch):
@@ -838,7 +838,7 @@ def test_make_transport_does_not_retry_a_daily_quota(monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         transport({"model": "m", "messages": []})
     assert "HTTP 429" in str(excinfo.value)
-    assert calls["n"] == 1, "a daily quota must not be retried"
+    assert calls["n"] == 2, "a daily quota must not be retried (probe + one call)"
     assert slept == []
 
 
@@ -861,7 +861,7 @@ def test_make_transport_does_not_retry_a_client_error(monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         transport({"model": "m", "messages": []})
     assert "HTTP 400" in str(excinfo.value)
-    assert calls["n"] == 1
+    assert calls["n"] == 2  # probe + one call
     assert slept == []
 
 
@@ -877,7 +877,7 @@ def test_make_transport_retries_a_503(monkeypatch):
 
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(503, retry_after="2")
         return _FakeResponse()
 
@@ -885,7 +885,7 @@ def test_make_transport_retries_a_503(monkeypatch):
     transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
 
     assert transport({"model": "m", "messages": []}) == {"ok": True}
-    assert calls["n"] == 2
+    assert calls["n"] == 3  # probe GET + 503 + success
     assert slept == [2.0]
 
 
@@ -901,7 +901,7 @@ def test_make_transport_honours_x_ratelimit_reset_tokens(monkeypatch):
 
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(429, headers={"x-ratelimit-reset-tokens": "6.3s"})
         return _FakeResponse()
 
@@ -909,7 +909,7 @@ def test_make_transport_honours_x_ratelimit_reset_tokens(monkeypatch):
     transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
 
     assert transport({"model": "m", "messages": []}) == {"ok": True}
-    assert calls["n"] == 2
+    assert calls["n"] == 3  # probe GET + 429 + success
     assert slept == [6.3]
 
 
@@ -929,7 +929,7 @@ def test_make_transport_parses_an_http_date_retry_after(monkeypatch):
 
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(503, retry_after=http_date)
         return _FakeResponse()
 
@@ -937,7 +937,7 @@ def test_make_transport_parses_an_http_date_retry_after(monkeypatch):
     transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
 
     assert transport({"model": "m", "messages": []}) == {"ok": True}
-    assert calls["n"] == 2
+    assert calls["n"] == 3  # probe GET + 503 + success
     # ~10s out; allow scheduling slop but prove it did not fall back to the 5s default.
     assert len(slept) == 1
     assert 8.0 <= slept[0] <= 11.0
@@ -960,7 +960,7 @@ def test_make_transport_retries_a_per_minute_429_that_mentions_a_daily_prose(mon
 
     def tpm_body(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(
                 429,
                 retry_after="3",
@@ -977,7 +977,7 @@ def test_make_transport_retries_a_per_minute_429_that_mentions_a_daily_prose(mon
     transport = make_transport(AgentConfig(api_key_env="AGENT_UA_KEY"))
 
     assert transport({"model": "m", "messages": []}) == {"ok": True}
-    assert calls["n"] == 2, "a per-minute 429 must be retried, not treated as terminal"
+    assert calls["n"] == 3, "a per-minute 429 must be retried, not treated as terminal"
     assert slept == [3.0]
 
 
@@ -993,7 +993,7 @@ def test_make_transport_floors_a_zero_retry_after(monkeypatch):
 
     def fake_urlopen(request, timeout=None):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:
             raise _http_error(429, retry_after="0")
         return _FakeResponse()
 
