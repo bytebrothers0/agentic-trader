@@ -369,21 +369,29 @@ def _retry_after_seconds(headers: Any, detail: str = "") -> float:
 def _probe_endpoint(api_base: str, *, timeout_s: float = 5.0) -> bool:
     """Lightweight reachability heartbeat for the OpenAI-compatible endpoint.
 
-    GETs ``{base}/`` and returns True if the server answers with any HTTP status.
-    Used as a pre-flight check so a dead endpoint is surfaced quickly instead of
-    burning a full model-turn timeout. Non-fatal: a failed probe is logged and the
-    caller proceeds to the actual call, which is covered by connect retry.
+    GETs ``{base}/health`` and returns True if the server answers with any HTTP
+    status in the 2xx range. An HTTP error (e.g. 404 on a gateway that has no
+    health route) is not a dead endpoint — the chat endpoint may still work — so
+    it is logged quietly and the probe returns False without noise. A connection
+    error (DNS, refused, timeout) is the only case worth a warning, since that
+    means the endpoint is unreachable and the connect retry will kick in on the
+    real call.
     """
     import urllib.error
     import urllib.request
 
     base = str(api_base or "").strip().rstrip("/")
-    probe_url = f"{base}/"
+    probe_url = f"{base}/health"
     try:
         req = urllib.request.Request(probe_url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout_s) as response:
-            response.read()
-        return True
+            body = response.read()
+        return 200 <= response.status < 300
+    except urllib.error.HTTPError as exc:
+        # The gateway simply has no /health route (or similar); the model
+        # endpoint itself may be fine. Don't spam the log on every turn.
+        logger.debug("agent endpoint heartbeat probe HTTP %s at %s", exc.code, probe_url)
+        return False
     except Exception as exc:  # noqa: BLE001 — probe is best-effort, never fatal
         logger.warning("agent endpoint heartbeat probe failed (%s): %s", probe_url, exc)
         return False
