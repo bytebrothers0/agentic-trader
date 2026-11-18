@@ -366,37 +366,6 @@ def _retry_after_seconds(headers: Any, detail: str = "") -> float:
     return max(0.25, min(float(wait), TRANSPORT_RETRY_CAP_S))
 
 
-def _probe_endpoint(api_base: str, *, timeout_s: float = 5.0) -> bool:
-    """Lightweight reachability heartbeat for the OpenAI-compatible endpoint.
-
-    GETs ``{base}/health`` and returns True if the server answers with any HTTP
-    status in the 2xx range. An HTTP error (e.g. 404 on a gateway that has no
-    health route) is not a dead endpoint — the chat endpoint may still work — so
-    it is logged quietly and the probe returns False without noise. A connection
-    error (DNS, refused, timeout) is the only case worth a warning, since that
-    means the endpoint is unreachable and the connect retry will kick in on the
-    real call.
-    """
-    import urllib.error
-    import urllib.request
-
-    base = str(api_base or "").strip().rstrip("/")
-    probe_url = f"{base}/health"
-    try:
-        req = urllib.request.Request(probe_url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout_s) as response:
-            body = response.read()
-        return 200 <= response.status < 300
-    except urllib.error.HTTPError as exc:
-        # The gateway simply has no /health route (or similar); the model
-        # endpoint itself may be fine. Don't spam the log on every turn.
-        logger.debug("agent endpoint heartbeat probe HTTP %s at %s", exc.code, probe_url)
-        return False
-    except Exception as exc:  # noqa: BLE001 — probe is best-effort, never fatal
-        logger.warning("agent endpoint heartbeat probe failed (%s): %s", probe_url, exc)
-        return False
-
-
 def _chat_completions_url(api_base: str) -> str:
     """The chat-completions endpoint for ``api_base``.
 
@@ -453,11 +422,6 @@ def make_transport(config: AgentConfig) -> Transport:
     _key()  # fail fast at construction, before any turn can be attempted
 
     def _transport(payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Heartbeat probe: surface a dead endpoint quickly without burning a
-        # full model-turn timeout. Non-fatal — the actual call below is covered
-        # by connect retry regardless of probe outcome.
-        _probe_endpoint(config.api_base, timeout_s=min(timeout_s, 10.0))
-
         api_key = _key()
         body = json.dumps(payload).encode("utf-8")
 
