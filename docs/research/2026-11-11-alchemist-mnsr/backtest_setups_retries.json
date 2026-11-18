@@ -1,0 +1,52 @@
+{
+  "setups": [
+    {
+      "id": "S2",
+      "cutoff": "2026-09-30T13:30:00+00:00",
+      "horizon": "2026-09-30T16:30:00+00:00",
+      "setup_type": "BEARISH reclaim at PDH",
+      "level": 4187.72,
+      "sweep": 4195.56,
+      "close": 4183.61,
+      "session": "NY AM",
+      "expected": "DOWN",
+      "notes": "PDH sweep + close-back, NY delivery window"
+    },
+    {
+      "id": "S3",
+      "cutoff": "2026-10-02T13:30:00+00:00",
+      "horizon": "2026-10-02T16:30:00+00:00",
+      "setup_type": "BEARISH reclaim at PDH",
+      "level": 4192.93,
+      "sweep": 4201.99,
+      "close": 4186.08,
+      "session": "NY AM",
+      "expected": "DOWN",
+      "notes": "PDH sweep + close-back, NFP week"
+    },
+    {
+      "id": "S5",
+      "cutoff": "2026-10-07T15:30:00+00:00",
+      "horizon": "2026-10-07T18:30:00+00:00",
+      "setup_type": "BULLISH reclaim at PDL",
+      "level": 4103.71,
+      "sweep": 4102.00,
+      "close": 4108.28,
+      "session": "NY AM",
+      "expected": "UP",
+      "notes": "PDL sweep + close-back, NY delivery"
+    },
+    {
+      "id": "S7",
+      "cutoff": "2026-11-10T13:30:00+00:00",
+      "horizon": "2026-11-10T16:30:00+00:00",
+      "setup_type": "BULLISH reclaim at PDL",
+      "level": 4054.82,
+      "sweep": 4039.64,
+      "close": 4056.30,
+      "session": "NY AM",
+      "expected": "UP",
+      "notes": "PDL sweep + close-back, post-election week"
+    }
+  ]
+}
