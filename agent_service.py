@@ -253,8 +253,8 @@ def _request_headers(api_key: str, user_agent: str) -> Dict[str, str]:
     return headers
 
 
-#: HTTP statuses that mean "slow down" and are worth a bounded retry.
-_RETRYABLE_STATUS = frozenset({429, 503})
+#: HTTP statuses that can be transient at provider gateways and merit a retry.
+_RETRYABLE_STATUS = frozenset({404, 429, 500, 502, 503, 504})
 
 #: How many times a live request is retried when the provider asks us to slow down.
 #:
@@ -484,27 +484,36 @@ def make_transport(config: AgentConfig) -> Transport:
 def _mock_script(config: AgentConfig) -> List[AgentReply]:
     """The deterministic, zero-spend script a mock turn replays.
 
-    Follow the same two-timeframe perception, render, liquidity lookup and
-    watch-or-proposal workflow as live strategy turns, then write the thesis.
+    Follow the same sequential single-timeframe perception, render, liquidity
+    lookup and watch-or-proposal workflow as live strategy turns, then write
+    the thesis.
     :func:`_mock_agent` replays this zero-spend sequence once per turn.
     """
     timeframe = str(config.timeframe or "M15")
-    context_timeframe = "H4" if timeframe == "H1" else "H1"
     round_one = AgentReply(tool_calls=[ToolCall(
         call_id="mock-set-view",
         name="set_view",
         arguments={
-            "layout": "split",
-            "panes": [context_timeframe, timeframe],
+            "timeframe": "W1",
             "families": ["liquidity", "bos", "ob"],
             "bars": min(180, max(20, int(config.bars or 50))),
         },
     )])
     round_two = AgentReply(tool_calls=[ToolCall(call_id="mock-render", name="render")])
     round_three = AgentReply(tool_calls=[ToolCall(
+        call_id="mock-set-d1", name="set_view",
+        arguments={"timeframe": "D1", "families": ["liquidity", "bos", "ob"]},
+    )])
+    round_four = AgentReply(tool_calls=[ToolCall(call_id="mock-render-d1", name="render")])
+    round_five = AgentReply(tool_calls=[ToolCall(
+        call_id="mock-set-h4", name="set_view",
+        arguments={"timeframe": "H4", "families": ["liquidity", "bos", "ob"]},
+    )])
+    round_six = AgentReply(tool_calls=[ToolCall(call_id="mock-render-h4", name="render")])
+    round_seven = AgentReply(tool_calls=[ToolCall(
         call_id="mock-liquidity-lookup", name="level_lookup", arguments={"family": "liquidity"}
     )])
-    round_four = AgentReply(tool_calls=[ToolCall(
+    round_eight = AgentReply(tool_calls=[ToolCall(
         call_id="mock-add-watch",
         name="add_watch",
         arguments={
@@ -514,7 +523,7 @@ def _mock_script(config: AgentConfig) -> List[AgentReply]:
             "reason": "wait for structure confirmation before proposing a trade",
         },
     )])
-    round_five = AgentReply(
+    round_nine = AgentReply(
         output={
             "thesis": {
                 "bias": "bullish",
@@ -537,7 +546,8 @@ def _mock_script(config: AgentConfig) -> List[AgentReply]:
         tokens={"prompt": 0, "completion": 0},
         cost_usd=0.0,
     )
-    return [round_one, round_two, round_three, round_four, round_five]
+    return [round_one, round_two, round_three, round_four, round_five,
+            round_six, round_seven, round_eight, round_nine]
 
 
 def _mock_agent(config: AgentConfig) -> ScriptedAgent:
@@ -713,7 +723,50 @@ class AgentService:
             activity=self.emit_activity,
             leash=_settings_leash,
             families=_settings_families,
+            checkpoint=self._write_checkpoint,
         )
+
+    def _write_checkpoint(self, checkpoint: Optional[Dict[str, Any]]) -> None:
+        """Atomically persist progress and provisional spend in the shared store."""
+        if checkpoint is None:
+            self.store.data.agent.resume_checkpoint = {}
+            self.store.save()
+            return
+        previous = dict(self.store.data.agent.resume_checkpoint or {})
+        if previous and previous.get("turn_id") != checkpoint.get("turn_id"):
+            raise RuntimeError("cannot replace a different resumable analysis checkpoint")
+        budget = self.store.data.budget
+        accounting_day = budget.day_started_at.date().isoformat() if budget.day_started_at else ""
+        if previous and previous.get("accounting_day") == accounting_day:
+            accounting_base = float(previous.get("accounting_base_cost_usd") or 0.0)
+            previously_accounted = float(previous.get("accounted_cost_usd") or 0.0)
+        elif previous:
+            accounting_base = float(previous.get("cost") or 0.0)
+            previously_accounted = 0.0
+        else:
+            accounting_base = 0.0
+            previously_accounted = 0.0
+        current_cost_today = max(0.0, float(checkpoint.get("cost") or 0.0) - accounting_base)
+        budget.spend_usd_today += current_cost_today - previously_accounted
+        checkpoint["accounting_day"] = accounting_day
+        checkpoint["accounting_base_cost_usd"] = accounting_base
+        checkpoint["accounted_cost_usd"] = current_cost_today
+        self.store.data.agent.resume_checkpoint = checkpoint
+        self.store.save()
+
+    def _read_checkpoint(self) -> Optional[Dict[str, Any]]:
+        checkpoint = dict(self.store.data.agent.resume_checkpoint or {})
+        turn_id = str(checkpoint.get("turn_id") or "")
+        if turn_id and any(str(turn.id) == turn_id for turn in self.store.data.turns):
+            # Final store write and checkpoint deletion share the same document;
+            # this handles any stale checkpoint from an older build or partial upgrade.
+            self.store.data.agent.resume_checkpoint = {}
+            self.store.save()
+            return None
+        return checkpoint if checkpoint.get("request") else None
+
+    def has_resumable_run(self) -> bool:
+        return self._read_checkpoint() is not None
 
     def _record_failure(self, where: str, exc: BaseException) -> None:
         message = f"{where}: {type(exc).__name__}: {exc}"
@@ -882,6 +935,9 @@ class AgentService:
         if not self.enabled():
             return None
         with self._turn_lock:
+            if self.has_resumable_run():
+                self.emit_activity("turn_deferred", {"reason": "resumable_analysis_pending"})
+                return None
             try:
                 outcome = self._loop().boot()
             except Exception as exc:  # noqa: BLE001 — a boot failure must not crash
@@ -911,6 +967,10 @@ class AgentService:
         if not self.enabled() or self.paused():
             return None
         with self._turn_lock:
+            if self.has_resumable_run():
+                # Leave conditions queued until the interrupted human analysis is
+                # resumed; a watchdog turn must not replace its checkpoint.
+                return None
             now = as_aware(self._clock())
             try:
                 self.store.check_leash(now)
@@ -938,19 +998,31 @@ class AgentService:
             self._resolve_orders("scan")
         return outcome
 
-    def run_now(self, message: str = "") -> TurnOutcome:
+    def run_now(self, message: str = "", *, resume: bool = False) -> TurnOutcome:
         """A human ``request`` turn. Always allowed, even when disabled or paused."""
         with self._turn_lock:
             try:
-                outcome = self._loop().run_turn(
-                    trigger="request", detail=str(message or "human request")
+                checkpoint = self._read_checkpoint() if resume else None
+                if resume and checkpoint is None:
+                    return TurnOutcome(trigger="request", ok=False, reason="no_resumable_run")
+                if not resume and self.has_resumable_run():
+                    return TurnOutcome(
+                        trigger="request", ok=False, reason="resumable_run_exists",
+                        output={"resumable": True},
+                    )
+                loop = self._loop()
+                outcome = loop.run_turn(
+                    trigger=str(checkpoint.get("trigger") or "request") if checkpoint else "request",
+                    detail=str(checkpoint.get("detail") or message or "human request") if checkpoint else str(message or "human request"),
+                    resume_state=checkpoint,
                 )
             except Exception as exc:  # noqa: BLE001 — report, never raise out
                 self._record_failure("run_now", exc)
                 outcome = TurnOutcome(trigger="request", ok=False, reason=str(exc))
             self._remember_render(outcome)
             self.emit_activity("turn_finished", self._turn_finished_payload(outcome))
-            self._resolve_orders("request")
+            if outcome.ok:
+                self._resolve_orders("request")
         return outcome
 
     def chat_turn(self, message: str, emit: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
@@ -965,6 +1037,19 @@ class AgentService:
         ``tool_call``/``tool_result``/``chat_render``) while the turn runs.
         """
         with self._turn_lock:
+            if self.has_resumable_run():
+                return {
+                    "ok": False,
+                    "reason": "analysis_resume_pending",
+                    "response": "Resume the interrupted analysis before starting another agent turn.",
+                    "turn_id": "",
+                    "render_id": "",
+                    "tool_calls": [],
+                    "renders": 0,
+                    "image_path": "",
+                    "manifest": {},
+                    "output": {},
+                }
             try:
                 result = self._loop().chat_turn(
                     str(message or "").strip(), activity=emit,
@@ -1215,6 +1300,7 @@ class AgentService:
             store.data.proposals.clear()
             store.data.agent.last_evaluated_at = None
             store.save()
+            self._write_checkpoint(None)
             self._watchdog_obj = Watchdog(self._feed, clock=self._clock)
             self._last_render = {}
             return {
@@ -1309,6 +1395,7 @@ class AgentService:
             "budget": store.data.budget.to_dict(),
             "recent_turns": self._turn_rows(PANEL_TURNS),
             "last_render": dict(self._last_render),
+            "resumable": self.has_resumable_run(),
         }
 
     def turns(self, limit: int = DEFAULT_TURNS_LIMIT) -> List[dict]:

@@ -327,19 +327,19 @@ AGENT_BARS = 180
 AGENT_POLL_S = 15.0            # watchdog poll cadence
 AGENT_API_BASE = ""            # "" = inherit the LLM_PROVIDER base URL
 AGENT_API_KEY_ENV = ""         # "" = inherit the LLM_PROVIDER key env var name
-AGENT_MAX_TOKENS = 8000         # per-call output cap (a reasoning model bills its hidden reasoning here)
+AGENT_MAX_TOKENS = 65536        # per-call output cap; keep bounded separately from model context length
 AGENT_TEMPERATURE = 0.0
 #: The agent's leash, adjustable anytime. All are re-read from this module on
 #: every turn, so an edit (or a restart) applies to the NEXT turn without any
 #: other wiring — the loop never captures the value once.
-#:   AGENT_MAX_TOOL_CALLS      — executed tool calls allowed in one turn (tool_cap).
-#:   AGENT_MAX_TOOL_ROUNDS     — model round-trips (calls) allowed in one turn.
+#:   AGENT_MAX_TOOL_CALLS      — executed tool calls allowed in one turn (default 400).
+#:   AGENT_MAX_TOOL_ROUNDS     — model round-trips allowed in one turn (default 400).
 #:   AGENT_MAX_RENDERS_PER_TURN — total chart renders in one turn, INCLUDING the
 #:                               turn's initial perception render. A further
 #:                               render call is refused with "render_cap"; the
 #:                               model is told why and proceeds on what it has.
-AGENT_MAX_TOOL_CALLS = 200
-AGENT_MAX_TOOL_ROUNDS = 400
+AGENT_MAX_TOOL_CALLS = 400
+AGENT_MAX_TOOL_ROUNDS = 100
 AGENT_MAX_RENDERS_PER_TURN = 25
 #: The turn-rate throttle (the store leash): how often a turn may even START.
 #: These fire BEFORE any model call — a refusal shows on the panel as

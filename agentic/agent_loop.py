@@ -58,16 +58,19 @@ from agentic import prompts
 from agentic._time import as_aware, new_id
 from agentic.feed import Feed
 from agentic.models import Serde, Trigger
-from agentic.renderer import Renderer
+from agentic.renderer import RenderResult, Renderer
 from agentic._dialect import coerce_bias as _coerce_bias
 from agentic._dialect import coerce_proposal as _coerce_proposal
 from agentic.store import (
+    MAX_BARS,
     MAX_RENDERS_PER_TURN,
     MAX_TOOL_CALLS_PER_TURN,
+    MAX_SPEND_PER_DAY_USD,
     ContextStore,
     LeashExceeded,
     StoreError,
 )
+from agentic.strategy import is_mnsr_strategy
 from agentic.tools import ToolCall, ToolRegistry, ToolResult
 from agentic.watchdog import Watchdog
 
@@ -115,7 +118,10 @@ CLOSING_INSTRUCTION = (
     "ride along as text in the briefing's `chart` block, so reason from those "
     "numbers rather than claiming no chart was available. Include a `thesis` object "
     "with a bias, a non-empty storyline, an explicit invalidation, and confidence. "
-    "If evidence is insufficient, say so and use neutral bias."
+    "Bias describes observed market direction independently of entry readiness. Use "
+    "neutral only when direction itself is genuinely unclear; no valid entry means "
+    "no proposal, not neutral bias. Check invalidation against the latest completed "
+    "candle and timestamp before describing it as pending."
 )
 
 CLOSING_SYSTEM_PROMPT = (
@@ -123,8 +129,14 @@ CLOSING_SYSTEM_PROMPT = (
     "Do not call tools. Return only one JSON object with `thesis` containing `bias`, "
     "`storyline`, `levels_of_interest`, `invalidation`, and `confidence`; also include "
     "`proposals` (an empty array when no valid setup passed), `notes`, and `reasoning`. "
-    "Never invent prices. If the analysis did not establish a valid setup, use neutral "
-    "bias, explain which evidence or strategy phase is missing, and say no trade proposal."
+    "Never invent prices. Market bias describes current direction independently from "
+    "entry readiness. Use neutral only when direction is genuinely unclear. If no valid "
+    "setup passed, return no trade proposal and state which gate is missing. Check "
+    "invalidation against the latest completed candle and timestamp; do not describe "
+    "an already-broken level as pending. Follow the active strategy included below. "
+    "For an Alchemist MSNR proposal, name the qualifying EM01–EM10 model and preserve "
+    "its trigger and invalidation rules; if none triggered, return no proposal and name "
+    "the next required event."
 )
 
 #: The single key the closing instruction is carried under in the briefing. It
@@ -205,36 +217,39 @@ def _has_thesis_tool_call(log: Sequence[Dict[str, Any]]) -> bool:
 def _workflow_state(log: Sequence[Dict[str, Any]], output: Any = None) -> Dict[str, bool]:
     """Return the concrete perception/action milestones completed this turn."""
     entries = list(log or ())
-    valid_view_at = None
+    view_at: Dict[str, int] = {}
+    entry_tf: str = ""
     for index, entry in enumerate(entries):
         call = (entry or {}).get("call") or {}
         result = (entry or {}).get("result") or {}
         view = result.get("result") or {}
-        is_context_view = (
-            call.get("name") == "set_view"
-            and result.get("ok", True)
-            and isinstance(view, dict)
-            and view.get("layout") == "split"
-            and len(view.get("panes") or []) == 2
-            and len(set(view.get("panes") or [])) == 2
-            and 1 <= len(view.get("families") or []) <= 3
-            and "liquidity" in (view.get("families") or [])
-        )
         if call.get("name") == "set_view" and result.get("ok", True):
-            # A later view change supersedes an earlier valid one.
-            valid_view_at = index if is_context_view else None
+            timeframe = str(view.get("timeframe") or "").upper()
+            if view.get("layout", "single") == "single" and len(view.get("families") or []) <= 3:
+                if timeframe not in view_at:
+                    entry_tf = timeframe  # first timeframe viewed is the entry timeframe
+                view_at[timeframe] = index
 
-    render_at = next((
-        index for index, entry in enumerate(entries)
-        if valid_view_at is not None
-        and index > valid_view_at
-        and ((entry or {}).get("call") or {}).get("name") == "render"
-        and ((entry or {}).get("result") or {}).get("ok", True)
-    ), None)
+    rendered_at: Dict[str, int] = {}
+    for index, entry in enumerate(entries):
+        call = (entry or {}).get("call") or {}
+        result = (entry or {}).get("result") or {}
+        if call.get("name") != "render" or not result.get("ok", True):
+            continue
+        manifest = ((result.get("result") or {}).get("manifest") or {})
+        timeframe = str(manifest.get("timeframe") or "").upper()
+        if timeframe in view_at and index > view_at[timeframe]:
+            rendered_at[timeframe] = index
+    confirm_tf = next((tf for tf in ("H4", "H1") if tf in rendered_at), "")
+    last_required_render = max(
+        [rendered_at[tf] for tf in ("W1", "D1", confirm_tf) if tf in rendered_at],
+        default=None,
+    )
+    context_complete = all(tf in rendered_at for tf in ("W1", "D1")) and bool(confirm_tf)
     liquidity_lookup_at = next((
         index for index, entry in enumerate(entries)
-        if render_at is not None
-        and index > render_at
+        if last_required_render is not None
+        and index > last_required_render
         and ((entry or {}).get("call") or {}).get("name") == "level_lookup"
         and (((entry or {}).get("call") or {}).get("arguments") or {}).get("family") == "liquidity"
         and ((entry or {}).get("result") or {}).get("ok", True)
@@ -254,8 +269,19 @@ def _workflow_state(log: Sequence[Dict[str, Any]], output: Any = None) -> Dict[s
         and ((entry or {}).get("call") or {}).get("name") == "add_pin"
         and ((entry or {}).get("result") or {}).get("ok", True)
     }
-    pin_done = not liquidity_matches or any(
-        str(item.get("level_key") or "") in pinned_keys for item in liquidity_matches
+    pinned_timeframes = {
+        str((((entry or {}).get("call") or {}).get("arguments") or {}).get("timeframe") or "").upper()
+        for index, entry in enumerate(entries)
+        if liquidity_lookup_at is not None and index > liquidity_lookup_at
+        and ((entry or {}).get("call") or {}).get("name") == "add_pin"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+    }
+    lookup_timeframes = {str(item.get("timeframe") or "").upper() for item in liquidity_matches}
+    pin_done = (
+        not liquidity_matches
+        or any(str(item.get("level_key") or "") in pinned_keys for item in liquidity_matches)
+        or bool(pinned_timeframes & lookup_timeframes)
+        or bool(pinned_keys)  # any pin added after lookup satisfies the pin step
     )
     proposals = output.get("proposals") if isinstance(output, dict) else None
     proposal_done = bool(proposals) or any(
@@ -268,13 +294,29 @@ def _workflow_state(log: Sequence[Dict[str, Any]], output: Any = None) -> Dict[s
         and ((entry or {}).get("result") or {}).get("ok", True)
         for entry in entries
     )
+    entry_view = bool(entry_tf)
+    entry_render = bool(entry_tf) and entry_tf in rendered_at
     return {
-        "context_view": valid_view_at is not None,
-        "render": render_at is not None,
+        "context_view": context_complete,
+        "render": context_complete,
+        "w1_view": "W1" in view_at,
+        "w1_render": "W1" in rendered_at,
+        "d1_view": "D1" in view_at,
+        "d1_render": "D1" in rendered_at,
+        # Selecting the confirmation timeframe and rendering it are separate
+        # workflow milestones. If both depend on ``rendered_at``, the required
+        # tool remains set_view_confirm after a successful set_view and the
+        # model loops on the same timeframe forever.
+        "confirm_view": any(tf in view_at for tf in ("H4", "H1")),
+        "confirm_render": bool(confirm_tf),
         "liquidity_lookup": liquidity_lookup_at is not None,
         "pin": pin_done,
+        "entry_view": entry_view,
+        "entry_render": entry_render,
+        "entry_tf": entry_tf,
         "action": proposal_done or watch_done,
         "liquidity_found": bool(liquidity_matches),
+        "confirm_tf": confirm_tf,
     }
 
 
@@ -303,8 +345,7 @@ def _workflow_pin_candidate(log: Sequence[Dict[str, Any]]) -> Optional[Dict[str,
             earlier_result = (earlier or {}).get("result") or {}
             if earlier_call.get("name") == "set_view" and earlier_result.get("ok", True):
                 view = earlier_result.get("result") or {}
-                panes = view.get("panes") or []
-                primary_tf = str(panes[0]) if panes else ""
+                primary_tf = str(view.get("timeframe") or "")
                 break
         matches.sort(key=lambda item: (
             0 if str(item.get("timeframe")) == primary_tf else 1,
@@ -320,14 +361,70 @@ def _required_workflow_tool(
 ) -> str:
     """The turn cannot finish until the strategy's minimum inspection is done."""
     state = _workflow_state(log, output)
-    if not state["context_view"]:
-        return "set_view"
-    if not state["render"]:
+
+    # Count how many renders have succeeded at all. Once any render succeeded,
+    # consider required renders done — the model has seen the chart. Forcing
+    # more renders just loops and burns tokens.
+    total_renders = sum(
+        1 for entry in list(log or ())
+        if ((entry or {}).get("call") or {}).get("name") == "render"
+        and ((entry or {}).get("result") or {}).get("ok", True)
+    )
+
+    if not state["w1_view"]:
+        return "set_view_w1"
+    if not state["w1_render"] and total_renders == 0:
         return "render"
+    if total_renders > 0:
+        state["w1_render"] = True
+    if not state["d1_view"]:
+        return "set_view_d1"
+    if not state["d1_render"] and total_renders == 0:
+        return "render"
+    if total_renders > 0:
+        state["d1_render"] = True
+    if not state["confirm_view"]:
+        return "set_view_confirm"
+    if not state["confirm_render"] and total_renders == 0:
+        return "render"
+    if total_renders > 0:
+        state["confirm_render"] = True
     if not state["liquidity_lookup"]:
         return "level_lookup"
     if state["liquidity_found"] and not state["pin"]:
-        return "add_pin"
+        # If at least one pin already succeeded, the pin step is satisfied —
+        # don't loop forever pinning HTF levels that won't match the M15
+        # lookup timeframe. Move on to the entry timeframe.
+        pins_succeeded = any(
+            ((entry or {}).get("call") or {}).get("name") == "add_pin"
+            and ((entry or {}).get("result") or {}).get("ok", True)
+            for entry in list(log or ())
+        )
+        if pins_succeeded:
+            pass  # fall through to entry_render check
+        else:
+            return "add_pin"
+    # After HTF context + liquidity, return to the entry timeframe to evaluate
+    # the entry trigger (e.g. M15 CRT sweep/close-back) before concluding.
+    entry_tf = str(state.get("entry_tf") or "")
+    if entry_tf and not state.get("entry_render"):
+        # If set_view_entry was already called but not rendered, render now —
+        # don't loop on set_view_entry forever.
+        entry_viewed = False
+        for entry in list(log or ()):
+            call = (entry or {}).get("call") or {}
+            result = (entry or {}).get("result") or {}
+            view_result = result.get("result") or {}
+            if (
+                call.get("name") == "set_view"
+                and str(view_result.get("timeframe", "")).upper() == entry_tf
+                and result.get("ok", True)
+            ):
+                entry_viewed = True
+                break
+        if entry_viewed:
+            return "render"
+        return f"set_view_entry:{entry_tf}"
     if require_watch and not state["action"]:
         return "add_watch"
     return ""
@@ -337,10 +434,22 @@ def _workflow_tools(registry: ToolRegistry, required: str) -> List[Dict[str, Any
     """Copy the tool surface, tightening the currently required workflow step."""
     tools = copy.deepcopy(registry.schemas())
     by_name = {tool["name"]: tool for tool in tools}
-    if required == "set_view":
+    if required.startswith("set_view"):
         schema = by_name["set_view"]["parameters"]
-        schema["properties"]["layout"]["enum"] = ["split"]
-        schema["required"] = ["layout", "panes", "families"]
+        if required == "set_view_confirm":
+            schema["properties"]["timeframe"]["enum"] = ["H4", "H1"]
+            schema["required"] = ["timeframe", "families"]
+        elif required.startswith("set_view_entry:"):
+            # Dynamic entry timeframe (e.g. M15) with CRT+liquidity families
+            entry_tf = required.split(":", 1)[1]
+            schema["properties"]["timeframe"]["enum"] = [entry_tf]
+            schema["properties"]["families"]["enum"] = [["crt", "bos", "liquidity"]]
+            schema["required"] = ["timeframe", "families"]
+        else:
+            timeframe = {"set_view_w1": "W1", "set_view_d1": "D1"}.get(required)
+            if timeframe:
+                schema["properties"]["timeframe"]["enum"] = [timeframe]
+                schema["required"] = ["timeframe", "families"]
     elif required == "level_lookup":
         schema = by_name["level_lookup"]["parameters"]
         schema["properties"]["family"]["enum"] = ["liquidity"]
@@ -352,6 +461,10 @@ def _workflow_tools(registry: ToolRegistry, required: str) -> List[Dict[str, Any
 
 
 def _tool_choice(name: str) -> Dict[str, Dict[str, str]]:
+    if name.startswith("set_view_"):
+        name = "set_view"
+    elif name.startswith("set_view_entry:"):
+        name = "set_view"
     return {"type": "function", "function": {"name": name}}
 
 
@@ -391,15 +504,44 @@ def _manifest_digest(manifest: Optional[Dict[str, Any]], *, max_lines: int = 160
     capped with a ``+N more`` tail so a huge manifest cannot balloon the rescue
     call that exists to *prevent* ballooning. Returns ``""`` when nothing rendered.
     """
-    tags = (manifest or {}).get("tags") or {}
-    if not isinstance(tags, dict) or not tags:
-        return ""
-    entries = [entry for entry in tags.values() if isinstance(entry, dict)]
+    manifest = manifest or {}
+    tags = manifest.get("tags") or {}
+    entries = [entry for entry in tags.values() if isinstance(entry, dict)] if isinstance(tags, dict) else []
 
     def _order(entry: Dict[str, Any]) -> tuple:
         return (0 if entry.get("status") == "live" else 1, str(entry.get("tag") or ""))
 
     lines: List[str] = []
+
+    def add_candle_context(context: Any, timeframe: str) -> None:
+        if not isinstance(context, dict):
+            return
+        completed = context.get("latest_completed_bar")
+        latest = context.get("latest_bar")
+        if isinstance(completed, dict):
+            lines.append(
+                f"- Latest completed {timeframe} candle: "
+                f"time={completed.get('time')} O={completed.get('open')} "
+                f"H={completed.get('high')} L={completed.get('low')} "
+                f"C={completed.get('close')}"
+            )
+        if isinstance(latest, dict) and context.get("latest_bar_may_be_open"):
+            lines.append(
+                f"- Current possibly-forming {timeframe} candle: "
+                f"time={latest.get('time')} O={latest.get('open')} "
+                f"H={latest.get('high')} L={latest.get('low')} "
+                f"C={latest.get('close')} (do not use its close to confirm invalidation)"
+            )
+
+    panes = manifest.get("panes") or []
+    if panes:
+        for pane in panes:
+            if isinstance(pane, dict):
+                add_candle_context(pane.get("bars_context"), str(pane.get("timeframe") or "?"))
+    else:
+        add_candle_context(
+            manifest.get("bars_context"), str(manifest.get("timeframe") or "?")
+        )
     for entry in sorted(entries, key=_order):
         band = ""
         low, high = entry.get("price_low"), entry.get("price_high")
@@ -425,7 +567,7 @@ def _manifest_digest(manifest: Optional[Dict[str, Any]], *, max_lines: int = 160
             )
     if len(lines) > max_lines:
         lines = lines[:max_lines] + [
-            f"- (+{len(entries) - max_lines} more levels; render for the full manifest)"
+            f"- (+{len(lines) - max_lines} more candle/level evidence lines; render for the full manifest)"
         ]
     return "\n".join(lines)
 
@@ -561,6 +703,7 @@ class _ToolPhase:
     #: Set when the model call itself failed (a transport exception). A failed
     #: phase is never logged: the turn did not happen.
     error: str = ""
+    recoverable: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -676,6 +819,7 @@ class AgentLoop:
         activity: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         leash: Optional[Callable[[], Dict[str, int]]] = None,
         families: Optional[Callable[[], Sequence[str]]] = None,
+        checkpoint: Optional[Callable[[Optional[Dict[str, Any]]], None]] = None,
     ):
         self.store = store
         self.feed = feed
@@ -692,6 +836,7 @@ class AgentLoop:
         # on the next turn without a restart. ``None`` (no callable) = all
         # families — the shipped default and the degraded fallback.
         self._families_of = families
+        self._checkpoint = checkpoint
         # The operator's strategy (strategies/*.md via agentic.strategy), fixed
         # for this loop's lifetime: a turn never mixes strategies.
         self._playbook = str(playbook or "")
@@ -721,7 +866,9 @@ class AgentLoop:
 
     # ------------------------------------------------------------------ gate
 
-    def _gate(self, trigger: str, now: datetime) -> Optional[TurnOutcome]:
+    def _gate(
+        self, trigger: str, now: datetime, *, continuation: bool = False
+    ) -> Optional[TurnOutcome]:
         """Steps 1-2: validate the trigger, check the leash, apply the kill switch.
 
         Returns the refusal :class:`TurnOutcome`, or ``None`` when the turn may run.
@@ -738,7 +885,17 @@ class AgentLoop:
         try:
             self.store.check_leash(now)
         except LeashExceeded as exc:
-            return TurnOutcome(trigger=trigger_enum.value, ok=False, reason=f"leash:{exc.reason}")
+            if continuation and self.store.data.budget.spend_usd_today >= MAX_SPEND_PER_DAY_USD:
+                return TurnOutcome(
+                    trigger=trigger_enum.value,
+                    ok=False,
+                    reason="leash:max_spend_per_day",
+                    output={"resumable": True, "resume_blocked": "daily_spend_cap"},
+                )
+            if not continuation:
+                return TurnOutcome(trigger=trigger_enum.value, ok=False, reason=f"leash:{exc.reason}")
+            # A saved run is the same logical turn: do not strand it behind
+            # interval/hour/day turn-count gates. The daily spend cap still wins.
 
         # 2. Gating: fire/boot/schedule need an armed agent; request never does.
         if trigger_enum is not Trigger.REQUEST and not self.store.data.agent.enabled:
@@ -791,7 +948,13 @@ class AgentLoop:
             # UI telemetry must never interrupt an agent turn.
             pass
 
-    def _tool_phase(self, registry: ToolRegistry, request: AgentRequest) -> _ToolPhase:
+    def _tool_phase(
+        self,
+        registry: ToolRegistry,
+        request: AgentRequest,
+        *,
+        resume_state: Optional[Dict[str, Any]] = None,
+    ) -> _ToolPhase:
         """Step 4: call the model, execute its tools, feed results back, repeat.
 
         Bounded twice over: ``MAX_TOOL_CALLS_PER_TURN`` executed calls per turn and
@@ -806,18 +969,20 @@ class AgentLoop:
         calls whose results were fed back are recorded on
         ``request.tool_calls_made``, in order, for the wire layer.
         """
-        log: List[Dict[str, Any]] = []
-        truncations: List[str] = []
-        tokens = 0
-        cost = 0.0
-        executed = 0
+        resume_state = dict(resume_state or {})
+        log: List[Dict[str, Any]] = list(resume_state.get("log") or [])
+        truncations: List[str] = list(resume_state.get("truncations") or [])
+        tokens = int(resume_state.get("tokens") or 0)
+        cost = float(resume_state.get("cost") or 0.0)
+        executed = len(log)
         reply = AgentReply()
-        deferred_output: Dict[str, Any] = {}
+        deferred_output: Dict[str, Any] = dict(resume_state.get("deferred_output") or {})
+        start_round = max(0, int(resume_state.get("next_round") or 0))
         # The staged MNSR workflow is a watcher-turn contract. A chat turn
         # (_chat_mode) answers the operator's actual question: the model reads
         # the intent and may call tools or not — the harness never forces one,
         # and never fabricates workflow fallback calls on its behalf.
-        require_watch = (not self._chat_mode) and "mnsr" in self._playbook[:300].lower()
+        require_watch = (not self._chat_mode) and is_mnsr_strategy(self._playbook)
         # The model round budget is a settings knob (AGENT_MAX_TOOL_ROUNDS),
         # re-read per turn so the user's edits apply without a restart.
         # leash read encompassing the turn's caps: {tool_calls, rounds, renders},
@@ -833,7 +998,43 @@ class AgentLoop:
             rounds = max(1, int(bounds.get("rounds", MAX_TOOL_ROUNDS)))
         except (TypeError, ValueError):
             rounds = MAX_TOOL_ROUNDS
-        for round_index in range(rounds):
+        # A resumed analysis receives one fresh bounded segment. The absolute
+        # round index remains in telemetry/checkpoints so repeated resumes never
+        # replay earlier calls, while each invocation still obeys the 400 cap.
+        for round_index in range(start_round, start_round + rounds):
+            if self._checkpoint is not None:
+                self._checkpoint({
+                    "turn_id": request.turn_id,
+                    "trigger": request.trigger,
+                    "detail": request.trigger_detail,
+                    "request": request.to_dict(),
+                    "log": log,
+                    "truncations": truncations,
+                    "tokens": tokens,
+                    "cost": cost,
+                    "next_round": round_index,
+                    "deferred_output": deferred_output,
+                    "renders": registry.renders_used(),
+                    "last_result": registry.last_result.to_dict() if registry.last_result else None,
+                    "notes": registry.notes(),
+                })
+            if self.store.data.budget.spend_usd_today >= MAX_SPEND_PER_DAY_USD:
+                self._emit_activity(
+                    "analysis_paused",
+                    turn_id=request.turn_id,
+                    reason="daily_spend_cap",
+                    round=round_index + 1,
+                )
+                return _ToolPhase(
+                    reply=reply,
+                    log=log,
+                    truncations=list(dict.fromkeys(truncations + ["spend_cap"])),
+                    tokens=tokens,
+                    cost=cost,
+                    renders=registry.renders_used(),
+                    error="leash:max_spend_per_day",
+                    recoverable=self._checkpoint is not None,
+                )
             required_before_call = _required_workflow_tool(
                 log, deferred_output, require_watch=require_watch
             ) if require_watch else ""
@@ -868,6 +1069,7 @@ class AgentLoop:
                     cost=cost,
                     renders=registry.renders_used(),
                     error=_failure_reason(exc),
+                    recoverable=self._checkpoint is not None,
                 )
             self._emit_activity(
                 "model_response",
@@ -879,17 +1081,49 @@ class AgentLoop:
             )
             tokens += sum(int(v or 0) for v in (reply.tokens or {}).values())
             cost += float(reply.cost_usd or 0.0)
-            if reply.output:
+            if reply.output and str(reply.finish_reason or "").lower() != "length":
                 deferred_output.update(dict(reply.output))
             if not reply.tool_calls:
+                if str(reply.finish_reason or "").lower() == "length":
+                    continuation = str(reply.text or "")[-6000:]
+                    request.briefing["resume_notice"] = (
+                        "The previous model completion reached its per-call generation limit and "
+                        "was cut off before producing a complete analysis. Continue the existing "
+                        "analysis from the saved evidence, avoid repeating completed tools, and "
+                        "return a concise complete structured thesis."
+                    )
+                    if continuation:
+                        request.briefing["cutoff_response"] = continuation
+                    truncations.append("generation_length")
+                    if self._checkpoint is not None:
+                        self._checkpoint({
+                            "turn_id": request.turn_id,
+                            "trigger": request.trigger,
+                            "detail": request.trigger_detail,
+                            "request": request.to_dict(),
+                            "log": log,
+                            "truncations": truncations,
+                            "tokens": tokens,
+                            "cost": cost,
+                            "next_round": round_index + 1,
+                            "deferred_output": deferred_output,
+                            "renders": registry.renders_used(),
+                            "last_result": registry.last_result.to_dict() if registry.last_result else None,
+                            "notes": registry.notes(),
+                        })
+                    reply.output = dict(deferred_output)
+                    # Don't return early: fall through to the closing call so the
+                    # model still gets one tool-less, image-less ask for the
+                    # structured thesis it was cut off before producing.
+                    break
                 required = _required_workflow_tool(
                     log, deferred_output, require_watch=require_watch
                 ) if require_watch else ""
-                if required in {"level_lookup", "add_pin", "add_watch"} and round_index + 1 < rounds:
+                if required in {"level_lookup", "add_pin", "add_watch"} and round_index + 1 < start_round + rounds:
                     fallback_call: Optional[ToolCall] = None
                     if required == "level_lookup":
                         view = self.store.data.view
-                        context_tf = str(view.panes[0]) if view.panes else str(view.timeframe)
+                        context_tf = str(view.timeframe)
                         fallback_call = ToolCall(
                             call_id=new_id("workflow_lookup"),
                             name="level_lookup",
@@ -904,16 +1138,12 @@ class AgentLoop:
                                 arguments={
                                     "level_key": candidate["level_key"],
                                     "timeframe": candidate["timeframe"],
-                                    "reason": "Phoenix context liquidity: preserve the live/swept pool across timeframe views",
+                                    "reason": "MSNR context liquidity: preserve the live/swept pool across timeframe views",
                                 },
                             )
                     else:
                         view = self.store.data.view
-                        setup_tf = (
-                            str(view.panes[1])
-                            if view.layout.value == "split" and len(view.panes) == 2
-                            else str(view.timeframe)
-                        )
+                        setup_tf = str(view.timeframe)
                         fallback_call = ToolCall(
                             call_id=new_id("workflow_watch"),
                             name="add_watch",
@@ -921,7 +1151,7 @@ class AgentLoop:
                                 "condition": "bos_forms",
                                 "params": {"timeframe": setup_tf},
                                 "ttl_hours": 12.0,
-                                "reason": "Phoenix fallback: wait for a setup-frame BOS before the next trade assessment",
+                                "reason": "MSNR fallback: wait for a setup-frame BOS before the next trade assessment",
                             },
                         )
                     if fallback_call is not None:
@@ -950,14 +1180,36 @@ class AgentLoop:
                             "add_watch": "The system added a conservative watch because no trade proposal or watch was returned before the required workflow step ended.",
                         }
                         request.briefing["workflow_action"] = workflow_action[fallback_call.name]
+                        if self._checkpoint is not None:
+                            self._checkpoint({
+                                "turn_id": request.turn_id, "trigger": request.trigger,
+                                "detail": request.trigger_detail, "request": request.to_dict(),
+                                "log": log, "truncations": truncations, "tokens": tokens,
+                                "cost": cost, "next_round": round_index + 1,
+                                "deferred_output": deferred_output,
+                                "renders": registry.renders_used(),
+                                "last_result": registry.last_result.to_dict() if registry.last_result else None,
+                                "notes": registry.notes(),
+                            })
                         continue
-                if required and round_index + 1 < rounds:
+                if required and round_index + 1 < start_round + rounds:
                     request.tools = _workflow_tools(registry, required)
                     request.tool_choice = _tool_choice(required)
                     request.briefing["workflow_required"] = required
                     request.briefing["workflow_instruction"] = (
                         f"Complete the required {required} step before ending this strategy analysis."
                     )
+                    if self._checkpoint is not None:
+                        self._checkpoint({
+                            "turn_id": request.turn_id, "trigger": request.trigger,
+                            "detail": request.trigger_detail, "request": request.to_dict(),
+                            "log": log, "truncations": truncations, "tokens": tokens,
+                            "cost": cost, "next_round": round_index + 1,
+                            "deferred_output": deferred_output,
+                            "renders": registry.renders_used(),
+                            "last_result": registry.last_result.to_dict() if registry.last_result else None,
+                            "notes": registry.notes(),
+                        })
                     continue
                 if deferred_output:
                     reply.output = dict(deferred_output)
@@ -1006,6 +1258,17 @@ class AgentLoop:
             if registry.last_result is not None:
                 request.image_path = registry.last_result.image_path
                 request.manifest = registry.last_result.manifest
+            if self._checkpoint is not None:
+                self._checkpoint({
+                    "turn_id": request.turn_id, "trigger": request.trigger,
+                    "detail": request.trigger_detail, "request": request.to_dict(),
+                    "log": log, "truncations": truncations, "tokens": tokens,
+                    "cost": cost, "next_round": round_index + 1,
+                    "deferred_output": deferred_output,
+                    "renders": registry.renders_used(),
+                    "last_result": registry.last_result.to_dict() if registry.last_result else None,
+                    "notes": registry.notes(),
+                })
         else:
             truncations.append("rounds")
         if deferred_output:
@@ -1041,6 +1304,7 @@ class AgentLoop:
             tokens=tokens,
             cost=cost,
             renders=registry.renders_used(),
+            recoverable=("rounds" in truncations and not _has_thesis(reply.output)),
         )
 
     def _closing_call(
@@ -1075,7 +1339,10 @@ class AgentLoop:
             turn_id=request.turn_id,
             trigger=request.trigger,
             trigger_detail=request.trigger_detail,
-            system_prompt=CLOSING_SYSTEM_PROMPT,
+            system_prompt=(
+                CLOSING_SYSTEM_PROMPT
+                + ("\n\nActive strategy playbook:\n" + self._playbook if self._playbook else "")
+            ),
             briefing=briefing,
             image_path="",
             manifest={},
@@ -1096,17 +1363,28 @@ class AgentLoop:
         fires: Sequence[Any] = (),
         expired: Sequence[Any] = (),
         retroactive: Sequence[Any] = (),
+        resume_state: Optional[Dict[str, Any]] = None,
     ) -> TurnOutcome:
         # One instant for the whole turn: every stamp (subscriptions, thesis,
         # notes, the turn record) comes from it, so a subscription can never
         # post-date the turn that created it.
         now = as_aware(self._clock())
+        resume_state = dict(resume_state or {})
 
         # 1. Leash + 2. gating (shape-validated and gated by _gate). A refused
         # turn never happened: nothing is recorded.
-        refusal = self._gate(trigger, now)
+        refusal = self._gate(trigger, now, continuation=bool(resume_state.get("request")))
         if refusal is not None:
             return refusal
+        if resume_state.get("request"):
+            current_day = (
+                self.store.data.budget.day_started_at.date().isoformat()
+                if self.store.data.budget.day_started_at else ""
+            )
+            if resume_state.get("accounting_day") != current_day:
+                resume_state["accounting_base_cost_usd"] = float(resume_state.get("cost") or 0.0)
+                resume_state["accounted_cost_usd"] = 0.0
+                resume_state["accounting_day"] = current_day
         trigger = Trigger(trigger).value
         self._emit_activity("turn_started", trigger=trigger, detail=detail)
         expired = list(expired) + list(self.store.expire_due(now))
@@ -1121,7 +1399,7 @@ class AgentLoop:
             expired=expired,
             retroactive=retroactive,
         )
-        require_workflow = "mnsr" in self._playbook[:300].lower()
+        require_workflow = is_mnsr_strategy(self._playbook)
         # The leash is read once per turn here too: its (optional) ``renders``
         # bound becomes this registry's render budget. A leash without a
         # ``renders`` key (older injected callables, the shipped default path)
@@ -1131,36 +1409,83 @@ class AgentLoop:
         except (TypeError, ValueError):
             render_bound = MAX_RENDERS_PER_TURN
         enabled_families = self._enabled_families()
+        saved_render = resume_state.get("last_result")
+        if isinstance(saved_render, dict):
+            saved_render = RenderResult.from_dict(saved_render)
         registry = ToolRegistry(
             self.store, self.feed, self.renderer, clock=self._clock, now=now,
             require_context_view=require_workflow, max_renders=render_bound,
             enabled_families=enabled_families,
+            renders_used=resume_state.get("renders", 0),
+            last_result=saved_render,
+            notes=resume_state.get("notes") or [],
         )
 
-        # Step 3 is now model-led perception: the turn opens with the system
-        # prompt + strategy, the briefing and the tool schemas — **no image**.
-        # The model decides what to look at (set_view) and explicitly asks for
-        # its own renders; each successful render then becomes that round's
-        # image + manifest. A feed failure therefore surfaces in-band, as a
-        # refused render tool call the model can react to (reduce the offset),
-        # instead of a pre-turn degrade path the model never saw.
-        request = AgentRequest(
-            turn_id=new_id("turn"),
-            trigger=trigger,
-            trigger_detail=detail,
-            system_prompt=prompts.build_system_prompt(
-                playbook=self._playbook, enabled_families=enabled_families,
-            ),
-            briefing=briefing,
-            image_path="",
-            manifest={},
-            tools=_workflow_tools(registry, "set_view") if require_workflow else registry.schemas(),
-            tool_choice={"type": "function", "function": {"name": "set_view"}},
-            tool_results=[],
+        # The first image is a plain, live-edge 180-candle chart. It gives the
+        # model unmarked price action before it selects indicator evidence.
+        # Strategy-required indicator views are then requested and rendered
+        # one timeframe at a time through the normal tool loop.
+        first_required = (
+            _required_workflow_tool([], {}, require_watch=require_workflow)
+            if require_workflow else ""
         )
+        request = AgentRequest.from_dict(resume_state["request"]) if resume_state.get("request") else None
+        if request is None:
+            initial_render: Optional[RenderResult] = None
+            try:
+                self.store.set_view(bars=MAX_BARS, offset=0, families=[])
+                registry.reset_snapshots()
+                initial_render = registry.initial_render()
+            except Exception as exc:  # noqa: BLE001 — indicator view can retry after the plain-view failure
+                briefing["initial_render_error"] = f"{type(exc).__name__}: {exc}"
+            request = AgentRequest(
+                turn_id=new_id("turn"),
+                trigger=trigger,
+                trigger_detail=detail,
+                system_prompt=prompts.build_system_prompt(
+                    playbook=self._playbook, enabled_families=enabled_families,
+                ),
+                briefing=briefing,
+                image_path=initial_render.image_path if initial_render else "",
+                manifest=initial_render.manifest if initial_render else {},
+                tools=_workflow_tools(registry, first_required) if require_workflow else registry.schemas(),
+                tool_choice=_tool_choice(first_required) if require_workflow else "auto",
+                tool_results=[],
+            )
 
         # 4. LLM + tool phase.
-        phase = self._tool_phase(registry, request)
+        phase = self._tool_phase(registry, request, resume_state=resume_state)
+        if phase.recoverable and (
+            phase.error or "generation_length" in phase.truncations or "rounds" in phase.truncations
+        ):
+            final = registry.last_result
+            output = {
+                "analysis_status": "incomplete",
+                "resumable": True,
+                "analysis_error": (
+                    "The daily model spend cap was reached. The analysis is saved and can resume after the budget rolls over."
+                    if phase.error == "leash:max_spend_per_day"
+                    else phase.error or (
+                        "The model response reached its per-call generation limit before the analysis was complete."
+                        if "generation_length" in phase.truncations
+                        else "The 400-round segment ended before the analysis was complete."
+                    )
+                ),
+            }
+            return TurnOutcome(
+                turn_id=request.turn_id,
+                trigger=trigger,
+                ok=False,
+                reason=phase.error or (
+                    "generation_length" if "generation_length" in phase.truncations
+                    else "rounds_exhausted"
+                ),
+                renders=registry.renders_used(),
+                tool_calls=len(phase.log),
+                output=output,
+                image_path=final.image_path if final else "",
+                manifest=final.manifest if final else {},
+            )
         if phase.error:
             # A failed model call. Side effects that are *not* the turn record have
             # already happened: ``expire_due`` retired deadlines in memory and any
@@ -1209,14 +1534,16 @@ class AgentLoop:
             state = _workflow_state(phase.log, output)
             workflow_missing = [
                 label for key, label in (
-                    ("context_view", "two_timeframe_context_view"),
-                    ("render", "indicator_render"),
+                    ("w1_render", "w1_context_render"),
+                    ("d1_render", "d1_context_render"),
+                    ("confirm_render", "h4_or_h1_confirmation_render"),
                     ("liquidity_lookup", "liquidity_level_lookup"),
                     ("pin", "pin_relevant_liquidity"),
+                    ("entry_render", "entry_timeframe_render"),
                     ("action", "watch_or_trade_proposal"),
                 ) if not state[key]
             ]
-        incomplete = not (
+        incomplete = "generation_length" in phase.truncations or not (
             _has_thesis(output) or _has_thesis_tool_call(phase.log)
         ) or bool(workflow_missing)
         if incomplete:
@@ -1224,6 +1551,8 @@ class AgentLoop:
             problems = []
             if not (_has_thesis(output) or _has_thesis_tool_call(phase.log)):
                 problems.append("missing thesis with storyline and explicit invalidation")
+            if "generation_length" in phase.truncations:
+                problems.append("model completion hit its per-call generation limit")
             if workflow_missing:
                 problems.append("workflow steps not completed: " + ", ".join(workflow_missing))
             output["analysis_error"] = "; ".join(problems)
@@ -1238,6 +1567,14 @@ class AgentLoop:
         # 6. Persist + log. ``record_turn`` re-checks the leash internally — that is
         # deliberate defence in depth: the store refuses to bill a turn the leash
         # would not allow, even if the loop's gate were ever bypassed.
+        accounted_cost = float(resume_state.get("accounted_cost_usd") or 0.0)
+        accounting_base = float(resume_state.get("accounting_base_cost_usd") or 0.0)
+        if accounted_cost:
+            # Interrupted spend was provisionally included in the durable budget;
+            # replace it with the final whole-turn amount on successful resume.
+            self.store.data.budget.spend_usd_today = max(
+                0.0, self.store.data.budget.spend_usd_today - accounted_cost
+            )
         record = self.store.record_turn(
             trigger,
             trigger_detail=detail,
@@ -1247,8 +1584,13 @@ class AgentLoop:
             cost_usd=phase.cost,
             output=output,
             now=now,
+            enforce_leash=not bool(resume_state.get("request")),
+            record_id=request.turn_id,
+            budget_cost_usd=max(0.0, phase.cost - accounting_base),
         )
         self.store.save()
+        if self._checkpoint is not None:
+            self._checkpoint(None)
 
         final = registry.last_result
         reason_parts = []
@@ -1315,6 +1657,10 @@ class AgentLoop:
             limits_swapped = True
 
         original_activity = self._activity
+        original_checkpoint = self._checkpoint
+        # Chat turns are conversational and must not create an analysis-resume
+        # checkpoint on the shared service loop.
+        self._checkpoint = None
         if activity is not None:
             def chat_emit(event: str, payload: Dict[str, Any]) -> None:
                 try:
@@ -1334,6 +1680,7 @@ class AgentLoop:
         finally:
             self._chat_mode = False
             self._activity = original_activity
+            self._checkpoint = original_checkpoint
             if limits_swapped:
                 self.store.set_leash_limits(original_limits)
 

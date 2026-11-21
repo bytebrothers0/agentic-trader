@@ -916,6 +916,36 @@ def test_indicator_views_explain_sequential_family_cap(tmp_path):
     assert result.result["families_deferred"] == ["ifvg"]
 
 
+def test_set_view_parses_json_encoded_families_array(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(), _renderer(tmp_path, clock), clock=clock)
+    result = registry.execute(ToolCall(name="set_view", arguments={
+        "timeframe": "H4",
+        "families": '["sr", "crt", "bos"]',
+    }))
+    assert result.ok
+    assert result.result["families"] == ["sr", "crt", "bos"]
+    assert result.result["families_deferred"] == []
+
+
+def test_set_view_rejects_malformed_string_families_without_splitting_characters(tmp_path):
+    clock = FakeClock(at(6, 0))
+    store = _store(tmp_path, clock)
+    registry = ToolRegistry(store, _stub_with_fvg().build(), _renderer(tmp_path, clock), clock=clock)
+    result = registry.execute(ToolCall(name="set_view", arguments={"families": "sr,crt,bos"}))
+    assert not result.ok
+    assert result.error.startswith("invalid_families:")
+    assert store.data.view.families != list("sr,crt,bos")
+
+
+def test_shipped_live_agent_limits_keep_ten_calls_and_four_hundred_rounds():
+    from config import settings
+
+    assert settings.AGENT_MAX_TOOL_CALLS == 400
+    assert settings.AGENT_MAX_TOOL_ROUNDS == 400
+
+
 def test_render_caps_legacy_persisted_views_to_three_families(tmp_path):
     clock = FakeClock(at(6, 0))
     store = _store(tmp_path, clock)

@@ -1,0 +1,122 @@
+[
+  {
+    "turn": 1,
+    "question": "what is the current bias on gold right now?",
+    "ok": true,
+    "seconds": 9.7,
+    "tools": 0,
+    "reason": ""
+  },
+  {
+    "turn": 2,
+    "question": "where is liquidity resting above and below price?",
+    "ok": true,
+    "seconds": 18.1,
+    "tools": 4,
+    "reason": ""
+  },
+  {
+    "turn": 3,
+    "question": "has there been a liquidity sweep recently?",
+    "ok": true,
+    "seconds": 33.6,
+    "tools": 4,
+    "reason": ""
+  },
+  {
+    "turn": 4,
+    "question": "is price in premium or discount right now?",
+    "ok": true,
+    "seconds": 62.4,
+    "tools": 3,
+    "reason": ""
+  },
+  {
+    "turn": 5,
+    "question": "what session are we in?",
+    "ok": true,
+    "seconds": 14.9,
+    "tools": 0,
+    "reason": ""
+  },
+  {
+    "turn": 6,
+    "question": "what would change your mind about the bias?",
+    "ok": true,
+    "seconds": 55.4,
+    "tools": 1,
+    "reason": ""
+  },
+  {
+    "turn": 7,
+    "question": "show me the key support and resistance levels",
+    "ok": true,
+    "seconds": 25.1,
+    "tools": 1,
+    "reason": ""
+  },
+  {
+    "turn": 8,
+    "question": "is there a BOS or CHoCH forming on any timeframe?",
+    "ok": false,
+    "seconds": 42.4,
+    "tools": 1,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 9,
+    "question": "what is the current bias on gold right now?",
+    "ok": false,
+    "seconds": 26.5,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 10,
+    "question": "where is liquidity resting above and below price?",
+    "ok": false,
+    "seconds": 27.3,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 11,
+    "question": "has there been a liquidity sweep recently?",
+    "ok": false,
+    "seconds": 27.1,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 12,
+    "question": "is price in premium or discount right now?",
+    "ok": false,
+    "seconds": 29.8,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 13,
+    "question": "what session are we in?",
+    "ok": false,
+    "seconds": 38.6,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 14,
+    "question": "what would change your mind about the bias?",
+    "ok": false,
+    "seconds": 28.4,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  },
+  {
+    "turn": 15,
+    "question": "show me the key support and resistance levels",
+    "ok": false,
+    "seconds": 28.3,
+    "tools": 0,
+    "reason": "client_error: RuntimeError: agent transport HTTP 429: {\"error\":{\"code\":\"PROMOTION_MODEL_LIMIT_REACHED\",\"message\":\"Sign up for free to continue and explore 500 other models. Takes 2 minutes, no credit card required. Or come back\u2026"
+  }
+]

@@ -40,6 +40,7 @@ them back. Documented deviation, deliberate: a note is memory, and the turn log
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -89,8 +90,7 @@ MAX_FAMILIES_PER_IMAGE = 3
 
 TOOL_DESCRIPTIONS: Dict[str, str] = {
     "set_view": "Change your perception: symbol, timeframe, chart type, families, bars, "
-                "offset (re-render a past window), layout/panes (set layout=split with "
-                "exactly 2 panes for two stacked timeframes), status_filter ('all' "
+                "offset (re-render a past window), status_filter ('all' "
                 "= the default, including dead history; 'live' = strictly fresh "
                 "everywhere; 'default' = hide dead TS/CRT/QM only), tags, "
                 "annotations. Use at most 3 indicator families per image; request any "
@@ -147,8 +147,6 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             },
             "bars": {"type": "integer", "minimum": MIN_BARS, "maximum": MAX_BARS},
             "offset": {"type": "integer", "minimum": 0, "maximum": MAX_OFFSET},
-            "layout": {"type": "string", "enum": ["single", "split"]},
-            "panes": {"type": "array", "items": {"type": "string"}},
             "show_tags": {"type": "boolean"},
             "annotations": {"type": "array", "items": {"type": "object"}},
         },
@@ -601,8 +599,13 @@ class ToolRegistry:
         require_context_view: bool = False,
         max_renders: int = MAX_RENDERS_PER_TURN,
         enabled_families: Optional[Sequence[str]] = None,
+        renders_used: int = 0,
+        last_result: Optional[RenderResult] = None,
+        notes: Optional[Sequence[Dict[str, Any]]] = None,
     ):
         self._store = store
+        if store.data.view.layout is Layout.SPLIT or store.data.view.panes:
+            store.set_view(layout=Layout.SINGLE, panes=[])
         self._feed = feed
         self._renderer = renderer
         self._clock = clock or _utcnow
@@ -629,12 +632,15 @@ class ToolRegistry:
                 str(f) for f in enabled_families if str(f) in KNOWN_FAMILIES
             ))
 
-        self._notes: List[Dict[str, Any]] = []
-        self._renders = 0
+        self._notes: List[Dict[str, Any]] = [dict(note) for note in (notes or [])]
+        try:
+            self._renders = max(0, int(renders_used))
+        except (TypeError, ValueError):
+            self._renders = 0
         self._render_refusals = 0
         self._snapshots: Dict[Tuple[str, int, int, str], FeedSnapshot] = {}
         #: The most recent render (initial or tool), for the loop to show the model.
-        self.last_result: Optional[RenderResult] = None
+        self.last_result: Optional[RenderResult] = last_result
 
     # ------------------------------------------------------------------ api
 
@@ -819,26 +825,35 @@ class ToolRegistry:
 
     def _tool_set_view(self, args: Dict[str, Any]) -> Dict[str, Any]:
         args = dict(args)
-        requested_families = list(dict.fromkeys(
-            str(f) for f in (args.get("families", self._store.data.view.families) or [])
-        ))
+        raw_families = args.get("families", self._store.data.view.families) or []
+        if isinstance(raw_families, str):
+            try:
+                raw_families = json.loads(raw_families)
+            except (TypeError, ValueError) as exc:
+                raise StoreError(
+                    "invalid_families",
+                    "families must be an array (a JSON-encoded array is also accepted)",
+                ) from exc
+        if not isinstance(raw_families, (list, tuple)):
+            raise StoreError("invalid_families", "families must be an array of indicator names")
+        requested_families = list(dict.fromkeys(str(f) for f in raw_families))
         # The operator's families knob is enforced here too (the schema enum is
         # the model-facing half): anything not enabled is dropped, and the
         # set_view result reports it under ``families_deferred`` so the model
         # understands why the chart does not show it.
         families = self._active_families(requested_families)
+        # The agent uses one full-size timeframe per image; never carry a
+        # split layout forward from an older caller or persisted view.
+        args.pop("layout", None)
+        args.pop("panes", None)
+        args["layout"] = Layout.SINGLE
+        args["panes"] = []
         if self._require_context_view:
             # Repair the constrained first view at the tool boundary so one
             # imperfect model call cannot consume the entire analysis budget.
             # The context family (liquidity) is only seeded when the operator
             # still enables it; otherwise the first enabled family stands in.
-            current = str(self._store.data.view.timeframe or "M15")
-            panes = list(args.get("panes") or [])
-            if len(panes) != 2 or panes[0] == panes[1]:
-                panes = ["H4" if current == "H1" else "H1", current]
-            args["layout"] = "split"
-            args["panes"] = panes
-            args["timeframe"] = str(panes[0])
+            args["timeframe"] = "W1"
             if self._enabled_families is None or "liquidity" in self._enabled_families:
                 seed = ["liquidity"]
             elif self._enabled_families:
@@ -850,8 +865,7 @@ class ToolRegistry:
                 *[str(f) for f in families if str(f) not in seed],
             ][:MAX_FAMILIES_PER_IMAGE]
             self._require_context_view = False
-        else:
-            families = families[:MAX_FAMILIES_PER_IMAGE]
+        families = families[:MAX_FAMILIES_PER_IMAGE]
         args["families"] = families
         view = self._store.set_view(**args)
         self._require_context_view = False
@@ -872,10 +886,15 @@ class ToolRegistry:
 
     def _tool_level_lookup(self, args: Dict[str, Any]) -> Dict[str, Any]:
         view = self._store.data.view
+        # An explicit timeframe in the query wins over the view's current
+        # timeframe: the model may ask about liquidity on M15 while viewing H4.
+        requested_tf = str(args.get("timeframe") or "").upper() or None
         if view.layout is Layout.SPLIT and len(view.panes) > 1:
             # Split mode: search *every* pane, not just the primary, so a
             # bottom-pane level resolves by family / near_price / level_key too.
             snapshots = [self._snapshot_for_timeframe(tf) for tf in view.panes]
+        elif requested_tf:
+            snapshots = [self._snapshot_for_timeframe(requested_tf)]
         else:
             snapshots = [self._snapshot_for_view()]
         manifest = self.last_result.manifest if self.last_result else {}

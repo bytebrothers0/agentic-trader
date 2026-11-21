@@ -19,6 +19,7 @@ that would escape the directory. A vague failure here would ship silently as
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 #: Sanity cap for one strategy file, in characters. The shipped playbook grew
@@ -28,6 +29,17 @@ MAX_STRATEGY_CHARS = 25_000
 
 class StrategyError(ValueError):
     """A strategy file is missing, unreadable, empty, oversized or unsafe."""
+
+
+def is_mnsr_strategy(text: str) -> bool:
+    """Whether a strategy names the MSNR/MNSR workflow.
+
+    The operator playbook has historically used both acronym orders (MSNR in
+    its title, MNSR in its filename and older workflow rules). Match the acronym
+    as a token so either spelling enables the same staged workflow.
+    """
+    words = set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+    return bool(words.intersection({"mnsr", "msnr"}))
 
 
 @dataclass(frozen=True)

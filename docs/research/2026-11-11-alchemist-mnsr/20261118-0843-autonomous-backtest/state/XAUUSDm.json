@@ -1,0 +1,47 @@
+{
+  "version": "0.1.0",
+  "symbol": "XAUUSDm",
+  "created_at": "2026-11-18T09:03:16.835424+00:00",
+  "updated_at": "2026-11-18T09:03:16.845136+00:00",
+  "view": {
+    "symbol": "XAUUSDm",
+    "timeframe": "M15",
+    "chart_type": "candles",
+    "families": [],
+    "status_filter": "all",
+    "bars": 180,
+    "offset": 0,
+    "layout": "single",
+    "panes": [],
+    "show_tags": true,
+    "annotations": []
+  },
+  "subscriptions": [],
+  "thesis": {
+    "updated_at": null,
+    "bias": "none",
+    "storyline": "",
+    "levels_of_interest": [],
+    "invalidation": "",
+    "confidence": 0.0
+  },
+  "turns": [],
+  "proposals": [],
+  "budget": {
+    "turns_today": 0,
+    "turns_this_hour": 0,
+    "renders_today": 0,
+    "spend_usd_today": 0.0,
+    "day_started_at": "2026-11-18T09:03:16.835424+00:00",
+    "hour_started_at": "2026-11-18T09:03:16.835424+00:00",
+    "last_turn_at": null
+  },
+  "agent": {
+    "enabled": false,
+    "mode": "propose",
+    "model": "",
+    "spec_version": "0.1.0",
+    "last_evaluated_at": null,
+    "chat_cleared_at": "2026-11-18T09:03:16.845136+00:00"
+  }
+}

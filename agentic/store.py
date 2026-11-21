@@ -668,11 +668,15 @@ class ContextStore:
         cost_usd: float = 0.0,
         output: Optional[Dict[str, Any]] = None,
         now: Optional[datetime] = None,
+        enforce_leash: bool = True,
+        record_id: str = "",
+        budget_cost_usd: Optional[float] = None,
     ) -> TurnRecord:
         """Check the leash, then append a turn and bill it."""
         now = now or self._clock()
         now = _as_aware(now)
-        self.check_leash(now)
+        if enforce_leash:
+            self.check_leash(now)
 
         try:
             trigger_enum = Trigger(trigger)
@@ -680,7 +684,7 @@ class ContextStore:
             raise StoreError("invalid_trigger", f"trigger must be one of {[t.value for t in Trigger]}")
 
         record = TurnRecord(
-            id=_new_id("turn"),
+            id=str(record_id or _new_id("turn")),
             started_at=now,
             ended_at=now,
             trigger=trigger_enum,
@@ -709,7 +713,7 @@ class ContextStore:
         b.turns_today += 1
         b.turns_this_hour += 1
         b.renders_today += int(renders)
-        b.spend_usd_today += float(cost_usd)
+        b.spend_usd_today += float(cost_usd if budget_cost_usd is None else budget_cost_usd)
         b.last_turn_at = now
         self.data.agent.last_evaluated_at = now
         self._touch()

@@ -338,28 +338,28 @@ def level_lookup(
             else _not_found(str(key_query), tag="")
         )
 
-    elif family_query is not None:
-        family = str(family_query)
+    elif family_query is not None or near_query is not None:
+        family = str(family_query) if family_query is not None else None
         timeframe = query.get("timeframe")
-        found = [
-            (level, snap)
-            for snap in pools
-            for level in snap.levels
-            if level.family == family
-            and (timeframe is None or level.timeframe == str(timeframe))
-        ]
-        # Deterministic: price descending, then level_key.
-        found.sort(key=lambda pair: (-float(pair[0].price), pair[0].level_key))
-        matches = [emit(level, snap) for level, snap in found]
-
-    elif near_query is not None:
         radius = float(query.get("radius", 0) or 0.0)
-        found = [
-            (level, snap)
-            for snap in pools
-            for level in snap.near_price(float(near_query), radius)
-        ]
-        found.sort(key=lambda pair: abs(float(pair[0].price) - float(near_query)))
+        found: List[Tuple[LevelRecord, Any]] = []
+        for snap in pools:
+            for level in snap.levels:
+                # Family filter (optional).
+                if family is not None and level.family != family:
+                    continue
+                # Timeframe filter (optional).
+                if timeframe is not None and level.timeframe != str(timeframe):
+                    continue
+                # Near-price filter (optional).
+                if near_query is not None and abs(float(level.price) - float(near_query)) > radius:
+                    continue
+                found.append((level, snap))
+        # Deterministic: closest to near_price first (or price desc if no near_price).
+        if near_query is not None:
+            found.sort(key=lambda pair: abs(float(pair[0].price) - float(near_query)))
+        else:
+            found.sort(key=lambda pair: (-float(pair[0].price), pair[0].level_key))
         matches = [emit(level, snap) for level, snap in found]
 
     # No resolution key: the query is just the market header.

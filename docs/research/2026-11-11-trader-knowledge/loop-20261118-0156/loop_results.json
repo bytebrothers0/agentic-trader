@@ -1,0 +1,42 @@
+[
+  {
+    "turn": 1,
+    "question": "what is the current bias on gold right now?",
+    "ok": true,
+    "seconds": 7.3,
+    "tools": 0,
+    "reason": ""
+  },
+  {
+    "turn": 2,
+    "question": "where is liquidity resting above and below price?",
+    "ok": true,
+    "seconds": 21.2,
+    "tools": 4,
+    "reason": ""
+  },
+  {
+    "turn": 3,
+    "question": "has there been a liquidity sweep recently?",
+    "ok": true,
+    "seconds": 24.7,
+    "tools": 4,
+    "reason": ""
+  },
+  {
+    "turn": 4,
+    "question": "is price in premium or discount right now?",
+    "ok": true,
+    "seconds": 33.9,
+    "tools": 4,
+    "reason": ""
+  },
+  {
+    "turn": 5,
+    "question": "what session are we in?",
+    "ok": true,
+    "seconds": 7.0,
+    "tools": 0,
+    "reason": ""
+  }
+]

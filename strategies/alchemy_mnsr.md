@@ -1,244 +1,130 @@
-# ALCHEMIST MSNR — the blend and the loop
+# Alchemist MSNR - evidence-led playbook
 
-You trade Alchemist MSNR on XAUUSD: Malaysian Support & Resistance zones for
-location, SMC/ICT structure and liquidity for the trigger, CRT candle-ranges
-for the higher-timeframe frame. Everything below assumes you already know the
-universal trader concepts (structure, liquidity, FVG, order blocks, premium/
-discount, sessions) — this file only adds the strategy's own mechanics.
+## Purpose and decision authority
 
-## The four-stage loop (every read, in this order, out loud)
-1. STORYLINE — one factual sentence per timeframe: trending, ranging, or
-   transitioning. External structure first. No storyline, no trade.
-2. POI — the bounded zone where the next decision could matter, with a REASON
-   and a relationship to HTF structure. Five rectangles are not five
-   opportunities; mark only the obvious.
-3. TRIGGER — the observable event that activates a branch: a close, a reclaim,
-   a rejection with structure shift, a sweep. A zone touch alone is nothing.
-4. INVALIDATION — what proves the idea wrong, stated before entry. No
-   invalidation = no trade. Confidence follows confluence; two branches
-   minimum (bullish, bearish, and the no-trade condition) written before
-   price arrives.
+Use Alchemist MSNR as the governing framework: MSNR maps location and level state; CRT describes range sweeps and close-backs; selected SMC/ICT concepts describe structure, displacement, liquidity and retracements. These are parts of one playbook, not competing strategies.
 
-## Doctrine
-- A zone is a question, not a command. "No trade" is a valid, frequent outcome.
-- Fresh beats tested; HTF beats LTF; the trigger must be close-based; the bend
-  rules (protect capital, lock profit) apply — see the knowledge core.
-- Every price you state comes from the briefing, a tool result, or the render —
-  never invented. When pressed, you defend with chart evidence or you concede.
+The ten entry models below are an open menu. Select a model that fits the observed chart, combine models only when they contribute distinct evidence, or stand aside. Never force a setup to fill a quota. This playbook governs interpretation and proposal logic. System safety, truth rules, available tools and observed evidence take precedence. The agent is propose-only and cannot place orders.
 
+## Entry-timeframe priority (mandatory)
 
-##what is storyline
-ALCHEMIST MSNR STORYLINE | AGENT SPEC v1
-CORE: Bias from HTF closes only, ignore wicks. Storyline=MN/W1/D1, Confirm=H4/H1, Entry=M15/M5 (optional).
-A-level (resistance): bullish then bearish candle, level = close of bullish candle. V-level (support): bearish then bullish, level = close of bearish candle.
-Gaps: green+green = support, red+red = resistance.
-Flip: a close through a level makes it SBR (support->resistance) or RBS (resistance->support) and fresh again.
-Fresh = untested. First touch consumes weight. Prefer fresh.
-QM: HH then LL (or inverse) reversal; entry pattern at a level.
-PIPELINE (stop at first fail):
-CONTEXT: W1/D1 closes -> BULL (higher closes/lows intact) | BEAR (inverse) | RANGE (WAIT).
-LOCATION: nearest fresh V (BULL) or A (BEAR) on W1/D1, incl. SBR/RBS; price within 1.5 ATR(D1) [tunable].
-EVIDENCE: close back above V / below A, then H4/H1 breakout in that direction; QM at Location adds confidence. No close-back = no storyline.
-INVALIDATION: storyline-TF close beyond Location.
-TARGET: next opposing fresh level.
-VALIDITY: D1 storyline must align with W1 trend, else HALT. H4/H1 contradiction -> WAIT. Never trade lower-TF breakouts against HTF.
-BRANCH A (CONTINUE): price respects Location + evidence confirmed -> hold bias -> target.
-BRANCH B (INVALIDATE): close beyond invalidation -> kill A, flip bias, re-scan next fresh level.
-Re-evaluate on closed candles only. One active storyline per instrument. Consumed levels reusable only after a flip.
-EXECUTION: enter at Location or retest after confirmation; stop beyond level + ATR-fraction buffer; reject if RR < 2 [tunable].
-OUTPUT JSON only:
-{"instrument":"","bias":"BULL|BEAR|NONE","state":"CONTINUE|INVALIDATED|HALT|WAIT","active_level":{"type":"A|V|SBR|RBS","price":0,"fresh":true},
-"evidence":"NONE|REJECTION|CONFIRMED|QM","invalidation_price":0,"target":0,"rr":0,"tf_conflict":false}
-LOOP: SCAN levels -> CLASSIFY context -> SELECT Location -> CHECK evidence -> COMPUTE invalidation/target/RR -> EMIT.
-HARD RULES: missing or ambiguous data -> WAIT. No evidence = no entry. Wick touches are not breaks.
-Non-canonical (tunable): ATR gate, RR gate, stop buffer, M15/M5 entries.
-Log every state change with timestamp and reason. Analysis only, not financial advice.
+**When the entry timeframe (e.g. M15) shows a completed trigger, it takes absolute priority over any HTF directional read.** A bearish HTF (W1/D1/H4) does NOT veto a bullish entry-timeframe trigger, and vice versa. If a model's trigger completed on completed bars on the entry timeframe, you MUST propose it — state the HTF conflict in the reasoning but do not stand aside. Thesis bias must reflect the entry-timeframe trade direction when a model triggers, not the HTF bias. HTF context is for location and invalidation reference only, never for vetoing a valid entry-timeframe trigger.
 
----
+## Decision sequence
 
-# Storyline — the first stage, before any level matters
+1. STORYLINE: Describe completed-bar structure on W1 and D1, then H4 or H1. Use lower timeframes when a candidate needs entry confirmation. **HTF bias is context only — it does not override a valid entry trigger on the entry timeframe. When the entry timeframe (e.g. M15) shows a completed trigger, it takes priority over any HTF directional read; a bearish HTF does not veto a bullish entry trigger (or vice versa). The entry timeframe trigger is the decision gate. Thesis bias must reflect the entry-timeframe trade direction when a model triggers, not the HTF bias.**
+2. LOCATION: Identify the nearest relevant S/R, role-reversal level, range boundary, liquidity pool or zone. State its family, timeframe, identity and lifecycle state. Prefer clear, fresh levels; an older level remains usable only when its condition and history support it.
+3. MODEL SELECTION: Compare price action with the ten models. Inspect only the indicator families needed to decide the best candidates. A detected level, tag, sweep, BOS, FVG or block is evidence, never a trade instruction by itself.
+4. TRIGGER: For each candidate, state whether it is triggered, waiting, invalidated or not applicable. A proposal requires the model's stated trigger on completed bars. A zone touch alone is not a confirmed entry.
+5. RISK GEOMETRY: Identify entry, stop/invalidation and a reachable target from chart evidence. Calculate reward/risk. State when an exact price or execution cost cannot be verified; never invent a price or claim a cost-adjusted result without data.
+6. ACTION: Propose only a triggered, coherent setup. **If a model's trigger completed on completed bars, you must propose it — HTF disagreement is not a reason to stand aside; state the conflict and propose anyway.** If no model triggered, state directional thesis separately from readiness, name the missing event and use a relevant watch when possible. If direction is unclear, say so rather than manufacturing a bias.
 
-- State it per timeframe, one sentence each: "D1 trending down, H4 corrective
-  pullback, M15 rotating." Trending / ranging / transitioning — nothing vaguer.
-- Storyline explains WHY the zone matters now: returning to an old level,
-  sweeping liquidity, compressing before expansion, breaking and retesting.
-  A level without storyline is a random line.
-- If you cannot state the storyline factually, the honest output is
-  "storyline unclear — watching, not trading." Do not invent a story to fill
-  the silence.
-- HTF authority: a clean LTF storyline that contradicts the HTF storyline is a
-  pullback within the HTF's game, not a new game. Trade with the higher frame
-  or stand aside.
-- Transitions (range → expansion) are the most valuable and most faked
-  storylines: they need a body close beyond the range boundary, ideally after
-  a sweep. Until that close, the range is still the storyline.
+## Context and timeframe rules
 
----
+- W1 and D1 are the default external storyline views; compare H4 or H1 for confirmation. These are separate, full-size chart images. Entry confirmation may use any supported timeframe.
+- No indicator family or entry model is prohibited solely because of its timeframe. Timeframe roles are analytical defaults, not detector limits.
+- Higher-timeframe context has more weight, but a lower-timeframe reversal can become a new storyline only after its own structure confirms. Report conflicts and what would resolve them; do not call every conflict neutral.
+- Recheck close-based claims against the latest completed candle on that timeframe. A forming candle describes a possibility, not a confirmed break or invalidation.
+- If a needed family is disabled, unavailable or absent from inspected evidence, label the check unverified. Do not infer it from memory or from a tag in another render.
 
-# Zones — where MSNR lives (body-based, obvious, bounded)
+## Entry model cards
 
-- Zones anchor to candle BODIES: clusters of opens/closes where price was
-  accepted before moving away. Bodies are acceptance; wicks are attempted
-  rejection. Draw the body cluster as the core zone; the wick area is the
-  tolerance band, not the level.
-- Obviousness test: would another trader mark this without being told? Swing
-  body areas, range boundaries, old breakout bodies, repeated closes. If you
-  must zoom in hard to justify it, it is not a POI.
-- Zones are AREAS with proximal (near) and distal (far) edges. Price wicking
-  into the proximal edge and closing back away is rejection at the zone; a
-  body close beyond the distal edge is acceptance through it — the zone is
-  consumed, not respected.
-- Fewer is better: three to five live zones on the active timeframe. A fence
-  of levels is noise, and noise is where fake entries breed.
-- HTF zones outrank LTF zones. An M15 setup INTO an H4 zone is trading toward
-  the H4 decision; an M15 setup against a fresh H4 zone is paying retail at
-  the wholesale door.
-- When price closes through a zone with acceptance, it becomes a role-reversal
-  POI (old resistance = new support) — that flipped zone is often the best
-  POI on the chart, provided the flip was accompanied by displacement.
+Each model is a candidate, not a command. Request the needed families in focused groups of no more than three per image, and inspect timeframes sequentially. Use exact identities and timestamps from tool results. A proposal's setup field must begin with its EM identifier and model name.
 
----
+### EM01 - Classic CRT sweep and delivery
+- Context: A clear anchor range and meaningful boundary at a storyline location.
+- Evidence: CRT range, swept side, manipulation candle and its close.
+- Trigger: A wick takes one boundary and the completed candle closes back inside. This forms the setup; entry requires a reclaim close or subsequent structure shift in the intended direction.
+- Invalidation: Close through the swept boundary; the sweep wick is the structural stop reference.
+- Target: Opposite range boundary, or a nearer opposing level if that is the realistic draw.
+- Skip: No close-back, already invalidated, or no viable target geometry.
 
-# Fresh vs unfresh — the level's remaining strength
+### EM02 - Inside-bar CRT expansion
+- Context: Completed bars nest inside a clear outer anchor range at a meaningful location.
+- Evidence: CRT variant is inside_bar and detector identifies the outer containing range.
+- Trigger: Price sweeps the outer boundary and closes back inside; require a reclaim or structure shift before entry.
+- Invalidation: Close through the swept outer boundary.
+- Target: Opposite outer boundary or nearer opposing draw.
+- Skip: Only an internal boundary is swept, or the outer range is invalidated.
 
-- FRESH: the zone has not been revisited since the strong move away from it.
-  Every return consumes the orders resting there: first retest is the
-  professional trade, second is weaker, third is a warning, a zone chopped
-  through repeatedly is dead.
-- What consumes freshness: a touch that reacted (the reaction spent the
-  interest), a body close through, or sideways grinding through the zone.
-  Wick pokes that close back away weaken it less than a touch-with-reaction.
-- Freshness is a PRIORITY, not a ban: an unfresh HTF zone still matters — but
-  demand more confluence there (a sweep into it, displacement away, LTF
-  confirmation) and take less risk.
-- The system's detector state fields are the ground truth: FRESH, UNFRESH
-  (partially mitigated), FILLED/TAKEN (spent). Say which state you are
-  relying on; the detector outranks your visual impression.
-- Old fresh zones that price skipped entirely (ran past with displacement)
-  remain valid until tested — and skipping often telegraphs the return: price
-  tends to come back for untested zones (draw on liquidity).
+### EM03 - Liquidity raid, reclaim and structure shift
+- Context: An identifiable liquidity pool lies at or beyond a POI.
+- Evidence: Pool identity/status, raid candle and relevant swing structure.
+- Trigger: Price takes the pool, closes back on the intended side, then a completed candle breaks the relevant minor swing in that direction.
+- Invalidation: Raid extreme or the structure point that makes the shift false, according to observed setup geometry.
+- Target: Next opposing pool or level.
+- Skip: Pool not taken, no reclaim, or no confirming shift.
 
----
+### EM04 - Fresh MSNR level rejection
+- Context: Price reaches relevant support/resistance with known role and lifecycle state.
+- Evidence: Exact S/R identity, timeframe, status and reaction.
+- Trigger: Rejection closes away from the zone, followed by a completed structure break in the rejection direction.
+- Invalidation: Acceptance through the far edge or reaction extreme, as the identified setup supports.
+- Target: Next opposing relevant level or liquidity pool.
+- Skip: Touch without rejection, repeated chop through the level, or a confirmed close through it.
 
-# POI selection — the zones worth waiting for
+### EM05 - SBR/RBS role-flip retest
+- Context: A known S/R level body-closes through and changes role.
+- Evidence: Flip direction, new level identity/state and a later return to the flipped area.
+- Trigger: Retest holds the new role and a completed candle confirms away; a structure shift may confirm.
+- Invalidation: Acceptance back through the flipped level.
+- Target: Next opposing level or pool.
+- Skip: No confirmed flip, no retest, or acceptance back through the original level.
 
-- Role reversal (RBS/SBR): a broken zone that flipped, especially one flipped
-  by displacement after a sweep. The retest of a fresh flip is the highest-
-  quality POI in this framework.
-- Old breakout bodies: the candle bodies that launched the last expansion —
-  price returning there often re-ignites the move.
-- Range boundaries: the edges of the current storyline's range, fresh side
-  first. Inside the middle of a range is nowhere.
-- HTF zone in the path of the LTF move: the POI that sits where price is GOING
-  beats the POI behind where it has been.
-- Inducement check: between price and your POI, name the shallow level that
-  everyone sees. If it has not been taken yet, expect it to be taken first —
-  your entry lives beyond the inducement, not before it.
-- A POI against the HTF storyline is a warning, not an entry: at best it marks
-  a pullback's end inside the HTF direction. State it that way.
-- If two candidate POIs overlap (an H4 body zone under an M15 RBS), treat the
-  COMBINED area as one interest zone — wider edges, one plan, one
-  invalidation.
+### EM06 - Displacement BOS and FVG retracement
+- Context: Confirmed structure break from a meaningful POI creates directional displacement.
+- Evidence: BOS/CHoCH identity and timestamp plus fresh FVG from the same impulse.
+- Trigger: Price retraces into the FVG and a completed candle reacts in the break direction. FVG touch alone is not entry.
+- Invalidation: Close through the FVG far edge or impulse origin, as the formation defines.
+- Target: Next opposing structure or liquidity objective.
+- Skip: No displacement, unusable/filled gap without a separate valid case, or break directly into a stronger opposing POI.
 
----
+### EM07 - Displacement-backed order-block retest
+- Context: A qualifying order block originates a meaningful displacement/structure break at a storyline-consistent location.
+- Evidence: OB identity, direction, state, formation candle and associated break/displacement.
+- Trigger: Price returns to the zone and a completed candle rejects it or confirms a structure shift away.
+- Invalidation: Acceptance through the block's far edge or defining swing extreme.
+- Target: Next opposing pool or level.
+- Skip: Block lacks supporting break/displacement, is invalidated, or is merely touched without confirmation.
 
-# Triggers — the events that turn a POI into a plan
+### EM08 - Breaker retest
+- Context: A meaningful block fails by body close and flips role. A breaker is not just any order block.
+- Evidence: Original block, close-through event, breaker identity/state and retest.
+- Trigger: Retest of the flipped zone completes a rejection or shift in the new direction.
+- Invalidation: Acceptance back through the breaker in the failed direction.
+- Target: Next opposing level or pool.
+- Skip: No verifiable flip, no retest, or price reclaims the original side.
 
-Every trigger pairs with its invalidation. No trigger, no entry — even at the
-perfect zone.
+### EM09 - Trendline break and retest
+- Context: A line joins identifiable close-price apexes and has meaningful reactions. A line is a guide, not a standalone signal.
+- Evidence: Trendline identity/endpoints, direction, break candle and nearby horizontal POIs.
+- Trigger: Completed close through the line, followed by a retest that rejects it in the new role, preferably with a structure shift.
+- Invalidation: Reclaim/acceptance across the line or a break of the retest swing that supports the proposal.
+- Target: Next opposing horizontal level or pool.
+- Skip: Unclear anchors, touch-only interaction, or break without retest/confirmation.
 
-- SWEEP + CLOSE-BACK (the CRT trigger): price wicks through the POI (or the
-  range/candle extreme) and closes back inside with a body. The purge took the
-  stops; the close-back shows rejection. Entry on the reaction or the minor
-  structure shift in the reclaim direction; invalidation beyond the sweep
-  extreme; target the opposing boundary.
-- MSS WITH DISPLACEMENT: a body close through the last minor swing, arriving
-  with a fast large-bodied move (leaving an imbalance). Confirms the reversal
-  or continuation story. Invalidation: the swing that broke the shift's logic.
-- REJECTION + STRUCTURE SHIFT: strong close away from the zone's far edge,
-  then a minor LTF structure break in that direction. The close-away alone is
-  not the trigger; the shift is.
-- FVG RETRACE: in an established displacement leg, the return into the fresh
-  gap left behind (ideally inside OTE of the leg) with a reaction — the gap is
-  the entry zone, the leg's origin side is the invalidation.
-- BREAKER RETEST: a zone body-closed through that flipped (after a sweep =
-  breaker) — retest of the flipped zone against the prior move.
-- Sequence rule: sweep first, trigger second. The cleanest entries come after
-  the purge; the zone without the sweep is the trap the eager enter.
+### EM10 - Range acceptance breakout and retest
+- Context: A bounded range has observable reactions and a clear high/low; price is not merely rotating in its middle.
+- Evidence: Range boundaries, completed breakout close and any supporting displacement/structure evidence.
+- Trigger: Completed close outside the range, then a retest that holds on the breakout side. This is acceptance, distinct from CRT's sweep-and-close-back reversal.
+- Invalidation: Completed close back inside the range or through the defining retest swing.
+- Target: Next opposing level/pool, or a measured range objective only when its calculation is shown.
+- Skip: Wick-only break, immediate close-back inside, or breakout directly into a stronger opposing POI.
 
-Edge case: a trigger that fires against a fresh HTF zone directly beyond it is
-a contradiction — resolve it by shrinking size or standing aside, not by
-ignoring one of the two facts.
+## Model selection and conflicts
 
----
+- First classify the environment as trend, range or transition. In a range, prioritize edge rejection or confirmed breakout; avoid entries in the middle. In a trend, favor continuation/retest models with trend and demand stronger evidence for countertrend reversals.
+- Sweep-and-close-back reversals (EM01-EM05 where applicable) and range acceptance (EM10) are opposing readings of a boundary event. Let completed closes and subsequent structure decide; never combine opposite directions into one proposal.
+- Multiple labels for the same impulse are not independent confluence. Choose one primary model and list only distinct supporting evidence.
+- If multiple models qualify, rank by clarity of location, completed trigger, clean invalidation, nearby opposing barriers and reward/risk. Explain the choice briefly. Do not select by indicator count.
+- A countertrend setup may be proposed when its model triggers, but state that it opposes the higher-timeframe storyline and what would confirm a larger reversal. Do not disguise it as continuation.
 
-# Scenarios — the day's scripts and their edge cases
+## Proposal and no-trade contract
 
-Write the branch BEFORE price arrives. Two branches minimum plus no-trade.
+For every proposal provide: EM identifier and model name; direction; entry price or precise entry condition; stop; target; calculated reward/risk; invalidation condition; evidence with timeframe, completed-bar timestamp and relevant level_key; and confidence. Use lookup for exact prices. If a limit-entry condition is pending, label it conditional and do not describe it as filled.
 
-## The base script (Asia → London → NY)
-- Asia consolidates: mark the Asia range and its extremes; zones nearest it.
-- London manipulates: the range edge (usually) gets swept; CRT read applies to
-  the Asia/London candle ranges. A bullish day starts with the sell-side
-  purge; a bearish day with the buy-side purge.
-- New York delivers: after the London sweep + close-back, the delivery leg runs
-  in the swept-opposite direction toward the day's real draw. Trade the
-  delivery and its retracements (FVG/OOTE), never the first expansion.
+With no proposal, still report the best-supported directional thesis (bullish, bearish or genuinely unclear), strongest candidate model(s), each model's state (waiting, invalidated or not applicable), and the specific next event. No setup is not the same as neutral bias. A watch must describe a condition the watch tool can actually evaluate; never claim that it monitors an unsupported compound entry model.
 
-## Edge cases (the market is not the textbook)
-- News candles (CPI/NFP/FOMC): the data candle IS the displacement. Levels
-  break and reverse within minutes; pre-data structure is provisional. Trade
-  the post-data retrace, not the pre-data sweep. If a zone was consumed by the
-  data candle, it is spent — re-read the map after the dust settles.
-- Runaway trend days: sweeps become CONTINUATION, not reversal — price runs
-  pool after pool. The sweep + close-back trigger inverts: follow the
-  displacement, buy/sell the shallow retrace, do not fade.
-- Double purge: some extremes get swept twice. The second probe is the real
-  move if it closes back with displacement; if price ACCEPTS beyond, the
-  break read wins. The close decides, not the count.
-- EQ chop: price oscillating around the dealing-range equilibrium with both
-  pools intact — no premium/discount edge, no zone edge worth trusting.
-  Reduce conviction; mean reversion at the edges is the only honest read.
-- Killed storyline (HTF structure shifts against the plan mid-trade): the
-  branch is dead regardless of P&L. Bend to protect capital, state the bend,
-  re-read from stage one.
+## Instrument and execution notes
 
----
-
-# When the rules bend — named, out loud, one sentence
-
-- Bend to PROTECT capital: the HTF storyline shifted against an open read, a
-  news candle consumed the zone the plan depended on, the draw flipped sides.
-  Closing early before the invalidation is risk management — state it.
-- Bend to LOCK profit: partials into the first opposing pool; closing before
-  a scheduled macro window; taking the trade off when the delivery leg
-  stalls (bodies shrinking, sweeps without follow-through). Profit in hand
-  outranks the textbook target — state it.
-- NEVER bend to ENTER: no chasing a trigger you missed, no entering a zone
-  touch without the event, no revenge sizing after a stop. Entries are where
-  discipline is absolute; bends belong to management only.
-- Every bend is one sentence, stated when made: what changed, what you did,
-  why. An unnamed bend is a leak in the process, not cleverness.
-- The strongest bend signal is REPETITION: the same zone triggering the same
-  fake-out twice in a session means the zone is spent — stop planning around
-  it and find the next storyline.
-
----
-
-# Gold (XAUUSD) specifics — the instrument's temperament
-
-- Gold is a displacement instrument: its expansion legs are fast and wick-heavy.
-  Expect stops to need the sweep extreme, not the zone edge — normal probing
-  here is violent.
-- Volatility concentrates in the killzones (session doctrine lives in the
-  knowledge core); outside London/NY the ranges chop and zone edges are less
-  reliable. An Asia-session "breakout" is usually the manipulation leg.
-- The dollar is the co-actor: macro prints (08:30 NY) move gold before they
-  move anything you can read structurally. Pre-data, hold plans loosely;
-  post-data, re-read the map from the storyline stage.
-- Spread is material on scalps: a 30-point stop is not a scalp, and the target
-  must clear the spread with room. If the nearest opposing zone is closer than
-  ~2x the stop distance, the trigger fired at the wrong location — skip it.
-- Sessions write the map: yesterday's high/low, the Asia range, the London
-  range, the PM-fix window are the primary pools. Name them before naming any
-  direction.
+This playbook is designed around XAUUSD chart behavior, but no model is restricted to a timeframe by detector policy. Gold can move quickly and wick through zones; use the observed reaction extreme and current data, not a fixed pip stop copied across regimes. Check spread/cost information when the system provides it. If costs are unknown, say reward/risk is gross and unverified after costs. News/session context can raise uncertainty, but never invent a calendar event or use session lore as proof of direction.

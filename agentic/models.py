@@ -346,6 +346,9 @@ class AgentMeta(Serde):
     #: ``None`` (the default, and what older state files load as) means the
     #: whole log is still the conversation.
     chat_cleared_at: Optional[datetime] = None
+    #: Atomic in-progress analysis checkpoint. Kept inside the same store document
+    #: as budget and turns so a process crash cannot split checkpoint and billing.
+    resume_checkpoint: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

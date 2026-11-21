@@ -468,6 +468,9 @@ class Renderer:
             "window": self._window(bars, offset),
             "rendered_at": _iso_z(self._clock()),
             "price_range": [lo, hi],
+            "bars_context": self._bars_context(
+                bars, current_bar_may_be_open=(snapshot.price_basis == "live")
+            ),
             "hidden_levels": hidden,
             "image": {
                 "path": path,
@@ -535,6 +538,10 @@ class Renderer:
                 "timeframe": pane.snapshot.timeframe,
                 "window": self._window(pane.bars, offset),
                 "price_range": [price_range[0], price_range[1]],
+                "bars_context": self._bars_context(
+                    pane.bars,
+                    current_bar_may_be_open=(pane.snapshot.price_basis == "live"),
+                ),
                 "hidden_levels": hidden,
                 "current_price": float(pane.snapshot.current_price),
                 "atr": float(pane.snapshot.atr),
@@ -596,6 +603,39 @@ class Renderer:
             "to": _iso_z(bars.times[-1]) if bars.times else None,
             "bars": len(bars.times),
             "offset": int(offset or 0),
+        }
+
+    @staticmethod
+    def _bars_context(bars: Bars, *, current_bar_may_be_open: bool) -> Dict[str, Any]:
+        """Exact recent OHLC evidence to pair with the rendered candle image.
+
+        Live feeds commonly include the still-forming candle as their newest
+        row. Preserve it as ``latest_bar`` but identify the preceding completed
+        bar for close-based structure/invalidation checks. For a historical
+        window, its final row is already complete.
+        """
+        count = len(bars.times)
+
+        def row(index: Optional[int]) -> Optional[Dict[str, Any]]:
+            if index is None or count <= 0:
+                return None
+            return {
+                "time": _iso_z(bars.times[index]),
+                "open": float(bars.open[index]),
+                "high": float(bars.high[index]),
+                "low": float(bars.low[index]),
+                "close": float(bars.close[index]),
+            }
+
+        latest_index = count - 1
+        if current_bar_may_be_open:
+            closed_index = count - 2 if count > 1 else None
+        else:
+            closed_index = latest_index
+        return {
+            "latest_bar": row(latest_index),
+            "latest_bar_may_be_open": bool(current_bar_may_be_open),
+            "latest_completed_bar": row(closed_index),
         }
 
     @staticmethod

@@ -1797,6 +1797,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderAgentBudget(panel.budget);
     renderAgentTurns(panel.recent_turns);
     renderAgentRender(panel.last_render);
+    if (btnAgentRunNow) btnAgentRunNow.textContent = panel.resumable ? "Resume analysis" : "Run now";
   }
 
   async function fetchAgentPanel() {
@@ -1887,6 +1888,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function agentRunNow(message, actionButton = btnAgentRunNow) {
     const text = (message || "").trim();
+    const resumeRun = actionButton === btnAgentRunNow && !!(agentLastPanel && agentLastPanel.resumable);
     const oldLabel = actionButton ? actionButton.innerHTML : "";
     if (actionButton) {
       actionButton.disabled = true;
@@ -1895,27 +1897,39 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (actionButton === btnAgentSend && agentChatInput) agentChatInput.disabled = true;
     try {
-      const url = text
-        ? `/api/agent/run-now?message=${encodeURIComponent(text)}`
-        : "/api/agent/run-now";
+      const url = resumeRun
+        ? "/api/agent/resume-run"
+        : text
+          ? `/api/agent/run-now?message=${encodeURIComponent(text)}`
+          : "/api/agent/run-now";
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.ok === false) {
         const outcome = data.outcome || {};
         const reason = outcome.reason || "the turn was refused";
-        agentShowError(`Turn not run: ${reason}`);
+        agentShowError(outcome.output && outcome.output.resumable
+          ? `Analysis paused and can be resumed: ${reason}`
+          : `Turn not run: ${reason}`);
       } else {
         agentShowError("");
       }
       await fetchAgentPanel();
     } catch (err) {
       agentShowError(`Run failed: ${err.message}`);
+      if (actionButton === btnAgentRunNow) {
+        await fetchAgentPanel();
+        agentShowError(`Run failed: ${err.message}`);
+      }
     } finally {
       if (actionButton) {
         actionButton.disabled = false;
         actionButton.classList.remove("is-loading");
-        actionButton.innerHTML = oldLabel;
+        if (actionButton === btnAgentRunNow && agentLastPanel) {
+          actionButton.textContent = agentLastPanel.resumable ? "Resume analysis" : "Run now";
+        } else {
+          actionButton.innerHTML = oldLabel;
+        }
       }
       if (actionButton === btnAgentSend && agentChatInput) agentChatInput.disabled = false;
     }

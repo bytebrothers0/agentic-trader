@@ -202,6 +202,10 @@ def build_service(
         renderer=Renderer(width=render_width, height=render_height, out_dir=out_dir),
         client=recorder,
     )
+    # A historical replay may generate proposals, but it must never dispatch
+    # them to the live MT5 order path. AGENT_EXECUTE_TRADES is a global runtime
+    # setting, so disable order synchronization at this isolated service seam.
+    service._resolve_orders = lambda _source: None  # type: ignore[method-assign]
     return service, work, recorder
 
 

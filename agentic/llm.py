@@ -546,6 +546,13 @@ class VisionClient:
             "max_tokens": self.max_tokens,
             "messages": build_messages(request, system_prompt=self.system_prompt),
         }
+        # Nemotron 3.5 Super VL defaults to high reasoning effort on its hosted
+        # API. In this tool-driven workflow that can consume an entire completion
+        # budget thinking after the required chart inspections are already done.
+        # Keep its reasoning deliberate but bounded; other providers retain their
+        # own defaults because this parameter is not universally supported.
+        if self.model.lower().startswith("nvidia/nemotron-3.5-super-vl"):
+            payload["reasoning_effort"] = "low"
         tools = to_openai_tools(request.tools)
         if tools:
             payload["tools"] = tools

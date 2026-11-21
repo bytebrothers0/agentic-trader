@@ -1122,6 +1122,17 @@ def agent_run_now(message: str = Query("")):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/agent/resume-run")
+def agent_resume_run():
+    """Continue the last interrupted analysis from its saved next-round checkpoint."""
+    try:
+        service = get_agent_service()
+        outcome = service.run_now(resume=True)
+        return {"ok": bool(outcome.ok), "outcome": outcome.to_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/agent/chat")
 def agent_chat(message: str = Query("")):
     """A free-form chat turn, streamed as Server-Sent Events.
